@@ -1,4 +1,13 @@
 import { useState, useEffect } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Link,
+  useNavigate,
+  useParams,
+  Navigate,
+} from "react-router-dom";
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -20,7 +29,7 @@ import {
   where,
 } from "firebase/firestore";
 
-// ── Firebase init (your project) ───────────────────────────────────────────
+// ── Firebase ───────────────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: "AIzaSyCdCYZ4gc1sVhwhIxI0TwK9j9ZXr46DiQo",
   authDomain: "stagepro-327e8.firebaseapp.com",
@@ -43,9 +52,12 @@ const QRCode = ({ value, size = 160 }) => (
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => `₦${Number(n).toLocaleString()}`;
-const fmtDate = (d) => new Date(d).toLocaleDateString("en-NG", { weekday: "short", year: "numeric", month: "long", day: "numeric" });
+const fmtDate = (d) =>
+  new Date(d).toLocaleDateString("en-NG", {
+    weekday: "short", year: "numeric", month: "long", day: "numeric",
+  });
 
-// ── Seed events written to Firestore on first load ─────────────────────────
+// ── Seed events ────────────────────────────────────────────────────────────
 const SEED_EVENTS = [
   {
     id: "evt-001", title: "Neon Dystopia", subtitle: "Electronic Music Festival",
@@ -96,6 +108,7 @@ const STYLE = `
   }
   body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
   h1, h2, h3 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.04em; }
+  a { color: inherit; text-decoration: none; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: var(--bg2); }
   ::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 2px; }
@@ -103,7 +116,7 @@ const STYLE = `
   @keyframes spin { to { transform: rotate(360deg); } }
 `;
 
-// ── Spinner ────────────────────────────────────────────────────────────────
+// ── Shared components ──────────────────────────────────────────────────────
 function Spinner() {
   return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"60vh" }}>
@@ -112,20 +125,14 @@ function Spinner() {
   );
 }
 
-// ── Notification ───────────────────────────────────────────────────────────
 function Notification({ msg, type }) {
   return (
-    <div style={{
-      position:"fixed", top:24, right:24, zIndex:9999,
-      background: type === "success" ? "var(--green)" : "var(--red)",
-      color:"#000", padding:"12px 20px", borderRadius:8,
-      fontWeight:600, fontSize:14, animation:"fadeUp 0.3s ease",
-      boxShadow:"0 8px 32px rgba(0,0,0,0.4)",
-    }}>{msg}</div>
+    <div style={{ position:"fixed", top:24, right:24, zIndex:9999, background: type==="success"?"var(--green)":"var(--red)", color:"#000", padding:"12px 20px", borderRadius:8, fontWeight:600, fontSize:14, animation:"fadeUp 0.3s ease", boxShadow:"0 8px 32px rgba(0,0,0,0.4)" }}>
+      {msg}
+    </div>
   );
 }
 
-// ── Shared Input ───────────────────────────────────────────────────────────
 function Input({ label, ...props }) {
   return (
     <div>
@@ -136,72 +143,60 @@ function Input({ label, ...props }) {
 }
 
 // ── Nav ────────────────────────────────────────────────────────────────────
-function Nav({ currentUser, view, setView, logout }) {
+function Nav({ currentUser, logout, notification }) {
   return (
-    <nav style={{
-      position:"sticky", top:0, zIndex:100,
-      background:"rgba(8,8,8,0.92)", backdropFilter:"blur(12px)",
-      borderBottom:"1px solid var(--border)",
-      display:"flex", alignItems:"center", justifyContent:"space-between",
-      padding:"0 32px", height:60,
-    }}>
-      <button onClick={() => setView("home")} style={{ background:"none", border:"none", cursor:"pointer", display:"flex", alignItems:"center", gap:8 }}>
-        <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--gold)", letterSpacing:2 }}>STAGE</span>
-        <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--text)", letterSpacing:2 }}>PRO</span>
-      </button>
-      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-        {currentUser ? (
-          <>
-            {currentUser.role === "organizer" && (
-              <>
-                <button onClick={() => setView("dashboard")} style={{ background:"none", border:"none", color: view==="dashboard" ? "var(--gold)" : "var(--muted)", cursor:"pointer", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Dashboard</button>
-                <button onClick={() => setView("validate")} style={{ background:"none", border:"none", color: view==="validate" ? "var(--gold)" : "var(--muted)", cursor:"pointer", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Scan</button>
-              </>
-            )}
-            {currentUser.role === "customer" && (
-              <button onClick={() => setView("mytickets")} style={{ background:"none", border:"none", color: view==="mytickets" ? "var(--gold)" : "var(--muted)", cursor:"pointer", fontSize:14, fontWeight:500, padding:"6px 12px" }}>My Tickets</button>
-            )}
-            <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13 }}>
-              {currentUser.name?.[0] ?? "U"}
-            </div>
-            <button onClick={logout} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Sign out</button>
-          </>
-        ) : (
-          <>
-            <button onClick={() => setView("login")} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Login</button>
-            <button onClick={() => setView("register")} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"8px 18px", borderRadius:6, cursor:"pointer", fontWeight:600, fontSize:14 }}>Get Started</button>
-          </>
-        )}
-      </div>
-    </nav>
+    <>
+      <style>{STYLE}</style>
+      {notification && <Notification {...notification} />}
+      <nav style={{ position:"sticky", top:0, zIndex:100, background:"rgba(8,8,8,0.92)", backdropFilter:"blur(12px)", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 32px", height:60 }}>
+        <Link to="/" style={{ display:"flex", alignItems:"center", gap:4 }}>
+          <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--gold)", letterSpacing:2 }}>STAGE</span>
+          <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--text)", letterSpacing:2 }}>PRO</span>
+        </Link>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          {currentUser ? (
+            <>
+              {currentUser.role === "organizer" && (
+                <>
+                  <Link to="/dashboard" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Dashboard</Link>
+                  <Link to="/validate" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Scan</Link>
+                </>
+              )}
+              {currentUser.role === "customer" && (
+                <Link to="/tickets" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>My Tickets</Link>
+              )}
+              <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13 }}>
+                {currentUser.name?.[0] ?? "U"}
+              </div>
+              <button onClick={logout} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Sign out</button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Login</Link>
+              <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:6, fontWeight:600, fontSize:14 }}>Get Started</Link>
+            </>
+          )}
+        </div>
+      </nav>
+    </>
   );
 }
 
-// ── Main App ───────────────────────────────────────────────────────────────
+// ── Root App with Router ───────────────────────────────────────────────────
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [events, setEvents] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
-  const [view, setView] = useState("home");
-  const [selectedEvent, setSelectedEvent] = useState(null);
-  const [cart, setCart] = useState({});
   const [notification, setNotification] = useState(null);
-  const [validateInput, setValidateInput] = useState("");
-  const [validateResult, setValidateResult] = useState(null);
-  const [newEvent, setNewEvent] = useState({
-    title:"", subtitle:"", date:"", time:"",
-    venue:"", category:"Concert", description:"",
-    tiers:[{ name:"General", price:"", total:"" }],
-  });
 
   const notify = (msg, type = "success") => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 3500);
   };
 
-  // ── Listen to Firebase Auth state ────────────────────────────────────
+  // Auth listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -215,7 +210,7 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // ── Seed + load events from Firestore ────────────────────────────────
+  // Seed + load events
   useEffect(() => {
     const init = async () => {
       setEventsLoading(true);
@@ -227,13 +222,13 @@ export default function App() {
         }
         const snapshot = await getDocs(collection(db, "events"));
         setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) { console.error("Events load error:", err); }
+      } catch (err) { console.error(err); }
       setEventsLoading(false);
     };
     init();
   }, []);
 
-  // ── Load user's tickets from Firestore ───────────────────────────────
+  // Load tickets when user logs in
   useEffect(() => {
     if (!currentUser) { setTickets([]); return; }
     const load = async () => {
@@ -241,45 +236,38 @@ export default function App() {
         const q = query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
         const snap = await getDocs(q);
         setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) { console.error("Tickets load error:", err); }
+      } catch (err) { console.error(err); }
     };
     load();
   }, [currentUser]);
 
-  // ── Login ─────────────────────────────────────────────────────────────
   const login = async (email, password) => {
     try {
       const res = await signInWithEmailAndPassword(auth, email, password);
       const snap = await getDoc(doc(db, "users", res.user.uid));
       const userData = { uid: res.user.uid, ...snap.data() };
       setCurrentUser(userData);
-      setView("home");
       notify(`Welcome back, ${userData.name.split(" ")[0]}!`);
-      return true;
-    } catch { return false; }
+      return { ok: true, role: userData.role };
+    } catch { return { ok: false }; }
   };
 
-  // ── Register ──────────────────────────────────────────────────────────
   const register = async (name, email, password, role) => {
     try {
       const res = await createUserWithEmailAndPassword(auth, email, password);
       const userData = { name, email, role };
       await setDoc(doc(db, "users", res.user.uid), userData);
       setCurrentUser({ uid: res.user.uid, ...userData });
-      setView("home");
       notify(`Account created! Welcome, ${name.split(" ")[0]}!`);
-      return true;
-    } catch (err) { console.error(err); return false; }
+      return { ok: true, role };
+    } catch (err) { console.error(err); return { ok: false }; }
   };
 
-  // ── Logout ────────────────────────────────────────────────────────────
   const logout = async () => {
     await signOut(auth);
     setCurrentUser(null);
-    setView("home");
   };
 
-  // ── Purchase tickets → saved to Firestore ─────────────────────────────
   const purchaseTickets = async (eventId, cartSelections) => {
     const event = events.find(e => e.id === eventId);
     const newTickets = [];
@@ -298,7 +286,6 @@ export default function App() {
           const ref = await addDoc(collection(db, "tickets"), ticketData);
           newTickets.push({ id: ref.id, ...ticketData });
         }
-        // Update sold count in Firestore
         const updatedTiers = event.tiers.map(t =>
           t.id === tier.id ? { ...t, sold: t.sold + qty } : t
         );
@@ -309,85 +296,83 @@ export default function App() {
         ...e,
         tiers: e.tiers.map(t => ({ ...t, sold: t.sold + (cartSelections[t.id] || 0) })),
       }));
-      setCart({});
-      setView("mytickets");
       notify(`${newTickets.length} ticket(s) purchased!`);
+      return true;
     } catch (err) {
-      console.error("Purchase error:", err);
+      console.error(err);
       notify("Purchase failed. Try again.", "error");
+      return false;
     }
   };
 
-  // ── Validate ticket in Firestore ──────────────────────────────────────
   const validateTicket = async (id) => {
     try {
       const ref = doc(db, "tickets", id.trim());
       const snap = await getDoc(ref);
-      if (!snap.exists()) { setValidateResult({ ok: false, msg: "Ticket not found" }); return; }
+      if (!snap.exists()) return { ok: false, msg: "Ticket not found" };
       const ticket = { id: snap.id, ...snap.data() };
-      if (ticket.used) { setValidateResult({ ok: false, msg: "Ticket already used", ticket }); return; }
+      if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
       await updateDoc(ref, { used: true });
-      setValidateResult({ ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } });
-    } catch (err) {
-      console.error("Validate error:", err);
-      setValidateResult({ ok: false, msg: "Error checking ticket" });
-    }
+      return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
+    } catch { return { ok: false, msg: "Error checking ticket" }; }
   };
 
-  // ── Create new event → saved to Firestore ─────────────────────────────
-  const createEvent = async () => {
+  const createEvent = async (eventData) => {
     try {
-      const eventData = {
-        ...newEvent,
+      const data = {
+        ...eventData,
         image: "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=800&q=80",
         organizer: currentUser.uid,
-        tiers: newEvent.tiers.map((t, i) => ({
+        tiers: eventData.tiers.map((t, i) => ({
           ...t, id: `t${i+1}`, price: Number(t.price), total: Number(t.total), sold: 0,
         })),
       };
-      const ref = await addDoc(collection(db, "events"), eventData);
-      setEvents(prev => [...prev, { id: ref.id, ...eventData }]);
-      setNewEvent({ title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", description:"", tiers:[{ name:"General", price:"", total:"" }] });
-      setView("dashboard");
-      notify("Event published to Firestore!");
+      const ref = await addDoc(collection(db, "events"), data);
+      const newEvent = { id: ref.id, ...data };
+      setEvents(prev => [...prev, newEvent]);
+      notify("Event published!");
+      return newEvent;
     } catch (err) {
-      console.error("Create event error:", err);
+      console.error(err);
       notify("Failed to create event.", "error");
+      return null;
     }
   };
 
-  const myEvents = currentUser?.role === "organizer"
-    ? events.filter(e => e.organizer === currentUser.uid || e.organizer === "seed")
-    : [];
-  const totalRevenue = tickets.reduce((s, t) => s + t.price, 0);
-
   if (authLoading) return <><style>{STYLE}</style><Spinner /></>;
 
+  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent };
+
   return (
-    <>
-      <style>{STYLE}</style>
-      {notification && <Notification {...notification} />}
-      <Nav currentUser={currentUser} view={view} setView={setView} logout={logout} />
+    <BrowserRouter>
+      <Nav currentUser={currentUser} logout={logout} notification={notification} />
       <main style={{ minHeight:"calc(100vh - 60px)" }}>
-        {view === "home" && (eventsLoading ? <Spinner /> : <HomeView events={events} setSelectedEvent={setSelectedEvent} setView={setView} currentUser={currentUser} />)}
-        {view === "login" && <AuthView mode="login" onLogin={login} onSwitch={() => setView("register")} />}
-        {view === "register" && <AuthView mode="register" onRegister={register} onSwitch={() => setView("login")} />}
-        {view === "event" && selectedEvent && <EventView event={selectedEvent} cart={cart} setCart={setCart} currentUser={currentUser} onCheckout={() => setView("checkout")} setView={setView} />}
-        {view === "checkout" && selectedEvent && <CheckoutView event={selectedEvent} cart={cart} currentUser={currentUser} onConfirm={purchaseTickets} onBack={() => setView("event")} />}
-        {view === "mytickets" && <MyTicketsView tickets={tickets} />}
-        {view === "dashboard" && currentUser?.role === "organizer" && <DashboardView events={myEvents} tickets={tickets} revenue={totalRevenue} setView={setView} />}
-        {view === "validate" && currentUser?.role === "organizer" && <ValidateView input={validateInput} setInput={setValidateInput} result={validateResult} onValidate={validateTicket} onReset={() => { setValidateInput(""); setValidateResult(null); }} />}
-        {view === "create" && currentUser?.role === "organizer" && <CreateEventView newEvent={newEvent} setNewEvent={setNewEvent} onCreate={createEvent} onBack={() => setView("dashboard")} />}
+        <Routes>
+          <Route path="/" element={<HomePage ctx={ctx} />} />
+          <Route path="/login" element={<AuthPage mode="login" ctx={ctx} />} />
+          <Route path="/register" element={<AuthPage mode="register" ctx={ctx} />} />
+          <Route path="/event/:eventId" element={<EventPage ctx={ctx} />} />
+          <Route path="/event/:eventId/checkout" element={<CheckoutPage ctx={ctx} />} />
+          <Route path="/tickets" element={currentUser ? <MyTicketsPage ctx={ctx} /> : <Navigate to="/login" />} />
+          <Route path="/dashboard" element={currentUser?.role === "organizer" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
       </main>
-    </>
+    </BrowserRouter>
   );
 }
 
-// ── Home ───────────────────────────────────────────────────────────────────
-function HomeView({ events, setSelectedEvent, setView }) {
+// ── Home Page ──────────────────────────────────────────────────────────────
+function HomePage({ ctx }) {
+  const { events, eventsLoading } = ctx;
   const [filter, setFilter] = useState("All");
   const cats = ["All", "Concert", "Festival", "Sports"];
   const filtered = filter === "All" ? events : events.filter(e => e.category === filter);
+
+  if (eventsLoading) return <Spinner />;
+
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"48px 24px" }}>
       <div style={{ textAlign:"center", marginBottom:64, animation:"fadeUp 0.6s ease" }}>
@@ -397,29 +382,32 @@ function HomeView({ events, setSelectedEvent, setView }) {
           <span style={{ color:"var(--gold)", WebkitTextStroke:"2px var(--gold)", WebkitTextFillColor:"transparent" }}>EXPERIENCE</span>
           <br />AWAITS
         </h1>
-        <p style={{ color:"var(--muted)", maxWidth:480, margin:"0 auto", lineHeight:1.7 }}>Discover concerts, festivals, and sporting events. Secure tickets with instant QR delivery.</p>
+        <p style={{ color:"var(--muted)", maxWidth:480, margin:"0 auto", lineHeight:1.7 }}>
+          Discover concerts, festivals, and sporting events. Secure tickets with instant QR delivery.
+        </p>
       </div>
+
       <div style={{ display:"flex", gap:8, marginBottom:40, flexWrap:"wrap" }}>
         {cats.map(c => (
-          <button key={c} onClick={() => setFilter(c)} style={{ background: filter===c ? "var(--gold)" : "var(--bg3)", color: filter===c ? "#000" : "var(--muted)", border:`1px solid ${filter===c ? "var(--gold)" : "var(--border)"}`, padding:"8px 20px", borderRadius:100, cursor:"pointer", fontWeight:600, fontSize:13, transition:"all 0.2s" }}>{c}</button>
+          <button key={c} onClick={() => setFilter(c)} style={{ background: filter===c?"var(--gold)":"var(--bg3)", color: filter===c?"#000":"var(--muted)", border:`1px solid ${filter===c?"var(--gold)":"var(--border)"}`, padding:"8px 20px", borderRadius:100, cursor:"pointer", fontWeight:600, fontSize:13, transition:"all 0.2s" }}>{c}</button>
         ))}
       </div>
+
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
-        {filtered.map((event, i) => (
-          <EventCard key={event.id} event={event} index={i} onClick={() => { setSelectedEvent(event); setView("event"); }} />
-        ))}
+        {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} />)}
       </div>
     </div>
   );
 }
 
-function EventCard({ event, onClick, index }) {
+function EventCard({ event, index }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
-  const totalSold = event.tiers.reduce((s, t) => s + t.sold, 0);
-  const totalCap = event.tiers.reduce((s, t) => s + t.total, 0);
-  const pct = Math.round((totalSold / totalCap) * 100);
+  const totalSold = event.tiers.reduce((s,t) => s+t.sold, 0);
+  const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
+  const pct = Math.round((totalSold/totalCap)*100);
+
   return (
-    <div onClick={onClick} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", cursor:"pointer", transition:"transform 0.3s, border-color 0.3s", animation:`fadeUp 0.5s ${index*0.1}s ease both` }}
+    <Link to={`/event/${event.id}`} style={{ display:"block", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", transition:"transform 0.3s, border-color 0.3s", animation:`fadeUp 0.5s ${index*0.1}s ease both` }}
       onMouseEnter={e => { e.currentTarget.style.transform="translateY(-4px)"; e.currentTarget.style.borderColor="var(--gold-dim)"; }}
       onMouseLeave={e => { e.currentTarget.style.transform=""; e.currentTarget.style.borderColor="var(--border)"; }}
     >
@@ -438,7 +426,7 @@ function EventCard({ event, onClick, index }) {
             <span>{totalSold} sold</span><span>{pct}% full</span>
           </div>
           <div style={{ height:3, background:"var(--border)", borderRadius:2 }}>
-            <div style={{ height:"100%", width:`${pct}%`, background: pct>80 ? "var(--red)" : "var(--gold)", borderRadius:2 }} />
+            <div style={{ height:"100%", width:`${pct}%`, background: pct>80?"var(--red)":"var(--gold)", borderRadius:2 }} />
           </div>
         </div>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -446,29 +434,37 @@ function EventCard({ event, onClick, index }) {
             <span style={{ fontSize:11, color:"var(--muted)" }}>FROM </span>
             <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{fmt(minPrice)}</span>
           </div>
-          <button style={{ background:"var(--gold)", color:"#000", border:"none", padding:"8px 18px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>Get Tickets →</button>
+          <span style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:8, fontWeight:700, fontSize:13 }}>Get Tickets →</span>
         </div>
       </div>
-    </div>
+    </Link>
   );
 }
 
-// ── Auth ───────────────────────────────────────────────────────────────────
-function AuthView({ mode, onLogin, onRegister, onSwitch }) {
+// ── Auth Page ──────────────────────────────────────────────────────────────
+function AuthPage({ mode, ctx }) {
+  const { login, register, currentUser } = ctx;
+  const navigate = useNavigate();
   const [form, setForm] = useState({ name:"", email:"", password:"", role:"customer" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Redirect if already logged in
+  if (currentUser) return <Navigate to="/" />;
+
   const F = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
 
   const submit = async () => {
     setError(""); setLoading(true);
     if (mode === "login") {
-      const ok = await onLogin(form.email, form.password);
-      if (!ok) setError("Invalid email or password.");
+      const res = await login(form.email, form.password);
+      if (!res.ok) { setError("Invalid email or password."); setLoading(false); return; }
+      navigate(res.role === "organizer" ? "/dashboard" : "/");
     } else {
       if (!form.name || !form.email || !form.password) { setError("All fields required."); setLoading(false); return; }
-      const ok = await onRegister(form.name, form.email, form.password, form.role);
-      if (!ok) setError("Email already in use or invalid.");
+      const res = await register(form.name, form.email, form.password, form.role);
+      if (!res.ok) { setError("Email already in use or invalid."); setLoading(false); return; }
+      navigate(res.role === "organizer" ? "/dashboard" : "/");
     }
     setLoading(false);
   };
@@ -477,8 +473,8 @@ function AuthView({ mode, onLogin, onRegister, onSwitch }) {
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"calc(100vh - 60px)", padding:24 }}>
       <div style={{ width:"100%", maxWidth:420, animation:"fadeUp 0.4s ease" }}>
         <div style={{ textAlign:"center", marginBottom:40 }}>
-          <h1 style={{ fontSize:48, marginBottom:8 }}>{mode==="login" ? "WELCOME BACK" : "JOIN STAGEPRO"}</h1>
-          <p style={{ color:"var(--muted)", fontSize:14 }}>{mode==="login" ? "Sign in to your account" : "Create your account"}</p>
+          <h1 style={{ fontSize:48, marginBottom:8 }}>{mode==="login"?"WELCOME BACK":"JOIN STAGEPRO"}</h1>
+          <p style={{ color:"var(--muted)", fontSize:14 }}>{mode==="login"?"Sign in to your account":"Create your account"}</p>
         </div>
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, display:"flex", flexDirection:"column", gap:16 }}>
           {mode==="register" && <Input label="Full Name" value={form.name} onChange={F("name")} placeholder="Amara Okafor" />}
@@ -489,22 +485,22 @@ function AuthView({ mode, onLogin, onRegister, onSwitch }) {
               <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>ACCOUNT TYPE</label>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                 {["customer","organizer"].map(r => (
-                  <button key={r} onClick={() => setForm(p => ({ ...p, role:r }))} style={{ background: form.role===r ? "rgba(245,166,35,0.15)" : "var(--bg3)", border:`1px solid ${form.role===r ? "var(--gold)" : "var(--border)"}`, color: form.role===r ? "var(--gold)" : "var(--muted)", padding:12, borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>
-                    {r==="customer" ? "🎟 Attendee" : "🎪 Organizer"}
+                  <button key={r} onClick={() => setForm(p=>({...p,role:r}))} style={{ background: form.role===r?"rgba(245,166,35,0.15)":"var(--bg3)", border:`1px solid ${form.role===r?"var(--gold)":"var(--border)"}`, color: form.role===r?"var(--gold)":"var(--muted)", padding:12, borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>
+                    {r==="customer"?"🎟 Attendee":"🎪 Organizer"}
                   </button>
                 ))}
               </div>
             </div>
           )}
           {error && <div style={{ color:"var(--red)", fontSize:13, textAlign:"center" }}>{error}</div>}
-          <button onClick={submit} disabled={loading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1, fontWeight:700, fontSize:16, fontFamily:"Bebas Neue", letterSpacing:2, marginTop:8 }}>
-            {loading ? "PLEASE WAIT..." : mode==="login" ? "SIGN IN" : "CREATE ACCOUNT"}
+          <button onClick={submit} disabled={loading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Bebas Neue", letterSpacing:2, marginTop:8 }}>
+            {loading?"PLEASE WAIT...":mode==="login"?"SIGN IN":"CREATE ACCOUNT"}
           </button>
           <p style={{ textAlign:"center", fontSize:13, color:"var(--muted)" }}>
-            {mode==="login" ? "No account? " : "Already registered? "}
-            <button onClick={onSwitch} style={{ background:"none", border:"none", color:"var(--gold)", cursor:"pointer", fontWeight:600 }}>
-              {mode==="login" ? "Sign up" : "Sign in"}
-            </button>
+            {mode==="login"?"No account? ":"Already registered? "}
+            <Link to={mode==="login"?"/register":"/login"} style={{ color:"var(--gold)", fontWeight:600 }}>
+              {mode==="login"?"Sign up":"Sign in"}
+            </Link>
           </p>
         </div>
       </div>
@@ -512,20 +508,58 @@ function AuthView({ mode, onLogin, onRegister, onSwitch }) {
   );
 }
 
-// ── Event Detail ───────────────────────────────────────────────────────────
-function EventView({ event, cart, setCart, currentUser, onCheckout, setView }) {
-  const totalItems = Object.values(cart).reduce((s, q) => s + q, 0);
-  const totalPrice = event.tiers.reduce((s, t) => s + (cart[t.id]||0) * t.price, 0);
+// ── Event Page (/event/:eventId) ───────────────────────────────────────────
+function EventPage({ ctx }) {
+  const { eventId } = useParams();
+  const { events, currentUser } = ctx;
+  const navigate = useNavigate();
+  const [cart, setCart] = useState({});
+  const [event, setEvent] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Try local state first, then fetch from Firestore
+    const local = events.find(e => e.id === eventId);
+    if (local) { setEvent(local); setLoading(false); return; }
+    const fetch = async () => {
+      const snap = await getDoc(doc(db, "events", eventId));
+      if (snap.exists()) setEvent({ id: snap.id, ...snap.data() });
+      setLoading(false);
+    };
+    fetch();
+  }, [eventId, events]);
+
+  if (loading) return <Spinner />;
+  if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
+
+  const totalItems = Object.values(cart).reduce((s,q) => s+q, 0);
+  const totalPrice = event.tiers.reduce((s,t) => s+(cart[t.id]||0)*t.price, 0);
+
   const adjust = (tierId, delta) => {
     setCart(prev => {
-      const tier = event.tiers.find(t => t.id === tierId);
-      const qty = Math.min(Math.max(0, (prev[tierId]||0) + delta), tier.total - tier.sold);
+      const tier = event.tiers.find(t => t.id===tierId);
+      const qty = Math.min(Math.max(0,(prev[tierId]||0)+delta), tier.total-tier.sold);
       return { ...prev, [tierId]: qty };
     });
   };
+
+  const handleCheckout = () => {
+    if (!currentUser) { navigate("/login"); return; }
+    // Store cart in sessionStorage so checkout page can read it
+    sessionStorage.setItem("cart", JSON.stringify(cart));
+    navigate(`/event/${eventId}/checkout`);
+  };
+
   return (
     <div style={{ maxWidth:1100, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
-      <button onClick={() => setView("home")} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, marginBottom:24 }}>← Back to Events</button>
+      {/* Share button */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
+        <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14 }}>← Back</button>
+        <button onClick={() => { navigator.clipboard.writeText(window.location.href); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>
+          🔗 Copy Link
+        </button>
+      </div>
+
       <div style={{ display:"grid", gridTemplateColumns:"1fr 380px", gap:40, alignItems:"start" }}>
         <div>
           <div style={{ borderRadius:16, overflow:"hidden", marginBottom:32, position:"relative" }}>
@@ -550,15 +584,16 @@ function EventView({ event, cart, setCart, currentUser, onCheckout, setView }) {
             <p style={{ color:"rgba(232,224,208,0.7)", lineHeight:1.8 }}>{event.description}</p>
           </div>
         </div>
+
         <div style={{ position:"sticky", top:80 }}>
           <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28 }}>
             <h3 style={{ fontSize:22, marginBottom:24 }}>SELECT TICKETS</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:16, marginBottom:24 }}>
               {event.tiers.map(tier => {
-                const available = tier.total - tier.sold;
-                const qty = cart[tier.id] || 0;
+                const available = tier.total-tier.sold;
+                const qty = cart[tier.id]||0;
                 return (
-                  <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0 ? "var(--gold)" : "var(--border)"}`, borderRadius:12, padding:16, transition:"border-color 0.2s" }}>
+                  <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0?"var(--gold)":"var(--border)"}`, borderRadius:12, padding:16, transition:"border-color 0.2s" }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
                       <div>
                         <div style={{ fontWeight:600, marginBottom:2 }}>{tier.name}</div>
@@ -567,10 +602,10 @@ function EventView({ event, cart, setCart, currentUser, onCheckout, setView }) {
                       <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                         <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:32, height:32, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor:"pointer", fontSize:18 }}>−</button>
                         <span style={{ fontFamily:"DM Mono", fontSize:18, minWidth:20, textAlign:"center" }}>{qty}</span>
-                        <button onClick={() => adjust(tier.id,1)} disabled={available===0} style={{ width:32, height:32, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0 ? "var(--gold)" : "var(--bg2)", color: qty>0 ? "#000" : "var(--text)", cursor:"pointer", fontSize:18 }}>+</button>
+                        <button onClick={() => adjust(tier.id,1)} disabled={available===0} style={{ width:32, height:32, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor:"pointer", fontSize:18 }}>+</button>
                       </div>
                     </div>
-                    <div style={{ fontSize:12, color: available<20 ? "var(--red)" : "var(--muted)" }}>{available===0 ? "SOLD OUT" : `${available} remaining`}</div>
+                    <div style={{ fontSize:12, color: available<20?"var(--red)":"var(--muted)" }}>{available===0?"SOLD OUT":`${available} remaining`}</div>
                   </div>
                 );
               })}
@@ -583,8 +618,8 @@ function EventView({ event, cart, setCart, currentUser, onCheckout, setView }) {
                 </div>
               </div>
             )}
-            <button disabled={totalItems===0||!currentUser} onClick={() => currentUser ? onCheckout() : setView("login")} style={{ width:"100%", padding:15, background: totalItems>0 ? "var(--gold)" : "var(--bg3)", color: totalItems>0 ? "#000" : "var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0 ? "pointer" : "not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
-              {!currentUser ? "SIGN IN TO BUY" : totalItems===0 ? "SELECT TICKETS" : "PROCEED TO CHECKOUT →"}
+            <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:15, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+              {!currentUser?"SIGN IN TO BUY":totalItems===0?"SELECT TICKETS":"PROCEED TO CHECKOUT →"}
             </button>
           </div>
         </div>
@@ -593,16 +628,36 @@ function EventView({ event, cart, setCart, currentUser, onCheckout, setView }) {
   );
 }
 
-// ── Checkout ───────────────────────────────────────────────────────────────
-function CheckoutView({ event, cart, currentUser, onConfirm, onBack }) {
+// ── Checkout Page (/event/:eventId/checkout) ───────────────────────────────
+function CheckoutPage({ ctx }) {
+  const { eventId } = useParams();
+  const { events, currentUser, purchaseTickets } = ctx;
+  const navigate = useNavigate();
   const [agreed, setAgreed] = useState(false);
   const [processing, setProcessing] = useState(false);
+
+  const cart = JSON.parse(sessionStorage.getItem("cart") || "{}");
+  const event = events.find(e => e.id === eventId);
+
+  if (!currentUser) return <Navigate to="/login" />;
+  if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
+
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
-  const total = selections.reduce((s,t) => s + cart[t.id]*t.price, 0);
-  const handle = async () => { setProcessing(true); await onConfirm(event.id, cart); setProcessing(false); };
+  const total = selections.reduce((s,t) => s+cart[t.id]*t.price, 0);
+
+  const handleConfirm = async () => {
+    setProcessing(true);
+    const ok = await purchaseTickets(eventId, cart);
+    if (ok) {
+      sessionStorage.removeItem("cart");
+      navigate("/tickets");
+    }
+    setProcessing(false);
+  };
+
   return (
     <div style={{ maxWidth:600, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
-      <button onClick={onBack} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Back</button>
+      <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Back</button>
       <h1 style={{ fontSize:48, marginBottom:32 }}>CHECKOUT</h1>
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ORDER SUMMARY</div>
@@ -630,29 +685,33 @@ function CheckoutView({ event, cart, currentUser, onConfirm, onBack }) {
         </div>
         <span style={{ fontSize:13, color:"var(--muted)" }}>I agree to the terms and conditions. All sales are final.</span>
       </div>
-      <button disabled={!agreed||processing} onClick={handle} style={{ width:"100%", padding:16, background: agreed?"var(--gold)":"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}>
-        {processing ? "SAVING TO FIREBASE..." : `CONFIRM PURCHASE · ${fmt(total)}`}
+      <button disabled={!agreed||processing} onClick={handleConfirm} style={{ width:"100%", padding:16, background: agreed?"var(--gold)":"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}>
+        {processing?"SAVING TO FIREBASE...":`CONFIRM PURCHASE · ${fmt(total)}`}
       </button>
     </div>
   );
 }
 
-// ── My Tickets ─────────────────────────────────────────────────────────────
-function MyTicketsView({ tickets }) {
+// ── My Tickets Page (/tickets) ─────────────────────────────────────────────
+function MyTicketsPage({ ctx }) {
+  const { tickets } = ctx;
   const [selected, setSelected] = useState(null);
+
   if (tickets.length===0) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh", gap:16, color:"var(--muted)" }}>
       <div style={{ fontSize:64 }}>🎟</div>
       <h2 style={{ fontFamily:"Bebas Neue", fontSize:36, color:"var(--text)" }}>NO TICKETS YET</h2>
       <p>Purchase tickets to events to see them here</p>
+      <Link to="/" style={{ background:"var(--gold)", color:"#000", padding:"10px 24px", borderRadius:8, fontWeight:700 }}>Browse Events</Link>
     </div>
   );
+
   return (
     <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 24px" }}>
       <h1 style={{ fontSize:48, marginBottom:32 }}>MY TICKETS</h1>
       <div style={{ display:"grid", gap:16 }}>
         {tickets.map(ticket => (
-          <div key={ticket.id} onClick={() => setSelected(selected?.id===ticket.id ? null : ticket)} style={{ background:"var(--bg2)", border:`1px solid ${ticket.used?"var(--border)":"var(--gold-dim)"}`, borderRadius:16, padding:24, cursor:"pointer", opacity: ticket.used?0.6:1, transition:"all 0.2s" }}>
+          <div key={ticket.id} onClick={() => setSelected(selected?.id===ticket.id?null:ticket)} style={{ background:"var(--bg2)", border:`1px solid ${ticket.used?"var(--border)":"var(--gold-dim)"}`, borderRadius:16, padding:24, cursor:"pointer", opacity: ticket.used?0.6:1, transition:"all 0.2s" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"start", flexWrap:"wrap", gap:16 }}>
               <div style={{ flex:1 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
@@ -674,7 +733,7 @@ function MyTicketsView({ tickets }) {
                   <div style={{ marginBottom:12, padding:16, background:"var(--bg3)", borderRadius:12, display:"inline-block" }}>
                     <QRCode value={ticket.id} size={180} />
                   </div>
-                  <div style={{ fontFamily:"DM Mono", fontSize:12, letterSpacing:1, color:"var(--gold)", wordBreak:"break-all" }}>{ticket.id}</div>
+                  <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all" }}>{ticket.id}</div>
                   <div style={{ fontSize:12, color:"var(--muted)", marginTop:4 }}>Present this QR code at the entrance</div>
                 </div>
               </div>
@@ -686,22 +745,26 @@ function MyTicketsView({ tickets }) {
   );
 }
 
-// ── Dashboard ──────────────────────────────────────────────────────────────
-function DashboardView({ events, tickets, revenue, setView }) {
-  const totalSold = events.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss+t.sold,0), 0);
-  const totalCap = events.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss+t.total,0), 0);
+// ── Dashboard Page (/dashboard) ────────────────────────────────────────────
+function DashboardPage({ ctx }) {
+  const { events, tickets, currentUser } = ctx;
+  const myEvents = events.filter(e => e.organizer===currentUser.uid||e.organizer==="seed");
+  const revenue = tickets.reduce((s,t) => s+t.price, 0);
+  const totalSold = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.sold,0), 0);
+  const totalCap = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.total,0), 0);
+
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:40 }}>
         <h1 style={{ fontSize:48 }}>DASHBOARD</h1>
-        <button onClick={() => setView("create")} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 24px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:14 }}>+ Create Event</button>
+        <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:40 }}>
         {[
           { label:"Total Revenue", value:fmt(revenue), icon:"💰" },
           { label:"Tickets Sold", value:totalSold.toLocaleString(), icon:"🎟" },
-          { label:"Total Events", value:events.length, icon:"🎪" },
-          { label:"Avg. Fill Rate", value: totalCap ? `${Math.round((totalSold/totalCap)*100)}%` : "0%", icon:"📊" },
+          { label:"Total Events", value:myEvents.length, icon:"🎪" },
+          { label:"Avg. Fill Rate", value: totalCap?`${Math.round((totalSold/totalCap)*100)}%`:"0%", icon:"📊" },
         ].map(s => (
           <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:24 }}>
             <div style={{ fontSize:28, marginBottom:8 }}>{s.icon}</div>
@@ -712,15 +775,15 @@ function DashboardView({ events, tickets, revenue, setView }) {
       </div>
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
         <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)" }}><h3 style={{ fontSize:22 }}>YOUR EVENTS</h3></div>
-        {events.length===0 ? (
-          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. Create your first one!</div>
-        ) : events.map((event, i) => {
+        {myEvents.length===0 ? (
+          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
+        ) : myEvents.map((event,i) => {
           const sold = event.tiers.reduce((s,t) => s+t.sold, 0);
           const cap = event.tiers.reduce((s,t) => s+t.total, 0);
           const rev = event.tiers.reduce((s,t) => s+t.sold*t.price, 0);
           const pct = Math.round((sold/cap)*100);
           return (
-            <div key={event.id} style={{ display:"flex", alignItems:"center", gap:20, padding:"20px 24px", borderBottom: i<events.length-1 ? "1px solid var(--border)" : "none", flexWrap:"wrap" }}>
+            <div key={event.id} style={{ display:"flex", alignItems:"center", gap:20, padding:"20px 24px", borderBottom: i<myEvents.length-1?"1px solid var(--border)":"none", flexWrap:"wrap" }}>
               <img src={event.image} style={{ width:60, height:60, objectFit:"cover", borderRadius:8, flexShrink:0 }} alt="" />
               <div style={{ flex:1, minWidth:200 }}>
                 <div style={{ fontWeight:600, marginBottom:2 }}>{event.title}</div>
@@ -736,7 +799,10 @@ function DashboardView({ events, tickets, revenue, setView }) {
                 <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(rev)}</div>
                 <div style={{ fontSize:12, color:"var(--muted)" }}>revenue</div>
               </div>
-              <button onClick={() => setView("validate")} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Scan ▶</button>
+              <div style={{ display:"flex", gap:8 }}>
+                <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>View</Link>
+                <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
+              </div>
             </div>
           );
         })}
@@ -745,19 +811,99 @@ function DashboardView({ events, tickets, revenue, setView }) {
   );
 }
 
-// ── Validate ───────────────────────────────────────────────────────────────
-function ValidateView({ input, setInput, result, onValidate, onReset }) {
+// ── Create Event Page (/dashboard/create) ──────────────────────────────────
+function CreateEventPage({ ctx }) {
+  const { createEvent } = ctx;
+  const navigate = useNavigate();
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", description:"", tiers:[{ name:"General", price:"", total:"" }] });
+  const F = (k) => (e) => setForm(p=>({...p,[k]:e.target.value}));
+  const updateTier = (i,k,v) => setForm(p=>({...p,tiers:p.tiers.map((t,j)=>j===i?{...t,[k]:v}:t)}));
+  const addTier = () => setForm(p=>({...p,tiers:[...p.tiers,{name:"",price:"",total:""}]}));
+  const removeTier = (i) => setForm(p=>({...p,tiers:p.tiers.filter((_,j)=>j!==i)}));
+  const valid = form.title && form.date && form.venue && form.tiers.every(t=>t.name&&t.price&&t.total);
+
+  const handle = async () => {
+    setSaving(true);
+    const ev = await createEvent(form);
+    if (ev) navigate(`/event/${ev.id}`);
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ maxWidth:700, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      <button onClick={() => navigate("/dashboard")} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Dashboard</button>
+      <h1 style={{ fontSize:48, marginBottom:32 }}>CREATE EVENT</h1>
+      <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+          <Input label="Event Title" value={form.title} onChange={F("title")} placeholder="e.g. Neon Festival 2025" />
+          <Input label="Subtitle / Artist" value={form.subtitle} onChange={F("subtitle")} placeholder="e.g. ft. Burna Boy" />
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 }}>
+          <Input label="Date" type="date" value={form.date} onChange={F("date")} />
+          <Input label="Time" type="time" value={form.time} onChange={F("time")} />
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>CATEGORY</label>
+            <select value={form.category} onChange={F("category")} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14 }}>
+              {["Concert","Festival","Sports","Comedy","Conference"].map(c=><option key={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+        <Input label="Venue" value={form.venue} onChange={F("venue")} placeholder="e.g. Eko Convention Centre, Lagos" />
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DESCRIPTION</label>
+          <textarea value={form.description} onChange={F("description")} rows={3} placeholder="Describe your event..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans" }} />
+        </div>
+        <div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>TICKET TIERS</label>
+            <button onClick={addTier} style={{ background:"none", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontSize:12 }}>+ Add Tier</button>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {form.tiers.map((tier,i) => (
+              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr auto", gap:10, background:"var(--bg3)", padding:16, borderRadius:10, border:"1px solid var(--border)" }}>
+                <Input label="Tier Name" value={tier.name} onChange={e=>updateTier(i,"name",e.target.value)} placeholder="e.g. VIP" />
+                <Input label="Price (₦)" type="number" value={tier.price} onChange={e=>updateTier(i,"price",e.target.value)} placeholder="15000" />
+                <Input label="Capacity" type="number" value={tier.total} onChange={e=>updateTier(i,"total",e.target.value)} placeholder="200" />
+                <div style={{ display:"flex", alignItems:"flex-end" }}>
+                  <button onClick={()=>removeTier(i)} disabled={form.tiers.length===1} style={{ width:38, height:38, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--red)", borderRadius:8, cursor:"pointer", fontSize:18 }}>×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <button onClick={handle} disabled={!valid||saving} style={{ width:"100%", padding:16, background: valid?"var(--gold)":"var(--bg3)", color: valid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: valid?"pointer":"not-allowed", opacity: saving?0.7:1 }}>
+          {saving?"SAVING TO FIREBASE...":"PUBLISH EVENT"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Validate Page (/validate) ──────────────────────────────────────────────
+function ValidatePage({ ctx }) {
+  const { validateTicket } = ctx;
+  const [input, setInput] = useState("");
+  const [result, setResult] = useState(null);
   const [checking, setChecking] = useState(false);
-  const handle = async () => { if (!input) return; setChecking(true); await onValidate(input); setChecking(false); };
+
+  const handle = async () => {
+    if (!input) return;
+    setChecking(true);
+    const res = await validateTicket(input);
+    setResult(res);
+    setChecking(false);
+  };
+
   return (
     <div style={{ maxWidth:560, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <h1 style={{ fontSize:48, marginBottom:8 }}>SCAN & VALIDATE</h1>
       <p style={{ color:"var(--muted)", marginBottom:40 }}>Paste the Firestore ticket ID from the attendee's QR code</p>
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, marginBottom:24 }}>
-        <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID (Firestore Document ID)</label>
-        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key==="Enter" && handle()} placeholder="e.g. aB3dEfGhIjKl..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }} />
+        <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID</label>
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} placeholder="e.g. aB3dEfGhIjKl..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }} />
         <button onClick={handle} disabled={checking} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2, opacity: checking?0.7:1 }}>
-          {checking ? "CHECKING FIREBASE..." : "VALIDATE TICKET"}
+          {checking?"CHECKING FIREBASE...":"VALIDATE TICKET"}
         </button>
       </div>
       {result && (
@@ -779,68 +925,9 @@ function ValidateView({ input, setInput, result, onValidate, onReset }) {
               ))}
             </div>
           )}
-          <button onClick={onReset} style={{ marginTop:20, width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:10, borderRadius:8, cursor:"pointer", fontWeight:600 }}>Validate Another</button>
+          <button onClick={() => { setInput(""); setResult(null); }} style={{ marginTop:20, width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:10, borderRadius:8, cursor:"pointer", fontWeight:600 }}>Validate Another</button>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Create Event ───────────────────────────────────────────────────────────
-function CreateEventView({ newEvent, setNewEvent, onCreate, onBack }) {
-  const [saving, setSaving] = useState(false);
-  const F = (k) => (e) => setNewEvent(p => ({ ...p, [k]: e.target.value }));
-  const updateTier = (i,k,v) => setNewEvent(p => ({ ...p, tiers: p.tiers.map((t,j) => j===i?{...t,[k]:v}:t) }));
-  const addTier = () => setNewEvent(p => ({ ...p, tiers: [...p.tiers, { name:"", price:"", total:"" }] }));
-  const removeTier = (i) => setNewEvent(p => ({ ...p, tiers: p.tiers.filter((_,j) => j!==i) }));
-  const valid = newEvent.title && newEvent.date && newEvent.venue && newEvent.tiers.every(t => t.name && t.price && t.total);
-  const handle = async () => { setSaving(true); await onCreate(); setSaving(false); };
-  return (
-    <div style={{ maxWidth:700, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
-      <button onClick={onBack} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Dashboard</button>
-      <h1 style={{ fontSize:48, marginBottom:32 }}>CREATE EVENT</h1>
-      <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
-          <Input label="Event Title" value={newEvent.title} onChange={F("title")} placeholder="e.g. Neon Festival 2025" />
-          <Input label="Subtitle / Artist" value={newEvent.subtitle} onChange={F("subtitle")} placeholder="e.g. ft. Burna Boy" />
-        </div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 }}>
-          <Input label="Date" type="date" value={newEvent.date} onChange={F("date")} />
-          <Input label="Time" type="time" value={newEvent.time} onChange={F("time")} />
-          <div>
-            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>CATEGORY</label>
-            <select value={newEvent.category} onChange={F("category")} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14 }}>
-              {["Concert","Festival","Sports","Comedy","Conference"].map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
-        </div>
-        <Input label="Venue" value={newEvent.venue} onChange={F("venue")} placeholder="e.g. Eko Convention Centre, Lagos" />
-        <div>
-          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DESCRIPTION</label>
-          <textarea value={newEvent.description} onChange={F("description")} rows={3} placeholder="Describe your event..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans" }} />
-        </div>
-        <div>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>TICKET TIERS</label>
-            <button onClick={addTier} style={{ background:"none", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontSize:12 }}>+ Add Tier</button>
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            {newEvent.tiers.map((tier,i) => (
-              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr auto", gap:10, background:"var(--bg3)", padding:16, borderRadius:10, border:"1px solid var(--border)" }}>
-                <Input label="Tier Name" value={tier.name} onChange={e => updateTier(i,"name",e.target.value)} placeholder="e.g. VIP" />
-                <Input label="Price (₦)" type="number" value={tier.price} onChange={e => updateTier(i,"price",e.target.value)} placeholder="15000" />
-                <Input label="Capacity" type="number" value={tier.total} onChange={e => updateTier(i,"total",e.target.value)} placeholder="200" />
-                <div style={{ display:"flex", alignItems:"flex-end" }}>
-                  <button onClick={() => removeTier(i)} disabled={newEvent.tiers.length===1} style={{ width:38, height:38, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--red)", borderRadius:8, cursor:"pointer", fontSize:18 }}>×</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <button onClick={handle} disabled={!valid||saving} style={{ width:"100%", padding:16, background: valid?"var(--gold)":"var(--bg3)", color: valid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: valid?"pointer":"not-allowed", opacity: saving?0.7:1 }}>
-          {saving ? "SAVING TO FIREBASE..." : "PUBLISH EVENT"}
-        </button>
-      </div>
     </div>
   );
 }
