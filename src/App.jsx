@@ -268,6 +268,7 @@ export default function App() {
     setCurrentUser(null);
   };
 
+  // ── Purchase tickets → Firestore + Google Sheets ───────────────────────
   const purchaseTickets = async (eventId, cartSelections) => {
     const event = events.find(e => e.id === eventId);
     const newTickets = [];
@@ -284,13 +285,32 @@ export default function App() {
             used: false, purchasedAt: new Date().toISOString(),
           };
           const ref = await addDoc(collection(db, "tickets"), ticketData);
-          newTickets.push({ id: ref.id, ...ticketData });
+          const newTicket = { id: ref.id, ...ticketData };
+          newTickets.push(newTicket);
+
+          // ── Log to Google Sheets ───────────────────────────
+          await fetch(import.meta.env.VITE_SHEETS_URL, {
+            method: "POST",
+            body: JSON.stringify({
+              action: "purchase",
+              ticketId: ref.id,
+              eventTitle: event.title,
+              tierName: tier.name,
+              userName: currentUser.name,
+              email: currentUser.email,
+              price: tier.price,
+              purchasedAt: new Date().toLocaleString("en-NG"),
+            }),
+          });
+          // ──────────────────────────────────────────────────
         }
+
         const updatedTiers = event.tiers.map(t =>
           t.id === tier.id ? { ...t, sold: t.sold + qty } : t
         );
         await updateDoc(doc(db, "events", eventId), { tiers: updatedTiers });
       }
+
       setTickets(prev => [...prev, ...newTickets]);
       setEvents(prev => prev.map(e => e.id !== eventId ? e : {
         ...e,
@@ -305,6 +325,7 @@ export default function App() {
     }
   };
 
+  // ── Validate ticket → Firestore + Google Sheets ────────────────────────
   const validateTicket = async (id) => {
     try {
       const ref = doc(db, "tickets", id.trim());
@@ -312,9 +333,24 @@ export default function App() {
       if (!snap.exists()) return { ok: false, msg: "Ticket not found" };
       const ticket = { id: snap.id, ...snap.data() };
       if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
+
+      // Mark as used in Firestore
       await updateDoc(ref, { used: true });
+
+      // ── Mark as used in Google Sheets ──────────────────
+      await fetch(import.meta.env.VITE_SHEETS_URL, {
+        method: "POST",
+        body: JSON.stringify({
+          action: "validate",
+          ticketId: id.trim(),
+        }),
+      });
+      // ───────────────────────────────────────────────────
+
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
-    } catch { return { ok: false, msg: "Error checking ticket" }; }
+    } catch {
+      return { ok: false, msg: "Error checking ticket" };
+    }
   };
 
   const createEvent = async (eventData) => {
@@ -449,7 +485,6 @@ function AuthPage({ mode, ctx }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Redirect if already logged in
   if (currentUser) return <Navigate to="/" />;
 
   const F = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
@@ -518,15 +553,14 @@ function EventPage({ ctx }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Try local state first, then fetch from Firestore
     const local = events.find(e => e.id === eventId);
     if (local) { setEvent(local); setLoading(false); return; }
-    const fetch = async () => {
+    const fetchEvent = async () => {
       const snap = await getDoc(doc(db, "events", eventId));
       if (snap.exists()) setEvent({ id: snap.id, ...snap.data() });
       setLoading(false);
     };
-    fetch();
+    fetchEvent();
   }, [eventId, events]);
 
   if (loading) return <Spinner />;
@@ -545,14 +579,12 @@ function EventPage({ ctx }) {
 
   const handleCheckout = () => {
     if (!currentUser) { navigate("/login"); return; }
-    // Store cart in sessionStorage so checkout page can read it
     sessionStorage.setItem("cart", JSON.stringify(cart));
     navigate(`/event/${eventId}/checkout`);
   };
 
   return (
     <div style={{ maxWidth:1100, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
-      {/* Share button */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
         <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14 }}>← Back</button>
         <button onClick={() => { navigator.clipboard.writeText(window.location.href); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>
