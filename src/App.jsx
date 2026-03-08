@@ -454,6 +454,8 @@ export default function App() {
           <Route path="/dashboard" element={currentUser?.role === "organizer" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>
@@ -524,12 +526,20 @@ function Footer() {
         <div>
           <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>SUPPORT</div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            {[["Help Centre","#"],["Contact Us","#"],["Terms of Service","#"],["Privacy Policy","#"]].map(([label, href]) => (
+            {[["Help Centre","#"],["Contact Us","#"]].map(([label, href]) => (
               <a key={label} href={href} style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
                 onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
                 onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
               >{label}</a>
             ))}
+            <Link to="/terms" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+              onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+              onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+            >Terms of Service</Link>
+            <Link to="/privacy" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+              onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+              onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+            >Privacy Policy</Link>
           </div>
         </div>
       </div>
@@ -543,12 +553,16 @@ function Footer() {
           © {year} StagePro. All rights reserved. Made in Nigeria 🇳🇬
         </p>
         <div style={{ display:"flex", gap:20 }}>
-          {[["Terms","#"],["Privacy","#"],["Cookies","#"]].map(([label, href]) => (
-            <a key={label} href={href} style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
+          {[["Terms","/terms"],["Privacy","/privacy"]].map(([label, href]) => (
+            <Link key={label} to={href} style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
-            >{label}</a>
+            >{label}</Link>
           ))}
+          <a href="#" style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
+            onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+            onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+          >Cookies</a>
         </div>
       </div>
     </footer>
@@ -1508,5 +1522,208 @@ function ValidatePage({ ctx }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ── Legal page shared layout ───────────────────────────────────────────────
+function LegalPage({ title, subtitle, children }) {
+  const navigate = useNavigate();
+  return (
+    <div style={{ maxWidth:800, margin:"0 auto", padding:"48px 24px 80px", animation:"fadeUp 0.4s ease" }}>
+      <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, marginBottom:32 }}>← Back</button>
+      <div style={{ marginBottom:48 }}>
+        <div style={{ fontSize:12, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:12, fontWeight:500 }}>Legal</div>
+        <h1 style={{ fontSize:"clamp(40px,8vw,72px)", lineHeight:0.95, marginBottom:16 }}>{title}</h1>
+        <p style={{ color:"var(--muted)", fontSize:15 }}>{subtitle}</p>
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:40 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function LegalSection({ title, children }) {
+  return (
+    <div style={{ borderLeft:"3px solid var(--gold)", paddingLeft:24 }}>
+      <h2 style={{ fontFamily:"Bebas Neue", fontSize:22, letterSpacing:1, marginBottom:12, color:"var(--text)" }}>{title}</h2>
+      <div style={{ color:"var(--muted)", fontSize:15, lineHeight:1.85 }}>{children}</div>
+    </div>
+  );
+}
+
+// ── Terms of Service ───────────────────────────────────────────────────────
+function TermsPage() {
+  return (
+    <LegalPage
+      title="TERMS OF SERVICE"
+      subtitle={"Last updated: " + new Date().toLocaleDateString("en-NG", { year:"numeric", month:"long", day:"numeric" })}
+    >
+      <LegalSection title="1. Acceptance of Terms">
+        <p>By accessing or using StagePro ("the Platform"), you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use our services. These terms apply to all users including attendees, event organisers, and visitors.</p>
+      </LegalSection>
+
+      <LegalSection title="2. About StagePro">
+        <p>StagePro is an event ticketing platform operating in Nigeria that enables event organisers to list events and sell tickets, and enables attendees to discover and purchase tickets to events. StagePro acts as a facilitator between organisers and attendees and is not itself the organiser of any listed event.</p>
+      </LegalSection>
+
+      <LegalSection title="3. Account Registration">
+        <p style={{ marginBottom:12 }}>To purchase tickets or create events, you must register for an account. By creating an account you agree to:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li>Provide accurate, current, and complete information during registration.</li>
+          <li>Maintain the security of your password and accept responsibility for all activity under your account.</li>
+          <li>Notify us immediately of any unauthorised use of your account.</li>
+          <li>Not create multiple accounts or share your account with others.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="4. Ticket Purchases">
+        <p style={{ marginBottom:12 }}>All ticket sales are subject to the following conditions:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li><strong style={{ color:"var(--text)" }}>All sales are final.</strong> Tickets are non-refundable unless the event is cancelled or significantly changed by the organiser.</li>
+          <li>Tickets may not be resold or transferred without prior written consent from StagePro.</li>
+          <li>Each ticket is valid for a single entry. Duplicate or counterfeit tickets will be rejected at the venue.</li>
+          <li>StagePro reserves the right to cancel tickets obtained fraudulently or in violation of these terms.</li>
+          <li>Prices displayed are inclusive of any applicable service fees unless otherwise stated.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="5. Event Organiser Responsibilities">
+        <p style={{ marginBottom:12 }}>If you create events on StagePro, you agree to:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li>Provide accurate event details including date, time, venue, and ticket tiers.</li>
+          <li>Honour all tickets issued through the Platform.</li>
+          <li>Notify attendees and StagePro promptly of any material changes or cancellations.</li>
+          <li>Comply with all applicable Nigerian laws and regulations including venue licensing, public safety, and entertainment laws.</li>
+          <li>Be solely responsible for the safe conduct of your event.</li>
+          <li>Refund attendees in full for cancelled events within 14 days of cancellation.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="6. Prohibited Conduct">
+        <p style={{ marginBottom:12 }}>You agree not to:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li>Use the Platform for any unlawful purpose or in violation of these Terms.</li>
+          <li>Attempt to gain unauthorised access to any part of the Platform or its systems.</li>
+          <li>Use automated tools to scrape, crawl, or extract data from the Platform.</li>
+          <li>Post false, misleading, or fraudulent event listings.</li>
+          <li>Harass, threaten, or harm other users of the Platform.</li>
+          <li>Engage in ticket scalping, bulk purchasing for resale, or price manipulation.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="7. Intellectual Property">
+        <p>All content on the StagePro Platform including logos, design, text, graphics, and software is the property of StagePro or its licensors and is protected by Nigerian and international intellectual property laws. You may not reproduce, distribute, or create derivative works without express written permission.</p>
+      </LegalSection>
+
+      <LegalSection title="8. Limitation of Liability">
+        <p>StagePro shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the Platform or attendance at any event. Our total liability to you for any claim shall not exceed the amount you paid for the ticket(s) in question. StagePro is not responsible for the actions, content, or conduct of event organisers or other users.</p>
+      </LegalSection>
+
+      <LegalSection title="9. Dispute Resolution">
+        <p>Any disputes arising from these Terms or your use of the Platform shall first be attempted to be resolved through good-faith negotiation. If unresolved within 30 days, disputes shall be submitted to binding arbitration in Lagos, Nigeria, in accordance with the Arbitration and Conciliation Act. Notwithstanding the foregoing, either party may seek urgent injunctive relief from a competent court.</p>
+      </LegalSection>
+
+      <LegalSection title="10. Governing Law">
+        <p>These Terms shall be governed by and construed in accordance with the laws of the Federal Republic of Nigeria. Any legal action arising from these Terms shall be brought exclusively in the courts of Lagos State, Nigeria.</p>
+      </LegalSection>
+
+      <LegalSection title="11. Changes to Terms">
+        <p>StagePro reserves the right to modify these Terms at any time. We will notify registered users of material changes via email or in-app notification. Continued use of the Platform after changes are posted constitutes your acceptance of the updated Terms.</p>
+      </LegalSection>
+
+      <LegalSection title="12. Contact Us">
+        <p>If you have questions about these Terms of Service, please contact us at <span style={{ color:"var(--gold)" }}>legal@stagepro.ng</span> or write to us at StagePro HQ, Victoria Island, Lagos, Nigeria.</p>
+      </LegalSection>
+    </LegalPage>
+  );
+}
+
+// ── Privacy Policy ─────────────────────────────────────────────────────────
+function PrivacyPage() {
+  return (
+    <LegalPage
+      title="PRIVACY POLICY"
+      subtitle={"Last updated: " + new Date().toLocaleDateString("en-NG", { year:"numeric", month:"long", day:"numeric" })}
+    >
+      <LegalSection title="1. Introduction">
+        <p>StagePro ("we", "us", or "our") is committed to protecting your personal information. This Privacy Policy explains how we collect, use, store, and share your data when you use our ticketing platform. By using StagePro, you consent to the practices described in this policy.</p>
+      </LegalSection>
+
+      <LegalSection title="2. Information We Collect">
+        <p style={{ marginBottom:12 }}>We collect the following categories of personal information:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:10 }}>
+          <li><strong style={{ color:"var(--text)" }}>Account Information:</strong> Your full name, email address, and account type (attendee or organiser) when you register.</li>
+          <li><strong style={{ color:"var(--text)" }}>Transaction Data:</strong> Details of tickets purchased including event name, ticket tier, price paid, and purchase date.</li>
+          <li><strong style={{ color:"var(--text)" }}>Usage Data:</strong> Pages visited, features used, device type, browser, and IP address collected automatically when you use the Platform.</li>
+          <li><strong style={{ color:"var(--text)" }}>Event Data:</strong> If you are an organiser, details of events you create including event name, description, venue, and pricing.</li>
+          <li><strong style={{ color:"var(--text)" }}>Communications:</strong> Any messages or support requests you send to us.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="3. How We Use Your Information">
+        <p style={{ marginBottom:12 }}>We use your information to:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li>Create and manage your account.</li>
+          <li>Process ticket purchases and deliver tickets to you.</li>
+          <li>Send booking confirmations and event reminders via email.</li>
+          <li>Provide customer support and resolve disputes.</li>
+          <li>Allow event organisers to verify tickets at the venue.</li>
+          <li>Improve and personalise the Platform experience.</li>
+          <li>Comply with legal obligations under Nigerian law.</li>
+          <li>Send you relevant updates and promotional messages (you may opt out at any time).</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="4. Data Sharing">
+        <p style={{ marginBottom:12 }}>We do not sell your personal data. We share your information only in the following circumstances:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li><strong style={{ color:"var(--text)" }}>Event Organisers:</strong> Your name and ticket details are shared with the organiser of events you attend, solely for the purpose of entry verification.</li>
+          <li><strong style={{ color:"var(--text)" }}>Service Providers:</strong> We use third-party services including Google Firebase (authentication and database) and Google Sheets (attendance logging). These providers process data on our behalf under strict confidentiality obligations.</li>
+          <li><strong style={{ color:"var(--text)" }}>Legal Requirements:</strong> We may disclose your information when required by Nigerian law, court order, or government authority.</li>
+          <li><strong style={{ color:"var(--text)" }}>Business Transfer:</strong> In the event of a merger or acquisition, your data may be transferred to the new entity, who will be bound by this policy.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="5. Data Storage and Security">
+        <p>Your data is stored securely using Google Firebase infrastructure hosted in compliance with international data protection standards. We implement industry-standard security measures including encrypted connections (HTTPS), secure authentication, and access controls. However, no method of transmission over the internet is 100% secure, and we cannot guarantee absolute security.</p>
+      </LegalSection>
+
+      <LegalSection title="6. Data Retention">
+        <p>We retain your personal data for as long as your account is active or as needed to provide our services. Transaction records are retained for a minimum of 6 years to comply with Nigerian financial regulations. You may request deletion of your account and associated data at any time, subject to our legal retention obligations.</p>
+      </LegalSection>
+
+      <LegalSection title="7. Your Rights">
+        <p style={{ marginBottom:12 }}>Under Nigerian data protection law (NDPR) and applicable international standards, you have the right to:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li><strong style={{ color:"var(--text)" }}>Access:</strong> Request a copy of the personal data we hold about you.</li>
+          <li><strong style={{ color:"var(--text)" }}>Correction:</strong> Request that we correct inaccurate or incomplete data.</li>
+          <li><strong style={{ color:"var(--text)" }}>Deletion:</strong> Request that we delete your personal data, subject to legal obligations.</li>
+          <li><strong style={{ color:"var(--text)" }}>Objection:</strong> Object to the processing of your data for marketing purposes.</li>
+          <li><strong style={{ color:"var(--text)" }}>Portability:</strong> Request your data in a structured, machine-readable format.</li>
+        </ul>
+        <p style={{ marginTop:12 }}>To exercise any of these rights, contact us at <span style={{ color:"var(--gold)" }}>privacy@stagepro.ng</span>. We will respond within 30 days.</p>
+      </LegalSection>
+
+      <LegalSection title="8. Cookies">
+        <p>StagePro uses browser local storage and session storage to maintain your login session and theme preferences. We do not currently use third-party advertising or tracking cookies. You can clear stored data at any time through your browser settings, though this will log you out of the Platform.</p>
+      </LegalSection>
+
+      <LegalSection title="9. Children's Privacy">
+        <p>StagePro is not intended for use by individuals under the age of 18. We do not knowingly collect personal data from minors. If you believe a minor has provided us with their data, please contact us immediately and we will delete it promptly.</p>
+      </LegalSection>
+
+      <LegalSection title="10. Third-Party Links">
+        <p>The Platform may contain links to third-party websites or services. We are not responsible for the privacy practices of those sites. We encourage you to review the privacy policies of any third-party services you visit.</p>
+      </LegalSection>
+
+      <LegalSection title="11. Changes to This Policy">
+        <p>We may update this Privacy Policy from time to time. We will notify you of significant changes via email or a prominent notice on the Platform. Your continued use of StagePro after changes take effect constitutes your acceptance of the updated policy.</p>
+      </LegalSection>
+
+      <LegalSection title="12. Contact & Complaints">
+        <p>For privacy-related enquiries or complaints, contact our Data Protection Officer at <span style={{ color:"var(--gold)" }}>privacy@stagepro.ng</span>. If you are unsatisfied with our response, you may lodge a complaint with the Nigeria Data Protection Bureau (NDPB) at <span style={{ color:"var(--gold)" }}>ndpb.gov.ng</span>.</p>
+      </LegalSection>
+    </LegalPage>
   );
 }
