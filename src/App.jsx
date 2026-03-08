@@ -26,9 +26,19 @@ import {
   setDoc,
   addDoc,
   updateDoc,
+  deleteDoc,
   query,
   where,
 } from "firebase/firestore";
+
+// ── EmailJS setup (optional — for auto email tickets) ─────────────────────
+// Add to .env and Vercel environment variables:
+//   VITE_EMAILJS_SERVICE  = your EmailJS service ID
+//   VITE_EMAILJS_TEMPLATE = your EmailJS template ID
+//   VITE_EMAILJS_KEY      = your EmailJS public key
+// Template variables to use: to_email, to_name, event_title, event_date,
+//   venue, tier, ticket_id, ticket_url
+// ──────────────────────────────────────────────────────────────────────────
 
 // ── Firebase ───────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -94,6 +104,41 @@ const fmtDate = (d) =>
   new Date(d).toLocaleDateString("en-NG", {
     weekday: "short", year: "numeric", month: "long", day: "numeric",
   });
+
+
+// ── Email ticket via EmailJS ───────────────────────────────────────────────
+// Setup: go to emailjs.com → create account → Email Templates → use template
+// variables: to_email, to_name, event_title, event_date, venue, tier, ticket_id, ticket_url
+const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
+  try {
+    const EMAILJS_SERVICE  = import.meta.env.VITE_EMAILJS_SERVICE  || "";
+    const EMAILJS_TEMPLATE = import.meta.env.VITE_EMAILJS_TEMPLATE || "";
+    const EMAILJS_KEY      = import.meta.env.VITE_EMAILJS_KEY      || "";
+    if (!EMAILJS_SERVICE || !EMAILJS_TEMPLATE || !EMAILJS_KEY) return; // not configured yet
+    const ticketUrl = `${window.location.origin}/ticket/${ticket.id}`;
+    await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id:  EMAILJS_SERVICE,
+        template_id: EMAILJS_TEMPLATE,
+        user_id:     EMAILJS_KEY,
+        template_params: {
+          to_email:    toEmail,
+          to_name:     toName,
+          event_title: ticket.eventTitle,
+          event_date:  ticket.eventDate,
+          venue:       ticket.venue,
+          tier:        ticket.tierName,
+          ticket_id:   ticket.id,
+          ticket_url:  ticketUrl,
+        },
+      }),
+    });
+  } catch (err) {
+    console.warn("Email send failed (non-critical):", err);
+  }
+};
 
 // ── Seed events ────────────────────────────────────────────────────────────
 const SEED_EVENTS = [
@@ -371,6 +416,7 @@ export default function App() {
           const ref = await addDoc(collection(db, "tickets"), ticketData);
           const newTicket = { id: ref.id, ...ticketData };
           newTickets.push(newTicket);
+          sendTicketEmail({ toEmail: currentUser.email, toName: currentUser.name, ticket: newTicket });
           logToSheets({
             action: "purchase", ticketId: ref.id,
             eventTitle: event.title, tierName: tier.name,
@@ -435,9 +481,59 @@ export default function App() {
     }
   };
 
+  const updateEvent = async (eventId, eventData) => {
+    try {
+      const data = {
+        ...eventData,
+        tiers: eventData.tiers.map((t, i) => ({
+          ...t, id: t.id || `t${i+1}`, price: Number(t.price), total: Number(t.total),
+        })),
+      };
+      await updateDoc(doc(db, "events", eventId), data);
+      setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...data } : e));
+      notify("Event updated!");
+      return true;
+    } catch (err) {
+      console.error(err);
+      notify("Failed to update event.", "error");
+      return false;
+    }
+  };
+
+  const deleteEvent = async (eventId) => {
+    try {
+      await deleteDoc(doc(db, "events", eventId));
+      setEvents(prev => prev.filter(e => e.id !== eventId));
+      notify("Event deleted.");
+      return true;
+    } catch (err) {
+      console.error(err);
+      notify("Failed to delete event.", "error");
+      return false;
+    }
+  };
+
+  const transferTicket = async (ticketId, toEmail) => {
+    try {
+      // find user by email
+      const q = query(collection(db, "users"), where("email", "==", toEmail.trim().toLowerCase()));
+      const snap = await getDocs(q);
+      if (snap.empty) return { ok: false, msg: "No account found with that email." };
+      const recipient = { id: snap.docs[0].id, ...snap.docs[0].data() };
+      if (recipient.id === currentUser.uid) return { ok: false, msg: "You can't transfer to yourself." };
+      await updateDoc(doc(db, "tickets", ticketId), { userId: recipient.id, userName: recipient.name });
+      setTickets(prev => prev.filter(t => t.id !== ticketId));
+      notify(`Ticket transferred to ${recipient.name}!`);
+      return { ok: true };
+    } catch (err) {
+      console.error(err);
+      return { ok: false, msg: "Transfer failed. Try again." };
+    }
+  };
+
   if (authLoading) return <><style>{STYLE}</style><Spinner /></>;
 
-  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent };
+  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket };
 
   return (
     <BrowserRouter>
@@ -453,6 +549,7 @@ export default function App() {
           <Route path="/ticket/:ticketId" element={<TicketPage ctx={ctx} />} />
           <Route path="/dashboard" element={currentUser?.role === "organizer" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
@@ -705,8 +802,14 @@ function TicketPage({ ctx }) {
 function HomePage({ ctx }) {
   const { events, eventsLoading } = ctx;
   const [filter, setFilter] = useState("All");
+  const [search, setSearch] = useState("");
   const cats = ["All", "Concert", "Festival", "Sports"];
-  const filtered = filter === "All" ? events : events.filter(e => e.category === filter);
+  const filtered = events
+    .filter(e => filter === "All" || e.category === filter)
+    .filter(e => {
+      const q = search.toLowerCase();
+      return !q || e.title.toLowerCase().includes(q) || e.venue.toLowerCase().includes(q) || (e.subtitle||"").toLowerCase().includes(q);
+    });
 
   if (eventsLoading) return <Spinner />;
 
@@ -723,14 +826,38 @@ function HomePage({ ctx }) {
           Discover concerts, festivals, and sporting events. Secure tickets with instant QR delivery.
         </p>
       </div>
+      {/* Search bar */}
+      <div style={{ position:"relative", maxWidth:560, margin:"0 auto 32px" }}>
+        <span style={{ position:"absolute", left:18, top:"50%", transform:"translateY(-50%)", fontSize:18, pointerEvents:"none" }}>🔍</span>
+        <input
+          value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search events, artists, venues..."
+          style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:100, padding:"14px 20px 14px 48px", color:"var(--text)", fontSize:15, outline:"none", transition:"border 0.2s" }}
+          onFocus={e => e.target.style.borderColor="var(--gold)"}
+          onBlur={e => e.target.style.borderColor="var(--border)"}
+        />
+        {search && (
+          <button onClick={() => setSearch("")} style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:18, lineHeight:1 }}>×</button>
+        )}
+      </div>
+      {/* Category filters */}
       <div style={{ display:"flex", gap:8, marginBottom:40, flexWrap:"wrap" }}>
         {cats.map(c => (
           <button key={c} onClick={() => setFilter(c)} style={{ background: filter===c?"var(--gold)":"var(--bg3)", color: filter===c?"#000":"var(--muted)", border:`1px solid ${filter===c?"var(--gold)":"var(--border)"}`, padding:"8px 20px", borderRadius:100, cursor:"pointer", fontWeight:600, fontSize:13, transition:"all 0.2s" }}>{c}</button>
         ))}
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
-        {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} />)}
-      </div>
+      {filtered.length === 0 ? (
+        <div style={{ textAlign:"center", padding:"80px 24px", color:"var(--muted)" }}>
+          <div style={{ fontSize:48, marginBottom:16 }}>🔍</div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--text)", marginBottom:8 }}>NO RESULTS FOUND</div>
+          <p>Try a different search or browse all events</p>
+          <button onClick={() => { setSearch(""); setFilter("All"); }} style={{ marginTop:16, background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Clear Filters</button>
+        </div>
+      ) : (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
+          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1065,9 +1192,42 @@ function CheckoutPage({ ctx }) {
 }
 
 // ── My Tickets Page ────────────────────────────────────────────────────────
+function TransferModal({ ticket, onTransfer, onClose }) {
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const handle = async () => {
+    if (!email.trim()) return;
+    setLoading(true); setMsg(null);
+    const res = await onTransfer(ticket.id, email);
+    if (res.ok) { onClose(); return; }
+    setMsg(res.msg);
+    setLoading(false);
+  };
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, width:"100%", maxWidth:440, animation:"fadeUp 0.3s ease" }}>
+        <h2 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:4 }}>TRANSFER TICKET</h2>
+        <p style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>Enter the email address of the person you want to send <strong style={{ color:"var(--text)" }}>{ticket.eventTitle} — {ticket.tierName}</strong> to.</p>
+        <Input label="Recipient Email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="friend@email.com" />
+        {msg && <div style={{ marginTop:12, color:"var(--red)", fontSize:13 }}>{msg}</div>}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:20 }}>
+          <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:12, borderRadius:10, cursor:"pointer", fontWeight:600 }}>Cancel</button>
+          <button onClick={handle} disabled={!email.trim()||loading} style={{ background: email.trim()?"var(--gold)":"var(--bg3)", color: email.trim()?"#000":"var(--muted)", border:"none", padding:12, borderRadius:10, cursor: email.trim()?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:1 }}>
+            {loading ? "SENDING..." : "TRANSFER"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MyTicketsPage({ ctx }) {
-  const { tickets } = ctx;
+  const { tickets, transferTicket } = ctx;
   const [selected, setSelected] = useState(null);
+  const [transfering, setTransfering] = useState(null); // ticket being transferred
 
   if (tickets.length===0) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh", gap:16, color:"var(--muted)" }}>
@@ -1080,6 +1240,7 @@ function MyTicketsPage({ ctx }) {
 
   return (
     <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 24px" }}>
+      {transfering && <TransferModal ticket={transfering} onTransfer={transferTicket} onClose={() => setTransfering(null)} />}
       <h1 style={{ fontSize:48, marginBottom:8 }}>MY TICKETS</h1>
       <p style={{ color:"var(--muted)", fontSize:13, marginBottom:32 }}>Click a ticket to reveal its QR code. Scan at the entrance for entry.</p>
       <div style={{ display:"grid", gap:16 }}>
@@ -1093,7 +1254,15 @@ function MyTicketsPage({ ctx }) {
                 </div>
                 <div style={{ color:"var(--muted)", fontSize:13, marginBottom:4 }}>{fmtDate(ticket.eventDate)} · {ticket.eventTime}</div>
                 <div style={{ color:"var(--muted)", fontSize:13, marginBottom:12 }}>{ticket.venue}</div>
-                <div style={{ display:"inline-block", background:"rgba(245,166,35,0.15)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"4px 12px", borderRadius:100, fontSize:12, fontWeight:600 }}>{ticket.tierName}</div>
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                  <div style={{ background:"rgba(245,166,35,0.15)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"4px 12px", borderRadius:100, fontSize:12, fontWeight:600 }}>{ticket.tierName}</div>
+                  {!ticket.used && (
+                    <button
+                      onClick={e => { e.stopPropagation(); setTransfering(ticket); }}
+                      style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"4px 12px", borderRadius:100, fontSize:12, cursor:"pointer", fontWeight:600 }}
+                    >↗ Transfer</button>
+                  )}
+                </div>
               </div>
               <div style={{ textAlign:"right" }}>
                 <div style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--gold)" }}>{fmt(ticket.price)}</div>
@@ -1124,23 +1293,47 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { events, tickets, currentUser } = ctx;
+  const { events, tickets, currentUser, deleteEvent } = ctx;
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const myEvents = events.filter(e => e.organizer===currentUser.uid || e.organizer==="seed");
   const revenue = tickets.reduce((s,t) => s+t.price, 0);
   const totalSold = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.sold,0), 0);
   const totalCap = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.total,0), 0);
+  const totalCheckedIn = tickets.filter(t => t.used).length;
+
+  const handleDelete = async (event) => {
+    await deleteEvent(event.id);
+    setConfirmDelete(null);
+  };
 
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
+      {/* Delete confirm modal */}
+      {confirmDelete && (
+        <div onClick={() => setConfirmDelete(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, maxWidth:400, width:"100%", animation:"fadeUp 0.3s ease" }}>
+            <div style={{ fontSize:40, marginBottom:16 }}>🗑️</div>
+            <h2 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:8 }}>DELETE EVENT?</h2>
+            <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>This will permanently delete <strong style={{ color:"var(--text)" }}>{confirmDelete.title}</strong>. This action cannot be undone.</p>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <button onClick={() => setConfirmDelete(null)} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:12, borderRadius:10, cursor:"pointer", fontWeight:600 }}>Cancel</button>
+              <button onClick={() => handleDelete(confirmDelete)} style={{ background:"var(--red)", border:"none", color:"#fff", padding:12, borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:1 }}>DELETE</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:40 }}>
         <h1 style={{ fontSize:48 }}>DASHBOARD</h1>
         <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
       </div>
+
+      {/* Stats */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:40 }}>
         {[
           { label:"Total Revenue", value:fmt(revenue), icon:"💰" },
           { label:"Tickets Sold", value:totalSold.toLocaleString(), icon:"🎟" },
-          { label:"Total Events", value:myEvents.length, icon:"🎪" },
+          { label:"Checked In", value:totalCheckedIn.toLocaleString(), icon:"✅" },
           { label:"Avg. Fill Rate", value: totalCap?`${Math.round((totalSold/totalCap)*100)}%`:"0%", icon:"📊" },
         ].map(s => (
           <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:24 }}>
@@ -1150,6 +1343,8 @@ function DashboardPage({ ctx }) {
           </div>
         ))}
       </div>
+
+      {/* Events table */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
         <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
           <h3 style={{ fontSize:22 }}>YOUR EVENTS</h3>
@@ -1161,31 +1356,51 @@ function DashboardPage({ ctx }) {
           const sold = event.tiers.reduce((s,t) => s+t.sold, 0);
           const cap = event.tiers.reduce((s,t) => s+t.total, 0);
           const rev = event.tiers.reduce((s,t) => s+t.sold*t.price, 0);
-          const pct = Math.round((sold/cap)*100);
-          const eventTicketCount = tickets.filter(t => t.eventId === event.id).length;
+          const pct = cap ? Math.round((sold/cap)*100) : 0;
+          const eventTickets = tickets.filter(t => t.eventId === event.id);
+          const checkedIn = eventTickets.filter(t => t.used).length;
+          const checkInPct = eventTickets.length ? Math.round((checkedIn/eventTickets.length)*100) : 0;
           return (
-            <div key={event.id} style={{ display:"flex", alignItems:"center", gap:20, padding:"20px 24px", borderBottom: i<myEvents.length-1?"1px solid var(--border)":"none", flexWrap:"wrap" }}>
-              <img src={event.image} style={{ width:60, height:60, objectFit:"cover", borderRadius:8, flexShrink:0 }} alt="" />
-              <div style={{ flex:1, minWidth:200 }}>
-                <div style={{ fontWeight:600, marginBottom:2 }}>{event.title}</div>
-                <div style={{ fontSize:13, color:"var(--muted)" }}>{fmtDate(event.date)}</div>
-              </div>
-              <div style={{ minWidth:120 }}>
-                <div style={{ height:4, background:"var(--border)", borderRadius:2, marginBottom:4 }}>
-                  <div style={{ height:"100%", width:`${pct}%`, background: pct>80?"var(--red)":"var(--gold)", borderRadius:2 }} />
+            <div key={event.id} style={{ padding:"20px 24px", borderBottom: i<myEvents.length-1?"1px solid var(--border)":"none" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:20, flexWrap:"wrap" }}>
+                <img src={event.image} style={{ width:60, height:60, objectFit:"cover", borderRadius:8, flexShrink:0 }} alt="" />
+                <div style={{ flex:1, minWidth:160 }}>
+                  <div style={{ fontWeight:600, marginBottom:2 }}>{event.title}</div>
+                  <div style={{ fontSize:13, color:"var(--muted)" }}>{fmtDate(event.date)}</div>
                 </div>
-                <div style={{ fontSize:13, fontFamily:"DM Mono" }}>{sold}/{cap}</div>
-              </div>
-              <div style={{ textAlign:"right" }}>
-                <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(rev)}</div>
-                <div style={{ fontSize:12, color:"var(--muted)" }}>revenue</div>
-              </div>
-              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>View</Link>
-                <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
-                <button onClick={() => downloadCSV(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"8px 14px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
-                  ⬇ CSV {eventTicketCount > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTicketCount}</span>}
-                </button>
+                {/* Ticket sales bar */}
+                <div style={{ minWidth:110 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"var(--muted)", marginBottom:4 }}>
+                    <span>Sales</span><span>{pct}%</span>
+                  </div>
+                  <div style={{ height:4, background:"var(--border)", borderRadius:2, marginBottom:2 }}>
+                    <div style={{ height:"100%", width:`${pct}%`, background: pct>80?"var(--red)":"var(--gold)", borderRadius:2, transition:"width 0.4s" }} />
+                  </div>
+                  <div style={{ fontSize:12, fontFamily:"DM Mono", color:"var(--muted)" }}>{sold}/{cap}</div>
+                </div>
+                {/* Check-in bar */}
+                <div style={{ minWidth:110 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"var(--muted)", marginBottom:4 }}>
+                    <span>Check-ins</span><span>{checkInPct}%</span>
+                  </div>
+                  <div style={{ height:4, background:"var(--border)", borderRadius:2, marginBottom:2 }}>
+                    <div style={{ height:"100%", width:`${checkInPct}%`, background:"var(--green)", borderRadius:2, transition:"width 0.4s" }} />
+                  </div>
+                  <div style={{ fontSize:12, fontFamily:"DM Mono", color:"var(--muted)" }}>{checkedIn}/{eventTickets.length}</div>
+                </div>
+                <div style={{ textAlign:"right", minWidth:90 }}>
+                  <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(rev)}</div>
+                  <div style={{ fontSize:12, color:"var(--muted)" }}>revenue</div>
+                </div>
+                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                  <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
+                  <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>✏️ Edit</Link>
+                  <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
+                  <button onClick={() => downloadCSV(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+                    ⬇ {eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
+                  </button>
+                  <button onClick={() => setConfirmDelete(event)} style={{ background:"rgba(232,64,64,0.1)", border:"1px solid rgba(232,64,64,0.3)", color:"var(--red)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}>🗑️</button>
+                </div>
               </div>
             </div>
           );
@@ -1264,6 +1479,87 @@ function CreateEventPage({ ctx }) {
   );
 }
 
+
+
+// ── Edit Event Page ────────────────────────────────────────────────────────
+function EditEventPage({ ctx }) {
+  const { events, updateEvent } = ctx;
+  const { eventId } = useParams();
+  const navigate = useNavigate();
+  const event = events.find(e => e.id === eventId);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState(event ? {
+    title: event.title, subtitle: event.subtitle||"", date: event.date,
+    time: event.time||"", venue: event.venue, category: event.category||"Concert",
+    description: event.description||"",
+    tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold })),
+  } : null);
+
+  if (!event || !form) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
+
+  const F = (k) => (e) => setForm(p=>({...p,[k]:e.target.value}));
+  const updateTier = (i,k,v) => setForm(p=>({...p,tiers:p.tiers.map((t,j)=>j===i?{...t,[k]:v}:t)}));
+  const addTier = () => setForm(p=>({...p,tiers:[...p.tiers,{name:"",price:"",total:"",sold:0}]}));
+  const removeTier = (i) => setForm(p=>({...p,tiers:p.tiers.filter((_,j)=>j!==i)}));
+  const valid = form.title && form.date && form.venue && form.tiers.every(t=>t.name&&t.price&&t.total);
+
+  const handle = async () => {
+    setSaving(true);
+    const ok = await updateEvent(eventId, form);
+    if (ok) navigate("/dashboard");
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ maxWidth:700, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      <button onClick={() => navigate("/dashboard")} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Dashboard</button>
+      <h1 style={{ fontSize:48, marginBottom:8 }}>EDIT EVENT</h1>
+      <p style={{ color:"var(--muted)", fontSize:13, marginBottom:32 }}>Changes will go live immediately after saving.</p>
+      <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+          <Input label="Event Title" value={form.title} onChange={F("title")} placeholder="e.g. Neon Festival 2025" />
+          <Input label="Subtitle / Artist" value={form.subtitle} onChange={F("subtitle")} placeholder="e.g. ft. Burna Boy" />
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 }}>
+          <Input label="Date" type="date" value={form.date} onChange={F("date")} />
+          <Input label="Time" type="time" value={form.time} onChange={F("time")} />
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>CATEGORY</label>
+            <select value={form.category} onChange={F("category")} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14 }}>
+              {["Concert","Festival","Sports","Comedy","Conference"].map(c=><option key={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+        <Input label="Venue" value={form.venue} onChange={F("venue")} placeholder="e.g. Eko Convention Centre, Lagos" />
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DESCRIPTION</label>
+          <textarea value={form.description} onChange={F("description")} rows={3} placeholder="Describe your event..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans" }} />
+        </div>
+        <div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>TICKET TIERS</label>
+            <button onClick={addTier} style={{ background:"none", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontSize:12 }}>+ Add Tier</button>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {form.tiers.map((tier,i) => (
+              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr auto", gap:10, background:"var(--bg3)", padding:16, borderRadius:10, border:"1px solid var(--border)" }}>
+                <Input label="Tier Name" value={tier.name} onChange={e=>updateTier(i,"name",e.target.value)} placeholder="e.g. VIP" />
+                <Input label="Price (₦)" type="number" value={tier.price} onChange={e=>updateTier(i,"price",e.target.value)} placeholder="15000" />
+                <Input label="Capacity" type="number" value={tier.total} onChange={e=>updateTier(i,"total",e.target.value)} placeholder="200" />
+                <div style={{ display:"flex", alignItems:"flex-end" }}>
+                  <button onClick={()=>removeTier(i)} disabled={form.tiers.length===1} style={{ width:38, height:38, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--red)", borderRadius:8, cursor:"pointer", fontSize:18 }}>×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <button onClick={handle} disabled={!valid||saving} style={{ width:"100%", padding:16, background: valid?"var(--gold)":"var(--bg3)", color: valid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: valid?"pointer":"not-allowed", opacity:saving?0.7:1 }}>
+          {saving ? "SAVING..." : "SAVE CHANGES"}
+        </button>
+      </div>
+    </div>
+  );
+}
 // ── Validate Page — snap photo → decode QR → confirm attendance ────────────
 function ValidatePage({ ctx }) {
   const { validateTicket } = ctx;
