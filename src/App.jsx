@@ -218,7 +218,53 @@ function useTheme() {
 }
 
 // ── Shared components ──────────────────────────────────────────────────────
-function Spinner() {
+// ── ShareButton — clipboard with WhatsApp fallback + visible URL modal ──────
+function ShareButton({ url, label = "Copy Link", onClick, small }) {
+  const [state, setState] = useState("idle"); // idle | copied | modal
+
+  const handle = async (e) => {
+    if (onClick) onClick(e);
+    // Try native share sheet first (mobile)
+    if (navigator.share) {
+      try { await navigator.share({ url }); return; } catch {}
+    }
+    // Try clipboard
+    try {
+      await navigator.clipboard.writeText(url);
+      setState("copied");
+      setTimeout(() => setState("idle"), 2000);
+    } catch {
+      // Clipboard blocked — show modal with URL so user can copy manually
+      setState("modal");
+    }
+  };
+
+  return (
+    <>
+      <button onClick={handle} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color: state==="copied"?"var(--green)":"var(--text)", padding: small?"6px 14px":"8px 14px", borderRadius:8, cursor:"pointer", fontSize: small?12:13, display:"flex", alignItems:"center", gap:6, transition:"color 0.2s" }}>
+        {state==="copied" ? "✅ Copied!" : `🔗 ${label}`}
+      </button>
+      {state==="modal" && (
+        <div onClick={() => setState("idle")} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, width:"100%", maxWidth:480, animation:"fadeUp 0.3s ease" }}>
+            <h3 style={{ fontFamily:"Bebas Neue", fontSize:24, marginBottom:8 }}>SHARE LINK</h3>
+            <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>Copy the link below or share directly to WhatsApp.</p>
+            <div style={{ display:"flex", gap:8, marginBottom:16 }}>
+              <input readOnly value={url} onClick={e => e.target.select()} style={{ flex:1, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 14px", color:"var(--text)", fontSize:13, fontFamily:"DM Mono", outline:"none" }} />
+              <button onClick={() => { try { navigator.clipboard.writeText(url); setState("copied"); } catch {} }} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"10px 16px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>Copy</button>
+            </div>
+            <a href={`https://wa.me/?text=${encodeURIComponent(url)}`} target="_blank" rel="noopener noreferrer" style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, background:"#25D366", color:"#fff", padding:"12px 20px", borderRadius:10, fontWeight:700, fontSize:14, marginBottom:12 }}>
+              <span style={{ fontSize:18 }}>📱</span> Share on WhatsApp
+            </a>
+            <button onClick={() => setState("idle")} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Close</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+
   return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"60vh" }}>
       <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
@@ -1032,7 +1078,7 @@ function EventPage({ ctx }) {
       {/* Top bar */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20, padding:"0 8px" }}>
         <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, padding:0 }}>← Back</button>
-        <button onClick={() => { navigator.clipboard.writeText(window.location.href); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>🔗 Copy Link</button>
+<ShareButton url={window.location.href} />
       </div>
 
       {/* Hero image */}
@@ -1261,10 +1307,7 @@ function MyTicketsPage({ ctx }) {
                 <div style={{ textAlign:"center" }}>
                   <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all", marginBottom:4 }}>{ticket.id}</div>
                   <div style={{ fontSize:12, color:"var(--muted)" }}>Scan QR code at entrance — or share your ticket link:</div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(`${window.location.origin}/ticket/${ticket.id}`); }}
-                    style={{ marginTop:8, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--text)", padding:"6px 14px", borderRadius:6, cursor:"pointer", fontSize:12 }}
-                  >🔗 Copy ticket link</button>
+                  <ShareButton url={`${window.location.origin}/ticket/${ticket.id}`} label="Copy ticket link" onClick={e => e.stopPropagation()} small />
                 </div>
               </div>
             )}
@@ -1279,7 +1322,7 @@ function MyTicketsPage({ ctx }) {
 function DashboardPage({ ctx }) {
   const { events, tickets, currentUser, deleteEvent } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
-  const myEvents = events.filter(e => e.organizer===currentUser.uid || e.organizer==="seed");
+  const myEvents = events.filter(e => e.organizer === currentUser.uid);
   const revenue = tickets.reduce((s,t) => s+t.price, 0);
   const totalSold = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.sold,0), 0);
   const totalCap = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.total,0), 0);
