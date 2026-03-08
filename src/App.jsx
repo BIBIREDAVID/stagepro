@@ -42,6 +42,47 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// ── Google Sheets logger (non-blocking) ────────────────────────────────────
+const logToSheets = async (payload) => {
+  try {
+    await fetch(import.meta.env.VITE_SHEETS_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.warn("Sheets log failed (non-critical):", err);
+  }
+};
+
+// ── CSV Download helper ────────────────────────────────────────────────────
+function downloadCSV(event, tickets) {
+  const eventTickets = tickets.filter(t => t.eventId === event.id);
+  if (eventTickets.length === 0) {
+    alert("No tickets sold for this event yet.");
+    return;
+  }
+  const headers = ["Ticket ID", "Event", "Tier", "Buyer Name", "Price (₦)", "Date Purchased", "Used"];
+  const rows = eventTickets.map(t => [
+    t.id,
+    t.eventTitle,
+    t.tierName,
+    t.userName,
+    t.price,
+    new Date(t.purchasedAt).toLocaleString("en-NG"),
+    t.used ? "Yes" : "No",
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${event.title.replace(/\s+/g, "_")}_tickets.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── QR Code ────────────────────────────────────────────────────────────────
 const QRCode = ({ value, size = 160 }) => (
   <img
@@ -182,7 +223,7 @@ function Nav({ currentUser, logout, notification }) {
   );
 }
 
-// ── Root App with Router ───────────────────────────────────────────────────
+// ── Root App ───────────────────────────────────────────────────────────────
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -196,7 +237,6 @@ export default function App() {
     setTimeout(() => setNotification(null), 3500);
   };
 
-  // Auth listener
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
@@ -210,7 +250,6 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Seed + load events
   useEffect(() => {
     const init = async () => {
       setEventsLoading(true);
@@ -228,12 +267,14 @@ export default function App() {
     init();
   }, []);
 
-  // Load tickets when user logs in
   useEffect(() => {
     if (!currentUser) { setTickets([]); return; }
     const load = async () => {
       try {
-        const q = query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
+        // Organizers load ALL tickets; customers load only their own
+        const q = currentUser.role === "organizer"
+          ? collection(db, "tickets")
+          : query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
         const snap = await getDocs(q);
         setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       } catch (err) { console.error(err); }
@@ -268,7 +309,6 @@ export default function App() {
     setCurrentUser(null);
   };
 
-  // ── Purchase tickets → Firestore + Google Sheets ───────────────────────
   const purchaseTickets = async (eventId, cartSelections) => {
     const event = events.find(e => e.id === eventId);
     const newTickets = [];
@@ -288,29 +328,23 @@ export default function App() {
           const newTicket = { id: ref.id, ...ticketData };
           newTickets.push(newTicket);
 
-          // ── Log to Google Sheets ───────────────────────────
-          await fetch(import.meta.env.VITE_SHEETS_URL, {
-            method: "POST",
-            body: JSON.stringify({
-              action: "purchase",
-              ticketId: ref.id,
-              eventTitle: event.title,
-              tierName: tier.name,
-              userName: currentUser.name,
-              email: currentUser.email,
-              price: tier.price,
-              purchasedAt: new Date().toLocaleString("en-NG"),
-            }),
+          // Log to Google Sheets (non-blocking)
+          logToSheets({
+            action: "purchase",
+            ticketId: ref.id,
+            eventTitle: event.title,
+            tierName: tier.name,
+            userName: currentUser.name,
+            email: currentUser.email,
+            price: tier.price,
+            purchasedAt: new Date().toLocaleString("en-NG"),
           });
-          // ──────────────────────────────────────────────────
         }
-
         const updatedTiers = event.tiers.map(t =>
           t.id === tier.id ? { ...t, sold: t.sold + qty } : t
         );
         await updateDoc(doc(db, "events", eventId), { tiers: updatedTiers });
       }
-
       setTickets(prev => [...prev, ...newTickets]);
       setEvents(prev => prev.map(e => e.id !== eventId ? e : {
         ...e,
@@ -325,7 +359,6 @@ export default function App() {
     }
   };
 
-  // ── Validate ticket → Firestore + Google Sheets ────────────────────────
   const validateTicket = async (id) => {
     try {
       const ref = doc(db, "tickets", id.trim());
@@ -333,20 +366,10 @@ export default function App() {
       if (!snap.exists()) return { ok: false, msg: "Ticket not found" };
       const ticket = { id: snap.id, ...snap.data() };
       if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
-
-      // Mark as used in Firestore
       await updateDoc(ref, { used: true });
-
-      // ── Mark as used in Google Sheets ──────────────────
-      await fetch(import.meta.env.VITE_SHEETS_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          action: "validate",
-          ticketId: id.trim(),
-        }),
-      });
-      // ───────────────────────────────────────────────────
-
+      // Update local tickets state too
+      setTickets(prev => prev.map(t => t.id === id.trim() ? { ...t, used: true } : t));
+      logToSheets({ action: "validate", ticketId: id.trim(), eventTitle: ticket.eventTitle });
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
     } catch {
       return { ok: false, msg: "Error checking ticket" };
@@ -422,13 +445,11 @@ function HomePage({ ctx }) {
           Discover concerts, festivals, and sporting events. Secure tickets with instant QR delivery.
         </p>
       </div>
-
       <div style={{ display:"flex", gap:8, marginBottom:40, flexWrap:"wrap" }}>
         {cats.map(c => (
           <button key={c} onClick={() => setFilter(c)} style={{ background: filter===c?"var(--gold)":"var(--bg3)", color: filter===c?"#000":"var(--muted)", border:`1px solid ${filter===c?"var(--gold)":"var(--border)"}`, padding:"8px 20px", borderRadius:100, cursor:"pointer", fontWeight:600, fontSize:13, transition:"all 0.2s" }}>{c}</button>
         ))}
       </div>
-
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
         {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} />)}
       </div>
@@ -543,7 +564,7 @@ function AuthPage({ mode, ctx }) {
   );
 }
 
-// ── Event Page (/event/:eventId) ───────────────────────────────────────────
+// ── Event Page ──────────────────────────────────────────────────────────────
 function EventPage({ ctx }) {
   const { eventId } = useParams();
   const { events, currentUser } = ctx;
@@ -591,7 +612,6 @@ function EventPage({ ctx }) {
           🔗 Copy Link
         </button>
       </div>
-
       <div style={{ display:"grid", gridTemplateColumns:"1fr 380px", gap:40, alignItems:"start" }}>
         <div>
           <div style={{ borderRadius:16, overflow:"hidden", marginBottom:32, position:"relative" }}>
@@ -616,7 +636,6 @@ function EventPage({ ctx }) {
             <p style={{ color:"rgba(232,224,208,0.7)", lineHeight:1.8 }}>{event.description}</p>
           </div>
         </div>
-
         <div style={{ position:"sticky", top:80 }}>
           <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28 }}>
             <h3 style={{ fontSize:22, marginBottom:24 }}>SELECT TICKETS</h3>
@@ -660,7 +679,7 @@ function EventPage({ ctx }) {
   );
 }
 
-// ── Checkout Page (/event/:eventId/checkout) ───────────────────────────────
+// ── Checkout Page ──────────────────────────────────────────────────────────
 function CheckoutPage({ ctx }) {
   const { eventId } = useParams();
   const { events, currentUser, purchaseTickets } = ctx;
@@ -718,13 +737,13 @@ function CheckoutPage({ ctx }) {
         <span style={{ fontSize:13, color:"var(--muted)" }}>I agree to the terms and conditions. All sales are final.</span>
       </div>
       <button disabled={!agreed||processing} onClick={handleConfirm} style={{ width:"100%", padding:16, background: agreed?"var(--gold)":"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}>
-        {processing?"SAVING TO FIREBASE...":`CONFIRM PURCHASE · ${fmt(total)}`}
+        {processing?"PROCESSING...":`CONFIRM PURCHASE · ${fmt(total)}`}
       </button>
     </div>
   );
 }
 
-// ── My Tickets Page (/tickets) ─────────────────────────────────────────────
+// ── My Tickets Page ────────────────────────────────────────────────────────
 function MyTicketsPage({ ctx }) {
   const { tickets } = ctx;
   const [selected, setSelected] = useState(null);
@@ -777,10 +796,10 @@ function MyTicketsPage({ ctx }) {
   );
 }
 
-// ── Dashboard Page (/dashboard) ────────────────────────────────────────────
+// ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
   const { events, tickets, currentUser } = ctx;
-  const myEvents = events.filter(e => e.organizer===currentUser.uid||e.organizer==="seed");
+  const myEvents = events.filter(e => e.organizer===currentUser.uid || e.organizer==="seed");
   const revenue = tickets.reduce((s,t) => s+t.price, 0);
   const totalSold = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.sold,0), 0);
   const totalCap = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.total,0), 0);
@@ -791,6 +810,8 @@ function DashboardPage({ ctx }) {
         <h1 style={{ fontSize:48 }}>DASHBOARD</h1>
         <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
       </div>
+
+      {/* Stats */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:40 }}>
         {[
           { label:"Total Revenue", value:fmt(revenue), icon:"💰" },
@@ -805,15 +826,23 @@ function DashboardPage({ ctx }) {
           </div>
         ))}
       </div>
+
+      {/* Events table */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
-        <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)" }}><h3 style={{ fontSize:22 }}>YOUR EVENTS</h3></div>
+        <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <h3 style={{ fontSize:22 }}>YOUR EVENTS</h3>
+          <span style={{ fontSize:12, color:"var(--muted)" }}>Click ⬇ CSV to download buyer list for any event</span>
+        </div>
         {myEvents.length===0 ? (
-          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
-        ) : myEvents.map((event,i) => {
+          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>
+            No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link>
+          </div>
+        ) : myEvents.map((event, i) => {
           const sold = event.tiers.reduce((s,t) => s+t.sold, 0);
           const cap = event.tiers.reduce((s,t) => s+t.total, 0);
           const rev = event.tiers.reduce((s,t) => s+t.sold*t.price, 0);
           const pct = Math.round((sold/cap)*100);
+          const eventTicketCount = tickets.filter(t => t.eventId === event.id).length;
           return (
             <div key={event.id} style={{ display:"flex", alignItems:"center", gap:20, padding:"20px 24px", borderBottom: i<myEvents.length-1?"1px solid var(--border)":"none", flexWrap:"wrap" }}>
               <img src={event.image} style={{ width:60, height:60, objectFit:"cover", borderRadius:8, flexShrink:0 }} alt="" />
@@ -831,9 +860,16 @@ function DashboardPage({ ctx }) {
                 <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(rev)}</div>
                 <div style={{ fontSize:12, color:"var(--muted)" }}>revenue</div>
               </div>
-              <div style={{ display:"flex", gap:8 }}>
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                 <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>View</Link>
                 <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
+                <button
+                  onClick={() => downloadCSV(event, tickets)}
+                  title={eventTicketCount === 0 ? "No tickets sold yet" : `Download ${eventTicketCount} ticket(s) as CSV`}
+                  style={{ background:"var(--gold)", border:"none", color:"#000", padding:"8px 14px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}
+                >
+                  ⬇ CSV {eventTicketCount > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTicketCount}</span>}
+                </button>
               </div>
             </div>
           );
@@ -843,7 +879,7 @@ function DashboardPage({ ctx }) {
   );
 }
 
-// ── Create Event Page (/dashboard/create) ──────────────────────────────────
+// ── Create Event Page ──────────────────────────────────────────────────────
 function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
@@ -912,7 +948,7 @@ function CreateEventPage({ ctx }) {
   );
 }
 
-// ── Validate Page (/validate) ──────────────────────────────────────────────
+// ── Validate Page ──────────────────────────────────────────────────────────
 function ValidatePage({ ctx }) {
   const { validateTicket } = ctx;
   const [input, setInput] = useState("");
