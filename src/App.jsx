@@ -1128,6 +1128,9 @@ function ValidatePage({ ctx }) {
 
   const startScanner = async () => {
     setCamState("loading"); setCamError(""); setResult(null);
+    // Wait one tick for React to render the #html5qr-region div into the DOM
+    await new Promise(r => setTimeout(r, 80));
+    if (!mountedRef.current) return;
     try {
       await loadLib();
       if (!mountedRef.current) return;
@@ -1143,24 +1146,23 @@ function ValidatePage({ ctx }) {
 
       await scanner.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 220, height: 220 }, aspectRatio: 1.0 },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
         (decodedText) => {
-          // QR detected — extract ticket ID from URL or use raw
           const match = decodedText.match(/\/ticket\/([a-zA-Z0-9]+)/);
           const ticketId = match ? match[1] : decodedText.trim();
           stopScanner();
           handleValidate(ticketId);
         },
-        () => {} // ignore per-frame failures silently
+        () => {}
       );
 
       if (mountedRef.current) setCamState("scanning");
     } catch (err) {
-      const msg = String(err).includes("permission")
-        ? "Camera permission denied. Please allow access and try again."
-        : "Could not start camera. Try the manual entry tab.";
-      setCamError(msg);
-      setCamState("error");
+      console.error("Scanner error:", err);
+      const msg = String(err).toLowerCase().includes("permission")
+        ? "Camera permission denied. Please allow access in your browser settings and try again."
+        : "Could not start camera. Try the Manual Entry tab instead.";
+      if (mountedRef.current) { setCamError(msg); setCamState("error"); }
     }
   };
 
@@ -1210,61 +1212,50 @@ function ValidatePage({ ctx }) {
         ))}
       </div>
 
-      {/* ── Camera tab ── */}
-      {tab === "camera" && !result && !checking && (
-        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginBottom:24 }}>
+      {/* ── Camera tab — scanner div ALWAYS in DOM so html5-qrcode can mount ── */}
+      <div style={{ display: tab === "camera" && !result && !checking ? "block" : "none", marginBottom:24 }}>
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", position:"relative" }}>
 
-          {/* html5-qrcode mounts into this div — must always be in the DOM when camera tab is active */}
-          <div
-            id={SCANNER_ID}
-            style={{
-              width:"100%",
-              display: camState === "scanning" ? "block" : "none",
-              borderRadius:0,
-            }}
-          />
+          {/* The scanner library injects video directly into this element */}
+          <div id={SCANNER_ID} style={{ width:"100%", minHeight: camState === "scanning" ? 0 : undefined }} />
 
-          {/* Idle state */}
-          {camState === "idle" && (
-            <div style={{ textAlign:"center", padding:48 }}>
-              <div style={{ fontSize:52, marginBottom:16 }}>📷</div>
-              <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>Point your camera at an attendee's QR code</p>
-              <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"14px 32px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
-                START CAMERA
-              </button>
-            </div>
-          )}
-
-          {/* Loading state */}
-          {camState === "loading" && (
-            <div style={{ textAlign:"center", padding:48 }}>
-              <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
-              <p style={{ color:"var(--muted)", fontSize:14 }}>Starting camera...</p>
-            </div>
-          )}
-
-          {/* Scanning status bar */}
-          {camState === "scanning" && (
-            <div style={{ padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", borderTop:"1px solid var(--border)" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:8, color:"var(--green)", fontSize:13, fontWeight:600 }}>
-                <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--green)", animation:"pulse 1s infinite" }} />
-                SCANNING...
-              </div>
-              <button onClick={stopScanner} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Stop</button>
-            </div>
-          )}
-
-          {/* Error state */}
-          {camState === "error" && (
-            <div style={{ textAlign:"center", padding:36 }}>
-              <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
-              <p style={{ color:"var(--red)", fontSize:13, marginBottom:20 }}>{camError}</p>
-              <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700, marginRight:8 }}>Try Again</button>
-              <button onClick={() => setTab("manual")} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Use Manual</button>
+          {/* Overlay shown on top when NOT yet scanning */}
+          {camState !== "scanning" && (
+            <div style={{ position: camState === "idle" || camState === "loading" || camState === "error" ? "relative" : "absolute", inset:0, background:"var(--bg2)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:48, zIndex:2 }}>
+              {camState === "idle" && <>
+                <div style={{ fontSize:52, marginBottom:16 }}>📷</div>
+                <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24, textAlign:"center" }}>Point your camera at an attendee's QR code</p>
+                <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"14px 32px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+                  START CAMERA
+                </button>
+              </>}
+              {camState === "loading" && <>
+                <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", marginBottom:16 }} />
+                <p style={{ color:"var(--muted)", fontSize:14 }}>Starting camera...</p>
+              </>}
+              {camState === "error" && <>
+                <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
+                <p style={{ color:"var(--red)", fontSize:13, marginBottom:20, textAlign:"center" }}>{camError}</p>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Try Again</button>
+                  <button onClick={() => setTab("manual")} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Use Manual</button>
+                </div>
+              </>}
             </div>
           )}
         </div>
-      )}
+
+        {/* Status bar shown below the video when scanning */}
+        {camState === "scanning" && (
+          <div style={{ padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", background:"var(--bg2)", borderTop:"1px solid var(--border)", borderRadius:"0 0 16px 16px", marginTop:-1 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, color:"var(--green)", fontSize:13, fontWeight:600 }}>
+              <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--green)", animation:"pulse 1s infinite" }} />
+              SCANNING — HOLD QR CODE STEADY
+            </div>
+            <button onClick={stopScanner} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Stop</button>
+          </div>
+        )}
+      </div>
 
       {/* Checking spinner */}
       {checking && (
