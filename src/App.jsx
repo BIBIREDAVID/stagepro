@@ -138,13 +138,34 @@ const SEED_EVENTS = [
 const STYLE = `
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
   :root {
     --gold: #f5a623; --gold-dim: #c47d0e;
     --bg: #080808; --bg2: #111111; --bg3: #1a1a1a;
-    --border: #2a2a2a; --text: #e8e0d0; --muted: #666;
+    --border: #2a2a2a; --text: #e8e0d0; --muted: #777;
     --red: #e84040; --green: #3ddc84;
+    --nav-bg: rgba(8,8,8,0.92);
   }
-  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  [data-theme="light"] {
+    --gold: #d4880a; --gold-dim: #b56f08;
+    --bg: #f5f3ef; --bg2: #ffffff; --bg3: #eeebe5;
+    --border: #e0d9d0; --text: #1a1510; --muted: #8a8070;
+    --red: #d93030; --green: #1e9e55;
+    --nav-bg: rgba(245,243,239,0.92);
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --gold: #d4880a; --gold-dim: #b56f08;
+      --bg: #f5f3ef; --bg2: #ffffff; --bg3: #eeebe5;
+      --border: #e0d9d0; --text: #1a1510; --muted: #8a8070;
+      --red: #d93030; --green: #1e9e55;
+      --nav-bg: rgba(245,243,239,0.92);
+    }
+  }
+
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; transition: background 0.25s, color 0.25s; }
   h1, h2, h3 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.04em; }
   a { color: inherit; text-decoration: none; }
   ::-webkit-scrollbar { width: 4px; }
@@ -154,6 +175,43 @@ const STYLE = `
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
 `;
+
+// ── Theme hook ─────────────────────────────────────────────────────────────
+function useTheme() {
+  const getInitial = () => {
+    const saved = localStorage.getItem("stagepro-theme");
+    if (saved) return saved;
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  };
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem("stagepro-theme");
+    if (saved) return saved;
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("stagepro-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const handler = (e) => {
+      if (!localStorage.getItem("stagepro-theme-manual")) {
+        setTheme(e.matches ? "light" : "dark");
+      }
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  const toggle = () => {
+    localStorage.setItem("stagepro-theme-manual", "1");
+    setTheme(t => t === "dark" ? "light" : "dark");
+  };
+
+  return { theme, toggle };
+}
 
 // ── Shared components ──────────────────────────────────────────────────────
 function Spinner() {
@@ -182,12 +240,12 @@ function Input({ label, ...props }) {
 }
 
 // ── Nav ────────────────────────────────────────────────────────────────────
-function Nav({ currentUser, logout, notification }) {
+function Nav({ currentUser, logout, notification, theme, toggleTheme }) {
   return (
     <>
       <style>{STYLE}</style>
       {notification && <Notification {...notification} />}
-      <nav style={{ position:"sticky", top:0, zIndex:100, background:"rgba(8,8,8,0.92)", backdropFilter:"blur(12px)", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 32px", height:60 }}>
+      <nav style={{ position:"sticky", top:0, zIndex:100, background:"var(--nav-bg)", backdropFilter:"blur(12px)", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 32px", height:60 }}>
         <Link to="/" style={{ display:"flex", alignItems:"center", gap:4 }}>
           <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--gold)", letterSpacing:2 }}>STAGE</span>
           <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--text)", letterSpacing:2 }}>PRO</span>
@@ -215,6 +273,14 @@ function Nav({ currentUser, logout, notification }) {
               <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:6, fontWeight:600, fontSize:14 }}>Get Started</Link>
             </>
           )}
+          {/* Theme toggle */}
+          <button
+            onClick={toggleTheme}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, width:34, height:34, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:16, flexShrink:0 }}
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
         </div>
       </nav>
     </>
@@ -223,6 +289,7 @@ function Nav({ currentUser, logout, notification }) {
 
 // ── Root App ───────────────────────────────────────────────────────────────
 export default function App() {
+  const { theme, toggle: toggleTheme } = useTheme();
   const [currentUser, setCurrentUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [events, setEvents] = useState([]);
@@ -391,7 +458,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Nav currentUser={currentUser} logout={logout} notification={notification} />
+      <Nav currentUser={currentUser} logout={logout} notification={notification} theme={theme} toggleTheme={toggleTheme} />
       <main style={{ minHeight:"calc(100vh - 60px)" }}>
         <Routes>
           <Route path="/" element={<HomePage ctx={ctx} />} />
@@ -659,7 +726,10 @@ function AuthPage({ mode, ctx }) {
     setResetLoading(false);
   };
 
-  // ── Reset password modal ──────────────────────────────────────────────
+  // redirect logged-in users away (but only if not viewing reset screen)
+  if (currentUser && !showReset) return <Navigate to="/" />;
+
+  // ── Reset password screen ─────────────────────────────────────────────
   if (showReset) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"calc(100vh - 60px)", padding:24 }}>
       <div style={{ width:"100%", maxWidth:420, animation:"fadeUp 0.4s ease" }}>
@@ -713,7 +783,7 @@ function AuthPage({ mode, ctx }) {
             {loading?"PLEASE WAIT...":mode==="login"?"SIGN IN":"CREATE ACCOUNT"}
           </button>
           {mode === "login" && (
-            <button onClick={() => setShowReset(true)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:13, textAlign:"center" }}>
+            <button onClick={() => { setResetEmail(form.email); setShowReset(true); }} style={{ background:"none", border:"none", color:"var(--gold)", cursor:"pointer", fontSize:13, textAlign:"center", textDecoration:"underline" }}>
               Forgot your password?
             </button>
           )}
