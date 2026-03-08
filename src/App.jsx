@@ -1103,203 +1103,260 @@ function CreateEventPage({ ctx }) {
   );
 }
 
-// ── Validate Page (/validate) — html5-qrcode scanner + manual fallback ────
+// ── Validate Page — snap photo → decode QR → confirm attendance ────────────
 function ValidatePage({ ctx }) {
   const { validateTicket } = ctx;
-  const [tab, setTab] = useState("camera");
-  const [input, setInput] = useState("");
-  const [result, setResult] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [camState, setCamState] = useState("idle"); // idle | loading | scanning | error
-  const [camError, setCamError] = useState("");
-  const scannerRef = useRef(null);
-  const mountedRef = useRef(true);
-  const SCANNER_ID = "html5qr-region";
+  const [stage, setStage] = useState("idle"); // idle | decoding | preview | confirming | done | error | manual
+  const [scannedTicket, setScannedTicket] = useState(null); // ticket data from Firestore
+  const [scannedId, setScannedId] = useState("");
+  const [manualInput, setManualInput] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [confirmResult, setConfirmResult] = useState(null);
+  const fileInputRef = useRef(null);
 
-  // Load html5-qrcode from CDN
-  const loadLib = () => new Promise((resolve, reject) => {
-    if (window.Html5Qrcode) { resolve(); return; }
+  // Load jsQR from CDN (tiny, fast, no DOM mounting issues)
+  const loadJsQR = () => new Promise((resolve) => {
+    if (window.jsQR) { resolve(window.jsQR); return; }
     const s = document.createElement("script");
-    s.src = "https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js";
-    s.onload = resolve;
-    s.onerror = reject;
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
+    s.onload = () => resolve(window.jsQR);
     document.head.appendChild(s);
   });
 
-  const startScanner = async () => {
-    setCamState("loading"); setCamError(""); setResult(null);
-    // Wait one tick for React to render the #html5qr-region div into the DOM
-    await new Promise(r => setTimeout(r, 80));
-    if (!mountedRef.current) return;
+  // Decode QR from a photo File
+  const decodeQRFromFile = async (file) => {
+    const jsQR = await loadJsQR();
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        // Downscale large images for speed
+        const MAX = 1200;
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        // Try both normal and inverted
+        const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+        if (code?.data) resolve(code.data);
+        else reject(new Error("No QR code found in photo. Try again with better lighting."));
+      };
+      img.onerror = () => reject(new Error("Could not read image."));
+      img.src = url;
+    });
+  };
+
+  // When user snaps / picks a photo
+  const handlePhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ""; // reset so same photo can be retried
+    setStage("decoding"); setErrorMsg("");
     try {
-      await loadLib();
-      if (!mountedRef.current) return;
+      const raw = await decodeQRFromFile(file);
+      const match = raw.match(/\/ticket\/([a-zA-Z0-9]+)/);
+      const ticketId = match ? match[1] : raw.trim();
 
-      // Stop any previous instance
-      if (scannerRef.current) {
-        try { await scannerRef.current.stop(); } catch {}
-        scannerRef.current = null;
-      }
-
-      const scanner = new window.Html5Qrcode(SCANNER_ID);
-      scannerRef.current = scanner;
-
-      await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 220, height: 220 } },
-        (decodedText) => {
-          const match = decodedText.match(/\/ticket\/([a-zA-Z0-9]+)/);
-          const ticketId = match ? match[1] : decodedText.trim();
-          stopScanner();
-          handleValidate(ticketId);
-        },
-        () => {}
-      );
-
-      if (mountedRef.current) setCamState("scanning");
+      // Fetch ticket details from Firestore for preview
+      const snap = await getDoc(doc(db, "tickets", ticketId));
+      if (!snap.exists()) { setErrorMsg("Ticket not found in system."); setStage("error"); return; }
+      const ticket = { id: snap.id, ...snap.data() };
+      setScannedId(ticketId);
+      setScannedTicket(ticket);
+      setStage("preview");
     } catch (err) {
-      console.error("Scanner error:", err);
-      const msg = String(err).toLowerCase().includes("permission")
-        ? "Camera permission denied. Please allow access in your browser settings and try again."
-        : "Could not start camera. Try the Manual Entry tab instead.";
-      if (mountedRef.current) { setCamError(msg); setCamState("error"); }
+      setErrorMsg(err.message);
+      setStage("error");
     }
   };
 
-  const stopScanner = async () => {
-    if (scannerRef.current) {
-      try { await scannerRef.current.stop(); } catch {}
-      scannerRef.current = null;
-    }
-    if (mountedRef.current) setCamState("idle");
+  // Organizer confirms — actually marks ticket as used
+  const handleMarkAttended = async () => {
+    setStage("confirming");
+    const res = await validateTicket(scannedId);
+    setConfirmResult(res);
+    setStage("done");
   };
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (scannerRef.current) {
-        try { scannerRef.current.stop(); } catch {}
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (tab === "manual") stopScanner();
-  }, [tab]);
-
-  const handleValidate = async (id) => {
-    if (!id) return;
-    setChecking(true); setResult(null);
-    const res = await validateTicket(id);
-    if (mountedRef.current) { setResult(res); setChecking(false); }
+  // Manual ID lookup
+  const handleManual = async () => {
+    if (!manualInput.trim()) return;
+    setStage("decoding");
+    const snap = await getDoc(doc(db, "tickets", manualInput.trim()));
+    if (!snap.exists()) { setErrorMsg("Ticket not found."); setStage("error"); return; }
+    setScannedId(manualInput.trim());
+    setScannedTicket({ id: snap.id, ...snap.data() });
+    setStage("preview");
   };
 
   const reset = () => {
-    setResult(null); setInput("");
-    if (tab === "camera") startScanner();
+    setStage("idle"); setScannedTicket(null); setScannedId("");
+    setErrorMsg(""); setConfirmResult(null); setManualInput("");
   };
 
   return (
-    <div style={{ maxWidth:560, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+    <div style={{ maxWidth:500, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      {/* Hidden file input — capture="environment" opens rear camera on mobile */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display:"none" }}
+        onChange={handlePhoto}
+      />
+
       <h1 style={{ fontSize:48, marginBottom:8 }}>SCAN & VALIDATE</h1>
-      <p style={{ color:"var(--muted)", marginBottom:24 }}>Use the camera to scan QR codes, or enter a ticket ID manually.</p>
+      <p style={{ color:"var(--muted)", marginBottom:32 }}>Snap the attendee's QR code or enter their ticket ID.</p>
 
-      {/* Tab toggle */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:24 }}>
-        {[["camera","📷 Camera Scan"],["manual","⌨️ Manual Entry"]].map(([t,label]) => (
-          <button key={t} onClick={() => setTab(t)} style={{ padding:"10px 0", background: tab===t?"var(--gold)":"var(--bg3)", color: tab===t?"#000":"var(--muted)", border:`1px solid ${tab===t?"var(--gold)":"var(--border)"}`, borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13 }}>{label}</button>
-        ))}
-      </div>
+      {/* ── IDLE — main action screen ── */}
+      {stage === "idle" && (
+        <>
+          {/* Primary: snap photo */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:16, padding:"28px 24px", cursor:"pointer", marginBottom:16, display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}
+          >
+            <span style={{ fontSize:52 }}>📷</span>
+            <span style={{ fontFamily:"Bebas Neue", fontSize:28, letterSpacing:2 }}>SNAP QR CODE</span>
+            <span style={{ fontSize:13, fontWeight:500, opacity:0.75 }}>Opens your camera — take a photo of the ticket</span>
+          </button>
 
-      {/* ── Camera tab — scanner div ALWAYS in DOM so html5-qrcode can mount ── */}
-      <div style={{ display: tab === "camera" && !result && !checking ? "block" : "none", marginBottom:24 }}>
-        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", position:"relative" }}>
+          {/* Secondary: manual entry */}
+          <button
+            onClick={() => setStage("manual")}
+            style={{ width:"100%", background:"var(--bg2)", color:"var(--muted)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 24px", cursor:"pointer", fontWeight:600, fontSize:14 }}
+          >
+            ⌨️ Enter Ticket ID manually
+          </button>
+        </>
+      )}
 
-          {/* The scanner library injects video directly into this element */}
-          <div id={SCANNER_ID} style={{ width:"100%", minHeight: camState === "scanning" ? 0 : undefined }} />
-
-          {/* Overlay shown on top when NOT yet scanning */}
-          {camState !== "scanning" && (
-            <div style={{ position: camState === "idle" || camState === "loading" || camState === "error" ? "relative" : "absolute", inset:0, background:"var(--bg2)", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:48, zIndex:2 }}>
-              {camState === "idle" && <>
-                <div style={{ fontSize:52, marginBottom:16 }}>📷</div>
-                <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24, textAlign:"center" }}>Point your camera at an attendee's QR code</p>
-                <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"14px 32px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
-                  START CAMERA
-                </button>
-              </>}
-              {camState === "loading" && <>
-                <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", marginBottom:16 }} />
-                <p style={{ color:"var(--muted)", fontSize:14 }}>Starting camera...</p>
-              </>}
-              {camState === "error" && <>
-                <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
-                <p style={{ color:"var(--red)", fontSize:13, marginBottom:20, textAlign:"center" }}>{camError}</p>
-                <div style={{ display:"flex", gap:8 }}>
-                  <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Try Again</button>
-                  <button onClick={() => setTab("manual")} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Use Manual</button>
-                </div>
-              </>}
-            </div>
-          )}
-        </div>
-
-        {/* Status bar shown below the video when scanning */}
-        {camState === "scanning" && (
-          <div style={{ padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", background:"var(--bg2)", borderTop:"1px solid var(--border)", borderRadius:"0 0 16px 16px", marginTop:-1 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8, color:"var(--green)", fontSize:13, fontWeight:600 }}>
-              <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--green)", animation:"pulse 1s infinite" }} />
-              SCANNING — HOLD QR CODE STEADY
-            </div>
-            <button onClick={stopScanner} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Stop</button>
-          </div>
-        )}
-      </div>
-
-      {/* Checking spinner */}
-      {checking && (
-        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:40, textAlign:"center", marginBottom:24 }}>
-          <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
-          <p style={{ color:"var(--muted)", fontSize:14 }}>Checking ticket in Firebase...</p>
+      {/* ── MANUAL entry ── */}
+      {stage === "manual" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28 }}>
+          <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID</label>
+          <input
+            value={manualInput} onChange={e => setManualInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleManual()}
+            placeholder="Paste ticket ID here..."
+            autoFocus
+            style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }}
+          />
+          <button onClick={handleManual} disabled={!manualInput.trim()} style={{ width:"100%", background: manualInput?"var(--gold)":"var(--bg3)", color: manualInput?"#000":"var(--muted)", border:"none", padding:14, borderRadius:10, cursor: manualInput?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2, marginBottom:10 }}>
+            LOOK UP TICKET
+          </button>
+          <button onClick={reset} style={{ width:"100%", background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:13 }}>← Back</button>
         </div>
       )}
 
-      {/* ── Manual tab ── */}
-      {tab === "manual" && !result && !checking && (
-        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, marginBottom:24 }}>
-          <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID</label>
-          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleValidate(input)} placeholder="e.g. aB3dEfGhIjKl..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }} />
-          <button onClick={() => handleValidate(input)} disabled={!input} style={{ width:"100%", background: input?"var(--gold)":"var(--bg3)", color: input?"#000":"var(--muted)", border:"none", padding:14, borderRadius:10, cursor: input?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
-            VALIDATE TICKET
+      {/* ── DECODING spinner ── */}
+      {stage === "decoding" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:48, textAlign:"center" }}>
+          <div style={{ width:44, height:44, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
+          <p style={{ color:"var(--muted)", fontSize:14 }}>Reading QR code...</p>
+        </div>
+      )}
+
+      {/* ── PREVIEW — show ticket info, ask to confirm ── */}
+      {stage === "preview" && scannedTicket && (
+        <div style={{ animation:"fadeUp 0.3s ease" }}>
+          {/* Already used warning */}
+          {scannedTicket.used && (
+            <div style={{ background:"rgba(232,64,64,0.12)", border:"2px solid var(--red)", borderRadius:12, padding:"14px 20px", marginBottom:16, display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:24 }}>⚠️</span>
+              <div>
+                <div style={{ fontFamily:"Bebas Neue", fontSize:20, color:"var(--red)" }}>ALREADY USED</div>
+                <div style={{ fontSize:12, color:"var(--muted)" }}>This ticket was already scanned at entry</div>
+              </div>
+            </div>
+          )}
+
+          {/* Ticket card */}
+          <div style={{ background:"var(--bg2)", border:`1px solid ${scannedTicket.used ? "var(--border)" : "var(--gold-dim)"}`, borderRadius:16, overflow:"hidden", marginBottom:16 }}>
+            <div style={{ background: scannedTicket.used ? "var(--bg3)" : "rgba(245,166,35,0.08)", padding:"16px 24px", borderBottom:"1px solid var(--border)" }}>
+              <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:4 }}>TICKET DETAILS</div>
+              <div style={{ fontFamily:"Bebas Neue", fontSize:30 }}>{scannedTicket.eventTitle}</div>
+            </div>
+            <div style={{ padding:"20px 24px", display:"grid", gap:12 }}>
+              {[
+                ["👤 Attendee", scannedTicket.userName],
+                ["🎫 Tier", scannedTicket.tierName],
+                ["📅 Date", fmtDate(scannedTicket.eventDate)],
+                ["📍 Venue", scannedTicket.venue],
+                ["💰 Paid", fmt(scannedTicket.price)],
+                ["Status", scannedTicket.used ? "⛔ Already Used" : "✅ Valid"],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display:"flex", justifyContent:"space-between", fontSize:14 }}>
+                  <span style={{ color:"var(--muted)" }}>{k}</span>
+                  <span style={{ fontWeight:600, textAlign:"right", maxWidth:"55%" }}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          {!scannedTicket.used ? (
+            <button
+              onClick={handleMarkAttended}
+              style={{ width:"100%", background:"var(--green)", color:"#000", border:"none", borderRadius:12, padding:"18px 24px", cursor:"pointer", fontFamily:"Bebas Neue", fontSize:26, letterSpacing:2, marginBottom:10 }}
+            >
+              ✓ MARK AS ATTENDED
+            </button>
+          ) : (
+            <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:12, padding:"16px 24px", textAlign:"center", marginBottom:10 }}>
+              <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--red)" }}>⛔ DO NOT ALLOW ENTRY</div>
+              <div style={{ fontSize:13, color:"var(--muted)", marginTop:4 }}>Ticket already redeemed</div>
+            </div>
+          )}
+          <button onClick={reset} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:"12px 24px", cursor:"pointer", fontWeight:600, fontSize:14 }}>
+            📷 Scan Another Ticket
           </button>
         </div>
       )}
 
-      {/* Result */}
-      {result && !checking && (
-        <div style={{ background: result.ok?"rgba(61,220,132,0.08)":"rgba(232,64,64,0.08)", border:`2px solid ${result.ok?"var(--green)":"var(--red)"}`, borderRadius:16, padding:28, animation:"fadeUp 0.3s ease", marginBottom:24 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16 }}>
-            <span style={{ fontSize:40 }}>{result.ok?"✅":"❌"}</span>
-            <div>
-              <div style={{ fontFamily:"Bebas Neue", fontSize:32, color: result.ok?"var(--green)":"var(--red)" }}>
-                {result.ok ? "VALID — GRANT ENTRY" : "INVALID"}
-              </div>
-              <div style={{ color:"var(--muted)", fontSize:13 }}>{result.msg}</div>
+      {/* ── CONFIRMING spinner ── */}
+      {stage === "confirming" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:48, textAlign:"center" }}>
+          <div style={{ width:44, height:44, border:"3px solid var(--border)", borderTop:"3px solid var(--green)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
+          <p style={{ color:"var(--muted)", fontSize:14 }}>Marking attendance...</p>
+        </div>
+      )}
+
+      {/* ── DONE — final result ── */}
+      {stage === "done" && confirmResult && (
+        <div style={{ animation:"fadeUp 0.3s ease" }}>
+          <div style={{ background: confirmResult.ok ? "rgba(61,220,132,0.1)" : "rgba(232,64,64,0.1)", border:`2px solid ${confirmResult.ok ? "var(--green)" : "var(--red)"}`, borderRadius:16, padding:32, textAlign:"center", marginBottom:16 }}>
+            <div style={{ fontSize:64, marginBottom:12 }}>{confirmResult.ok ? "✅" : "❌"}</div>
+            <div style={{ fontFamily:"Bebas Neue", fontSize:36, color: confirmResult.ok ? "var(--green)" : "var(--red)", marginBottom:8 }}>
+              {confirmResult.ok ? "ENTRY GRANTED" : "ENTRY DENIED"}
             </div>
+            {confirmResult.ticket && (
+              <div style={{ fontSize:15, color:"var(--text)", marginBottom:4 }}>{confirmResult.ticket.userName}</div>
+            )}
+            <div style={{ fontSize:13, color:"var(--muted)" }}>{confirmResult.msg}</div>
           </div>
-          {result.ticket && (
-            <div style={{ display:"grid", gap:10, background:"var(--bg3)", borderRadius:10, padding:16, marginBottom:20 }}>
-              {[["Event",result.ticket.eventTitle],["Tier",result.ticket.tierName],["Attendee",result.ticket.userName],["Date",fmtDate(result.ticket.eventDate)]].map(([k,v]) => (
-                <div key={k} style={{ display:"flex", justifyContent:"space-between", fontSize:13 }}>
-                  <span style={{ color:"var(--muted)" }}>{k}</span>
-                  <span style={{ fontWeight:600 }}>{v}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <button onClick={reset} style={{ width:"100%", background:"var(--gold)", border:"none", color:"#000", padding:12, borderRadius:8, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2 }}>
-            {tab === "camera" ? "📷 SCAN NEXT TICKET" : "VALIDATE ANOTHER"}
+          <button onClick={reset} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, padding:"16px 24px", cursor:"pointer", fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2 }}>
+            📷 SCAN NEXT TICKET
+          </button>
+        </div>
+      )}
+
+      {/* ── ERROR ── */}
+      {stage === "error" && (
+        <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:16, padding:32, textAlign:"center", animation:"fadeUp 0.3s ease" }}>
+          <div style={{ fontSize:48, marginBottom:12 }}>❌</div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--red)", marginBottom:8 }}>SCAN FAILED</div>
+          <p style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{errorMsg}</p>
+          <button onClick={() => fileInputRef.current?.click()} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, marginBottom:10, width:"100%" }}>
+            📷 TRY AGAIN
+          </button>
+          <button onClick={reset} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>
+            ← Back
           </button>
         </div>
       )}
