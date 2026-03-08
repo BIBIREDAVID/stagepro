@@ -56,20 +56,13 @@ const logToSheets = async (payload) => {
   }
 };
 
-// ── CSV Download helper ────────────────────────────────────────────────────
+// ── CSV Download ───────────────────────────────────────────────────────────
 function downloadCSV(event, tickets) {
   const eventTickets = tickets.filter(t => t.eventId === event.id);
-  if (eventTickets.length === 0) {
-    alert("No tickets sold for this event yet.");
-    return;
-  }
+  if (eventTickets.length === 0) { alert("No tickets sold for this event yet."); return; }
   const headers = ["Ticket ID", "Event", "Tier", "Buyer Name", "Price (₦)", "Date Purchased", "Used"];
   const rows = eventTickets.map(t => [
-    t.id,
-    t.eventTitle,
-    t.tierName,
-    t.userName,
-    t.price,
+    t.id, t.eventTitle, t.tierName, t.userName, t.price,
     new Date(t.purchasedAt).toLocaleString("en-NG"),
     t.used ? "Yes" : "No",
   ]);
@@ -83,13 +76,16 @@ function downloadCSV(event, tickets) {
   URL.revokeObjectURL(url);
 }
 
-// ── QR Code ────────────────────────────────────────────────────────────────
-const QRCode = ({ value, size = 160 }) => (
-  <img
-    src={`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(value)}&bgcolor=0a0a0a&color=f5a623&format=svg`}
-    alt="QR Code" width={size} height={size} style={{ borderRadius: 8 }}
-  />
-);
+// ── QR Code — now encodes a full URL ──────────────────────────────────────
+const QRCode = ({ ticketId, size = 160 }) => {
+  const url = `${window.location.origin}/ticket/${ticketId}`;
+  return (
+    <img
+      src={`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&bgcolor=0a0a0a&color=f5a623&format=svg`}
+      alt="QR Code" width={size} height={size} style={{ borderRadius: 8 }}
+    />
+  );
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => `₦${Number(n).toLocaleString()}`;
@@ -155,6 +151,7 @@ const STYLE = `
   ::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 2px; }
   @keyframes fadeUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
 `;
 
 // ── Shared components ──────────────────────────────────────────────────────
@@ -271,7 +268,6 @@ export default function App() {
     if (!currentUser) { setTickets([]); return; }
     const load = async () => {
       try {
-        // Organizers load ALL tickets; customers load only their own
         const q = currentUser.role === "organizer"
           ? collection(db, "tickets")
           : query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
@@ -304,10 +300,7 @@ export default function App() {
     } catch (err) { console.error(err); return { ok: false }; }
   };
 
-  const logout = async () => {
-    await signOut(auth);
-    setCurrentUser(null);
-  };
+  const logout = async () => { await signOut(auth); setCurrentUser(null); };
 
   const purchaseTickets = async (eventId, cartSelections) => {
     const event = events.find(e => e.id === eventId);
@@ -327,17 +320,11 @@ export default function App() {
           const ref = await addDoc(collection(db, "tickets"), ticketData);
           const newTicket = { id: ref.id, ...ticketData };
           newTickets.push(newTicket);
-
-          // Log to Google Sheets (non-blocking)
           logToSheets({
-            action: "purchase",
-            ticketId: ref.id,
-            eventTitle: event.title,
-            tierName: tier.name,
-            userName: currentUser.name,
-            email: currentUser.email,
-            price: tier.price,
-            purchasedAt: new Date().toLocaleString("en-NG"),
+            action: "purchase", ticketId: ref.id,
+            eventTitle: event.title, tierName: tier.name,
+            userName: currentUser.name, email: currentUser.email,
+            price: tier.price, purchasedAt: new Date().toLocaleString("en-NG"),
           });
         }
         const updatedTiers = event.tiers.map(t =>
@@ -347,8 +334,7 @@ export default function App() {
       }
       setTickets(prev => [...prev, ...newTickets]);
       setEvents(prev => prev.map(e => e.id !== eventId ? e : {
-        ...e,
-        tiers: e.tiers.map(t => ({ ...t, sold: t.sold + (cartSelections[t.id] || 0) })),
+        ...e, tiers: e.tiers.map(t => ({ ...t, sold: t.sold + (cartSelections[t.id] || 0) })),
       }));
       notify(`${newTickets.length} ticket(s) purchased!`);
       return true;
@@ -359,6 +345,7 @@ export default function App() {
     }
   };
 
+  // ── Core validate logic — reused by both ValidatePage and TicketPage ────
   const validateTicket = async (id) => {
     try {
       const ref = doc(db, "tickets", id.trim());
@@ -367,7 +354,6 @@ export default function App() {
       const ticket = { id: snap.id, ...snap.data() };
       if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
       await updateDoc(ref, { used: true });
-      // Update local tickets state too
       setTickets(prev => prev.map(t => t.id === id.trim() ? { ...t, used: true } : t));
       logToSheets({ action: "validate", ticketId: id.trim(), eventTitle: ticket.eventTitle });
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
@@ -413,6 +399,7 @@ export default function App() {
           <Route path="/event/:eventId" element={<EventPage ctx={ctx} />} />
           <Route path="/event/:eventId/checkout" element={<CheckoutPage ctx={ctx} />} />
           <Route path="/tickets" element={currentUser ? <MyTicketsPage ctx={ctx} /> : <Navigate to="/login" />} />
+          <Route path="/ticket/:ticketId" element={<TicketPage ctx={ctx} />} />
           <Route path="/dashboard" element={currentUser?.role === "organizer" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
@@ -420,6 +407,138 @@ export default function App() {
         </Routes>
       </main>
     </BrowserRouter>
+  );
+}
+
+// ── Ticket Page (/ticket/:ticketId) — public, QR scan destination ──────────
+function TicketPage({ ctx }) {
+  const { ticketId } = useParams();
+  const { currentUser, validateTicket } = ctx;
+  const [ticket, setTicket] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [validating, setValidating] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const snap = await getDoc(doc(db, "tickets", ticketId));
+        if (snap.exists()) setTicket({ id: snap.id, ...snap.data() });
+      } catch (err) { console.error(err); }
+      setLoading(false);
+    };
+    load();
+  }, [ticketId]);
+
+  const handleValidate = async () => {
+    setValidating(true);
+    const res = await validateTicket(ticketId);
+    setResult(res);
+    if (res.ok) setTicket(prev => ({ ...prev, used: true }));
+    setValidating(false);
+  };
+
+  if (loading) return <Spinner />;
+
+  if (!ticket) return (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh", gap:16, padding:24, textAlign:"center" }}>
+      <div style={{ fontSize:64 }}>❌</div>
+      <h2 style={{ fontFamily:"Bebas Neue", fontSize:40, color:"var(--red)" }}>TICKET NOT FOUND</h2>
+      <p style={{ color:"var(--muted)" }}>This ticket ID does not exist in our system.</p>
+    </div>
+  );
+
+  const isOrganizer = currentUser?.role === "organizer";
+  const alreadyUsed = result ? result.ticket?.used : ticket.used;
+
+  return (
+    <div style={{ maxWidth:480, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+
+      {/* Status banner */}
+      <div style={{
+        borderRadius:16, padding:"20px 24px", marginBottom:24, textAlign:"center",
+        background: alreadyUsed ? "rgba(232,64,64,0.1)" : "rgba(61,220,132,0.1)",
+        border: `2px solid ${alreadyUsed ? "var(--red)" : "var(--green)"}`,
+      }}>
+        <div style={{ fontSize:48, marginBottom:8 }}>{alreadyUsed ? "❌" : "✅"}</div>
+        <div style={{ fontFamily:"Bebas Neue", fontSize:36, color: alreadyUsed ? "var(--red)" : "var(--green)" }}>
+          {alreadyUsed ? "TICKET USED" : "VALID TICKET"}
+        </div>
+        <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>
+          {alreadyUsed ? "This ticket has already been scanned at entry" : "This ticket is valid for entry"}
+        </div>
+      </div>
+
+      {/* Ticket details */}
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginBottom:20 }}>
+        <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)" }}>
+          <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:6 }}>EVENT</div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:32, lineHeight:1, marginBottom:4 }}>{ticket.eventTitle}</div>
+        </div>
+        <div style={{ padding:"20px 24px", display:"grid", gap:16 }}>
+          {[
+            ["🎫 Tier", ticket.tierName],
+            ["📅 Date", fmtDate(ticket.eventDate)],
+            ["🕐 Time", ticket.eventTime],
+            ["📍 Venue", ticket.venue],
+            ["👤 Holder", ticket.userName],
+            ["💰 Price", fmt(ticket.price)],
+          ].map(([label, value]) => (
+            <div key={label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:14 }}>
+              <span style={{ color:"var(--muted)" }}>{label}</span>
+              <span style={{ fontWeight:600, textAlign:"right", maxWidth:"60%" }}>{value}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding:"16px 24px", borderTop:"1px solid var(--border)", background:"var(--bg3)" }}>
+          <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:4 }}>TICKET ID</div>
+          <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all" }}>{ticket.id}</div>
+        </div>
+      </div>
+
+      {/* Organizer: validate button */}
+      {isOrganizer && !alreadyUsed && !result && (
+        <button
+          onClick={handleValidate}
+          disabled={validating}
+          style={{ width:"100%", padding:18, background:"var(--green)", color:"#000", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:24, letterSpacing:2, cursor: validating?"not-allowed":"pointer", opacity: validating?0.7:1, marginBottom:12 }}
+        >
+          {validating ? "VALIDATING..." : "✓ MARK AS USED — GRANT ENTRY"}
+        </button>
+      )}
+
+      {/* Result after organizer validates */}
+      {result && (
+        <div style={{ background: result.ok?"rgba(61,220,132,0.1)":"rgba(232,64,64,0.1)", border:`1px solid ${result.ok?"var(--green)":"var(--red)"}`, borderRadius:12, padding:20, textAlign:"center", animation:"fadeUp 0.3s ease", marginBottom:12 }}>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:28, color: result.ok?"var(--green)":"var(--red)" }}>
+            {result.ok ? "✅ ENTRY GRANTED" : "❌ " + result.msg}
+          </div>
+        </div>
+      )}
+
+      {/* Organizer: already used notice */}
+      {isOrganizer && alreadyUsed && (
+        <div style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", borderRadius:12, padding:20, textAlign:"center", marginBottom:12 }}>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--red)" }}>⛔ DO NOT ALLOW ENTRY</div>
+          <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>This ticket was already used for entry</div>
+        </div>
+      )}
+
+      {/* Non-organizer: sign-in prompt */}
+      {!currentUser && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20, textAlign:"center", marginTop:8 }}>
+          <p style={{ color:"var(--muted)", fontSize:13, marginBottom:12 }}>Are you an event organizer?</p>
+          <Link to={`/login`} style={{ background:"var(--gold)", color:"#000", padding:"10px 24px", borderRadius:8, fontWeight:700, fontSize:14 }}>Sign in to validate</Link>
+        </div>
+      )}
+
+      {/* Customer: not their ticket notice */}
+      {currentUser?.role === "customer" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20, textAlign:"center", marginTop:8 }}>
+          <p style={{ color:"var(--muted)", fontSize:13 }}>Present this page at the event entrance for scanning.</p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -462,7 +581,6 @@ function EventCard({ event, index }) {
   const totalSold = event.tiers.reduce((s,t) => s+t.sold, 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
-
   return (
     <Link to={`/event/${event.id}`} style={{ display:"block", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", transition:"transform 0.3s, border-color 0.3s", animation:`fadeUp 0.5s ${index*0.1}s ease both` }}
       onMouseEnter={e => { e.currentTarget.style.transform="translateY(-4px)"; e.currentTarget.style.borderColor="var(--gold-dim)"; }}
@@ -507,7 +625,6 @@ function AuthPage({ mode, ctx }) {
   const [loading, setLoading] = useState(false);
 
   if (currentUser) return <Navigate to="/" />;
-
   const F = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
 
   const submit = async () => {
@@ -608,9 +725,7 @@ function EventPage({ ctx }) {
     <div style={{ maxWidth:1100, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
         <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14 }}>← Back</button>
-        <button onClick={() => { navigator.clipboard.writeText(window.location.href); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>
-          🔗 Copy Link
-        </button>
+        <button onClick={() => { navigator.clipboard.writeText(window.location.href); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>🔗 Copy Link</button>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 380px", gap:40, alignItems:"start" }}>
         <div>
@@ -699,10 +814,7 @@ function CheckoutPage({ ctx }) {
   const handleConfirm = async () => {
     setProcessing(true);
     const ok = await purchaseTickets(eventId, cart);
-    if (ok) {
-      sessionStorage.removeItem("cart");
-      navigate("/tickets");
-    }
+    if (ok) { sessionStorage.removeItem("cart"); navigate("/tickets"); }
     setProcessing(false);
   };
 
@@ -759,7 +871,8 @@ function MyTicketsPage({ ctx }) {
 
   return (
     <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 24px" }}>
-      <h1 style={{ fontSize:48, marginBottom:32 }}>MY TICKETS</h1>
+      <h1 style={{ fontSize:48, marginBottom:8 }}>MY TICKETS</h1>
+      <p style={{ color:"var(--muted)", fontSize:13, marginBottom:32 }}>Click a ticket to reveal its QR code. Scan at the entrance for entry.</p>
       <div style={{ display:"grid", gap:16 }}>
         {tickets.map(ticket => (
           <div key={ticket.id} onClick={() => setSelected(selected?.id===ticket.id?null:ticket)} style={{ background:"var(--bg2)", border:`1px solid ${ticket.used?"var(--border)":"var(--gold-dim)"}`, borderRadius:16, padding:24, cursor:"pointer", opacity: ticket.used?0.6:1, transition:"all 0.2s" }}>
@@ -779,13 +892,17 @@ function MyTicketsPage({ ctx }) {
               </div>
             </div>
             {selected?.id===ticket.id && (
-              <div style={{ marginTop:24, paddingTop:24, borderTop:"1px solid var(--border)", display:"flex", justifyContent:"center", animation:"fadeUp 0.3s ease" }}>
+              <div style={{ marginTop:24, paddingTop:24, borderTop:"1px solid var(--border)", display:"flex", flexDirection:"column", alignItems:"center", gap:16, animation:"fadeUp 0.3s ease" }}>
+                <div style={{ padding:16, background:"var(--bg3)", borderRadius:12, display:"inline-block" }}>
+                  <QRCode ticketId={ticket.id} size={200} />
+                </div>
                 <div style={{ textAlign:"center" }}>
-                  <div style={{ marginBottom:12, padding:16, background:"var(--bg3)", borderRadius:12, display:"inline-block" }}>
-                    <QRCode value={ticket.id} size={180} />
-                  </div>
-                  <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all" }}>{ticket.id}</div>
-                  <div style={{ fontSize:12, color:"var(--muted)", marginTop:4 }}>Present this QR code at the entrance</div>
+                  <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all", marginBottom:4 }}>{ticket.id}</div>
+                  <div style={{ fontSize:12, color:"var(--muted)" }}>Scan QR code at entrance — or share your ticket link:</div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(`${window.location.origin}/ticket/${ticket.id}`); }}
+                    style={{ marginTop:8, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--text)", padding:"6px 14px", borderRadius:6, cursor:"pointer", fontSize:12 }}
+                  >🔗 Copy ticket link</button>
                 </div>
               </div>
             )}
@@ -810,8 +927,6 @@ function DashboardPage({ ctx }) {
         <h1 style={{ fontSize:48 }}>DASHBOARD</h1>
         <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
       </div>
-
-      {/* Stats */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:40 }}>
         {[
           { label:"Total Revenue", value:fmt(revenue), icon:"💰" },
@@ -826,17 +941,13 @@ function DashboardPage({ ctx }) {
           </div>
         ))}
       </div>
-
-      {/* Events table */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
         <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
           <h3 style={{ fontSize:22 }}>YOUR EVENTS</h3>
-          <span style={{ fontSize:12, color:"var(--muted)" }}>Click ⬇ CSV to download buyer list for any event</span>
+          <span style={{ fontSize:12, color:"var(--muted)" }}>⬇ CSV downloads buyer list</span>
         </div>
         {myEvents.length===0 ? (
-          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>
-            No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link>
-          </div>
+          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
         ) : myEvents.map((event, i) => {
           const sold = event.tiers.reduce((s,t) => s+t.sold, 0);
           const cap = event.tiers.reduce((s,t) => s+t.total, 0);
@@ -863,11 +974,7 @@ function DashboardPage({ ctx }) {
               <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                 <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>View</Link>
                 <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
-                <button
-                  onClick={() => downloadCSV(event, tickets)}
-                  title={eventTicketCount === 0 ? "No tickets sold yet" : `Download ${eventTicketCount} ticket(s) as CSV`}
-                  style={{ background:"var(--gold)", border:"none", color:"#000", padding:"8px 14px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}
-                >
+                <button onClick={() => downloadCSV(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"8px 14px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
                   ⬇ CSV {eventTicketCount > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTicketCount}</span>}
                 </button>
               </div>
@@ -948,7 +1055,7 @@ function CreateEventPage({ ctx }) {
   );
 }
 
-// ── Validate Page ──────────────────────────────────────────────────────────
+// ── Validate Page (/validate) — manual ID entry fallback ──────────────────
 function ValidatePage({ ctx }) {
   const { validateTicket } = ctx;
   const [input, setInput] = useState("");
@@ -966,9 +1073,10 @@ function ValidatePage({ ctx }) {
   return (
     <div style={{ maxWidth:560, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <h1 style={{ fontSize:48, marginBottom:8 }}>SCAN & VALIDATE</h1>
-      <p style={{ color:"var(--muted)", marginBottom:40 }}>Paste the Firestore ticket ID from the attendee's QR code</p>
+      <p style={{ color:"var(--muted)", marginBottom:8 }}>Scan an attendee's QR code with your phone camera — it will open their ticket page automatically.</p>
+      <p style={{ color:"var(--muted)", fontSize:13, marginBottom:40 }}>Or paste the ticket ID below as a manual fallback.</p>
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, marginBottom:24 }}>
-        <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID</label>
+        <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID (MANUAL)</label>
         <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} placeholder="e.g. aB3dEfGhIjKl..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }} />
         <button onClick={handle} disabled={checking} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2, opacity: checking?0.7:1 }}>
           {checking?"CHECKING FIREBASE...":"VALIDATE TICKET"}
