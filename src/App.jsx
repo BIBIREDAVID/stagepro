@@ -176,41 +176,24 @@ const STYLE = `
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
 `;
 
-// ── Theme hook ─────────────────────────────────────────────────────────────
+// ── Theme hook — pure auto-detect, follows OS preference ──────────────────
 function useTheme() {
-  const getInitial = () => {
-    const saved = localStorage.getItem("stagepro-theme");
-    if (saved) return saved;
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  };
-  const [theme, setTheme] = useState(() => {
-    const saved = localStorage.getItem("stagepro-theme");
-    if (saved) return saved;
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  });
+  const [theme, setTheme] = useState(
+    () => window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"
+  );
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("stagepro-theme", theme);
   }, [theme]);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: light)");
-    const handler = (e) => {
-      if (!localStorage.getItem("stagepro-theme-manual")) {
-        setTheme(e.matches ? "light" : "dark");
-      }
-    };
+    const handler = (e) => setTheme(e.matches ? "light" : "dark");
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const toggle = () => {
-    localStorage.setItem("stagepro-theme-manual", "1");
-    setTheme(t => t === "dark" ? "light" : "dark");
-  };
-
-  return { theme, toggle };
+  return { theme };
 }
 
 // ── Shared components ──────────────────────────────────────────────────────
@@ -240,7 +223,7 @@ function Input({ label, ...props }) {
 }
 
 // ── Nav ────────────────────────────────────────────────────────────────────
-function Nav({ currentUser, logout, notification, theme, toggleTheme }) {
+function Nav({ currentUser, logout, notification }) {
   return (
     <>
       <style>{STYLE}</style>
@@ -273,14 +256,7 @@ function Nav({ currentUser, logout, notification, theme, toggleTheme }) {
               <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:6, fontWeight:600, fontSize:14 }}>Get Started</Link>
             </>
           )}
-          {/* Theme toggle */}
-          <button
-            onClick={toggleTheme}
-            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, width:34, height:34, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:16, flexShrink:0 }}
-          >
-            {theme === "dark" ? "☀️" : "🌙"}
-          </button>
+
         </div>
       </nav>
     </>
@@ -289,7 +265,7 @@ function Nav({ currentUser, logout, notification, theme, toggleTheme }) {
 
 // ── Root App ───────────────────────────────────────────────────────────────
 export default function App() {
-  const { theme, toggle: toggleTheme } = useTheme();
+  const { theme } = useTheme();
   const [currentUser, setCurrentUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [events, setEvents] = useState([]);
@@ -458,7 +434,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Nav currentUser={currentUser} logout={logout} notification={notification} theme={theme} toggleTheme={toggleTheme} />
+      <Nav currentUser={currentUser} logout={logout} notification={notification} />
       <main style={{ minHeight:"calc(100vh - 60px)" }}>
         <Routes>
           <Route path="/" element={<HomePage ctx={ctx} />} />
