@@ -1103,105 +1103,100 @@ function CreateEventPage({ ctx }) {
   );
 }
 
-// ── Validate Page (/validate) — camera scanner + manual fallback ───────────
+// ── Validate Page (/validate) — html5-qrcode scanner + manual fallback ────
 function ValidatePage({ ctx }) {
   const { validateTicket } = ctx;
-  const [tab, setTab] = useState("camera"); // "camera" | "manual"
+  const [tab, setTab] = useState("camera");
   const [input, setInput] = useState("");
   const [result, setResult] = useState(null);
   const [checking, setChecking] = useState(false);
+  const [camState, setCamState] = useState("idle"); // idle | loading | scanning | error
   const [camError, setCamError] = useState("");
-  const [scanning, setScanning] = useState(false);
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const streamRef = useRef(null);
-  const rafRef = useRef(null);
-  const jsQRRef = useRef(null);
+  const scannerRef = useRef(null);
+  const mountedRef = useRef(true);
+  const SCANNER_ID = "html5qr-region";
 
-  // Load jsQR from CDN
+  // Load html5-qrcode from CDN
+  const loadLib = () => new Promise((resolve, reject) => {
+    if (window.Html5Qrcode) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js";
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+
+  const startScanner = async () => {
+    setCamState("loading"); setCamError(""); setResult(null);
+    try {
+      await loadLib();
+      if (!mountedRef.current) return;
+
+      // Stop any previous instance
+      if (scannerRef.current) {
+        try { await scannerRef.current.stop(); } catch {}
+        scannerRef.current = null;
+      }
+
+      const scanner = new window.Html5Qrcode(SCANNER_ID);
+      scannerRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 220, height: 220 }, aspectRatio: 1.0 },
+        (decodedText) => {
+          // QR detected — extract ticket ID from URL or use raw
+          const match = decodedText.match(/\/ticket\/([a-zA-Z0-9]+)/);
+          const ticketId = match ? match[1] : decodedText.trim();
+          stopScanner();
+          handleValidate(ticketId);
+        },
+        () => {} // ignore per-frame failures silently
+      );
+
+      if (mountedRef.current) setCamState("scanning");
+    } catch (err) {
+      const msg = String(err).includes("permission")
+        ? "Camera permission denied. Please allow access and try again."
+        : "Could not start camera. Try the manual entry tab.";
+      setCamError(msg);
+      setCamState("error");
+    }
+  };
+
+  const stopScanner = async () => {
+    if (scannerRef.current) {
+      try { await scannerRef.current.stop(); } catch {}
+      scannerRef.current = null;
+    }
+    if (mountedRef.current) setCamState("idle");
+  };
+
   useEffect(() => {
-    if (window.jsQR) { jsQRRef.current = window.jsQR; return; }
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
-    script.onload = () => { jsQRRef.current = window.jsQR; };
-    document.head.appendChild(script);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (scannerRef.current) {
+        try { scannerRef.current.stop(); } catch {}
+      }
+    };
   }, []);
 
-  // Start camera
-  const startCamera = async () => {
-    setCamError(""); setResult(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-        setScanning(true);
-      }
-    } catch {
-      setCamError("Camera access denied. Please allow camera permission and try again.");
-    }
-  };
-
-  // Stop camera
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    setScanning(false);
-  };
-
-  // Scan loop
   useEffect(() => {
-    if (!scanning) return;
-    const tick = () => {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas || !jsQRRef.current || video.readyState !== 4) {
-        rafRef.current = requestAnimationFrame(tick); return;
-      }
-      const ctx2d = canvas.getContext("2d");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const imageData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQRRef.current(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
-      if (code?.data) {
-        // Extract ticket ID from URL or use raw value
-        const match = code.data.match(/\/ticket\/([a-zA-Z0-9]+)/);
-        const ticketId = match ? match[1] : code.data;
-        stopCamera();
-        handleValidate(ticketId);
-        return;
-      }
-      rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-  }, [scanning]);
-
-  // Cleanup on unmount
-  useEffect(() => () => stopCamera(), []);
-
-  // Switch tabs
-  useEffect(() => {
-    if (tab === "manual") stopCamera();
-    else setResult(null);
+    if (tab === "manual") stopScanner();
   }, [tab]);
 
   const handleValidate = async (id) => {
     if (!id) return;
     setChecking(true); setResult(null);
     const res = await validateTicket(id);
-    setResult(res);
-    setChecking(false);
+    if (mountedRef.current) { setResult(res); setChecking(false); }
   };
 
-  const reset = () => { setResult(null); setInput(""); if (tab === "camera") startCamera(); };
+  const reset = () => {
+    setResult(null); setInput("");
+    if (tab === "camera") startScanner();
+  };
 
   return (
     <div style={{ maxWidth:560, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
@@ -1216,45 +1211,56 @@ function ValidatePage({ ctx }) {
       </div>
 
       {/* ── Camera tab ── */}
-      {tab === "camera" && !result && (
+      {tab === "camera" && !result && !checking && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginBottom:24 }}>
-          <div style={{ position:"relative", background:"#000", minHeight:280, display:"flex", alignItems:"center", justifyContent:"center" }}>
-            <video ref={videoRef} style={{ width:"100%", maxHeight:320, display: scanning?"block":"none", objectFit:"cover" }} playsInline muted />
-            <canvas ref={canvasRef} style={{ display:"none" }} />
-            {/* Viewfinder overlay */}
-            {scanning && (
-              <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", pointerEvents:"none" }}>
-                <div style={{ width:200, height:200, border:"2px solid var(--gold)", borderRadius:12, boxShadow:"0 0 0 9999px rgba(0,0,0,0.45)" }}>
-                  <div style={{ position:"absolute", top:0, left:0, width:24, height:24, borderTop:"3px solid var(--gold)", borderLeft:"3px solid var(--gold)", borderRadius:"8px 0 0 0" }} />
-                  <div style={{ position:"absolute", top:0, right:0, width:24, height:24, borderTop:"3px solid var(--gold)", borderRight:"3px solid var(--gold)", borderRadius:"0 8px 0 0" }} />
-                  <div style={{ position:"absolute", bottom:0, left:0, width:24, height:24, borderBottom:"3px solid var(--gold)", borderLeft:"3px solid var(--gold)", borderRadius:"0 0 0 8px" }} />
-                  <div style={{ position:"absolute", bottom:0, right:0, width:24, height:24, borderBottom:"3px solid var(--gold)", borderRight:"3px solid var(--gold)", borderRadius:"0 0 8px 0" }} />
-                </div>
-                <div style={{ position:"absolute", bottom:16, color:"var(--gold)", fontSize:13, fontWeight:600, letterSpacing:1 }}>ALIGN QR CODE IN FRAME</div>
-              </div>
-            )}
-            {!scanning && !camError && (
-              <div style={{ textAlign:"center", padding:40 }}>
-                <div style={{ fontSize:48, marginBottom:16 }}>📷</div>
-                <p style={{ color:"var(--muted)", fontSize:14, marginBottom:20 }}>Camera is off</p>
-                <button onClick={startCamera} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2 }}>START CAMERA</button>
-              </div>
-            )}
-            {camError && (
-              <div style={{ textAlign:"center", padding:32 }}>
-                <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
-                <p style={{ color:"var(--red)", fontSize:13, marginBottom:20 }}>{camError}</p>
-                <button onClick={startCamera} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Try Again</button>
-              </div>
-            )}
-          </div>
-          {scanning && (
-            <div style={{ padding:16, textAlign:"center" }}>
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, color:"var(--green)", fontSize:13, fontWeight:600, marginBottom:12 }}>
+
+          {/* html5-qrcode mounts into this div — must always be in the DOM when camera tab is active */}
+          <div
+            id={SCANNER_ID}
+            style={{
+              width:"100%",
+              display: camState === "scanning" ? "block" : "none",
+              borderRadius:0,
+            }}
+          />
+
+          {/* Idle state */}
+          {camState === "idle" && (
+            <div style={{ textAlign:"center", padding:48 }}>
+              <div style={{ fontSize:52, marginBottom:16 }}>📷</div>
+              <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>Point your camera at an attendee's QR code</p>
+              <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"14px 32px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+                START CAMERA
+              </button>
+            </div>
+          )}
+
+          {/* Loading state */}
+          {camState === "loading" && (
+            <div style={{ textAlign:"center", padding:48 }}>
+              <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
+              <p style={{ color:"var(--muted)", fontSize:14 }}>Starting camera...</p>
+            </div>
+          )}
+
+          {/* Scanning status bar */}
+          {camState === "scanning" && (
+            <div style={{ padding:"12px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", borderTop:"1px solid var(--border)" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, color:"var(--green)", fontSize:13, fontWeight:600 }}>
                 <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--green)", animation:"pulse 1s infinite" }} />
-                SCANNING FOR QR CODE...
+                SCANNING...
               </div>
-              <button onClick={stopCamera} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"6px 16px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Stop Camera</button>
+              <button onClick={stopScanner} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Stop</button>
+            </div>
+          )}
+
+          {/* Error state */}
+          {camState === "error" && (
+            <div style={{ textAlign:"center", padding:36 }}>
+              <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
+              <p style={{ color:"var(--red)", fontSize:13, marginBottom:20 }}>{camError}</p>
+              <button onClick={startScanner} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700, marginRight:8 }}>Try Again</button>
+              <button onClick={() => setTab("manual")} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Use Manual</button>
             </div>
           )}
         </div>
@@ -1264,7 +1270,7 @@ function ValidatePage({ ctx }) {
       {checking && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:40, textAlign:"center", marginBottom:24 }}>
           <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
-          <p style={{ color:"var(--muted)", fontSize:14 }}>Checking ticket...</p>
+          <p style={{ color:"var(--muted)", fontSize:14 }}>Checking ticket in Firebase...</p>
         </div>
       )}
 
