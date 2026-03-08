@@ -141,43 +141,6 @@ const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
 };
 
 // ── Seed events ────────────────────────────────────────────────────────────
-const SEED_EVENTS = [
-  {
-    id: "evt-001", title: "Neon Dystopia", subtitle: "Electronic Music Festival",
-    date: "2025-08-15", time: "20:00", venue: "Lagos Arena, Victoria Island",
-    category: "Festival", image: "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?w=800&q=80",
-    tiers: [
-      { id: "t1", name: "General", price: 8500, total: 500, sold: 312 },
-      { id: "t2", name: "VIP", price: 25000, total: 100, sold: 67 },
-      { id: "t3", name: "VVIP Table", price: 120000, total: 20, sold: 8 },
-    ],
-    organizer: "seed",
-    description: "An immersive electronic music experience featuring Africa's top DJs and international acts across 3 stages.",
-  },
-  {
-    id: "evt-002", title: "Champions Cup 2025", subtitle: "Football — Group Stage",
-    date: "2025-09-03", time: "18:30", venue: "National Stadium, Surulere",
-    category: "Sports", image: "https://images.unsplash.com/photo-1508098682722-e99c643e7f0b?w=800&q=80",
-    tiers: [
-      { id: "t1", name: "Terrace", price: 3000, total: 1000, sold: 754 },
-      { id: "t2", name: "Main Stand", price: 7500, total: 400, sold: 280 },
-      { id: "t3", name: "Executive Box", price: 45000, total: 50, sold: 22 },
-    ],
-    organizer: "seed",
-    description: "Watch the continent's finest clubs battle for supremacy in this electrifying group-stage clash.",
-  },
-  {
-    id: "evt-003", title: "Afrobeats Live", subtitle: "A Night with Burna & Friends",
-    date: "2025-10-20", time: "19:00", venue: "Eko Convention Centre",
-    category: "Concert", image: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=800&q=80",
-    tiers: [
-      { id: "t1", name: "Floor", price: 15000, total: 800, sold: 430 },
-      { id: "t2", name: "Balcony", price: 35000, total: 200, sold: 88 },
-    ],
-    organizer: "seed",
-    description: "An unforgettable night celebrating the global phenomenon of Afrobeats with Nigeria's biggest superstar.",
-  },
-];
 
 // ── Global styles ──────────────────────────────────────────────────────────
 const STYLE = `
@@ -222,9 +185,15 @@ const STYLE = `
   @media (max-width: 768px) {
     .footer-grid { grid-template-columns: 1fr 1fr !important; gap: 32px !important; }
     .footer-brand { grid-column: 1 / -1; }
+    .event-layout { grid-template-columns: 1fr !important; gap: 20px !important; }
+    .event-layout > div:last-child { position: static !important; }
   }
   @media (max-width: 480px) {
     .footer-grid { grid-template-columns: 1fr !important; }
+  }
+  @media (max-width: 600px) {
+    nav { padding: 0 16px !important; }
+    nav a[href="/dashboard"], nav a[href="/validate"] { display: none; }
   }
 `;
 
@@ -347,10 +316,11 @@ export default function App() {
     const init = async () => {
       setEventsLoading(true);
       try {
-        for (const ev of SEED_EVENTS) {
-          const ref = doc(db, "events", ev.id);
+        // Delete legacy seed events if they still exist in Firestore
+        for (const id of ["evt-001", "evt-002", "evt-003"]) {
+          const ref = doc(db, "events", id);
           const snap = await getDoc(ref);
-          if (!snap.exists()) await setDoc(ref, ev);
+          if (snap.exists()) await deleteDoc(ref);
         }
         const snapshot = await getDocs(collection(db, "events"));
         setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -1058,69 +1028,83 @@ function EventPage({ ctx }) {
   };
 
   return (
-    <div style={{ maxWidth:1100, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
-        <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14 }}>← Back</button>
-        <button onClick={() => { navigator.clipboard.writeText(window.location.href); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>🔗 Copy Link</button>
+    <div style={{ maxWidth:1100, margin:"0 auto", padding:"24px 16px", animation:"fadeUp 0.4s ease" }}>
+      {/* Top bar */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20, padding:"0 8px" }}>
+        <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, padding:0 }}>← Back</button>
+        <button onClick={() => { navigator.clipboard.writeText(window.location.href); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 14px", borderRadius:8, cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>🔗 Copy Link</button>
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 380px", gap:40, alignItems:"start" }}>
+
+      {/* Hero image */}
+      <div style={{ borderRadius:16, overflow:"hidden", marginBottom:20, position:"relative" }}>
+        <img src={event.image} alt={event.title} style={{ width:"100%", height:"min(360px, 55vw)", objectFit:"cover", display:"block" }} />
+        <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.92) 0%, transparent 55%)" }} />
+        <div style={{ position:"absolute", bottom:20, left:20, right:20 }}>
+          <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:6 }}>{event.category?.toUpperCase()}</div>
+          <h1 style={{ fontSize:"clamp(28px,6vw,56px)", lineHeight:1, marginBottom:4 }}>{event.title}</h1>
+          <p style={{ color:"rgba(232,224,208,0.75)", fontSize:"clamp(14px,2.5vw,18px)" }}>{event.subtitle}</p>
+        </div>
+      </div>
+
+      {/* Responsive layout: side-by-side on desktop, stacked on mobile */}
+      <div className="event-layout" style={{ display:"grid", gridTemplateColumns:"1fr 360px", gap:32, alignItems:"start" }}>
+
+        {/* Left — info */}
         <div>
-          <div style={{ borderRadius:16, overflow:"hidden", marginBottom:32, position:"relative" }}>
-            <img src={event.image} alt={event.title} style={{ width:"100%", height:360, objectFit:"cover" }} />
-            <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.9) 0%, transparent 50%)" }} />
-            <div style={{ position:"absolute", bottom:32, left:32 }}>
-              <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:8 }}>{event.category?.toUpperCase()}</div>
-              <h1 style={{ fontSize:56, lineHeight:1, marginBottom:4 }}>{event.title}</h1>
-              <p style={{ color:"rgba(232,224,208,0.7)", fontSize:18 }}>{event.subtitle}</p>
-            </div>
-          </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:32 }}>
-            {[["📅 Date",fmtDate(event.date)],["🕐 Time",event.time],["📍 Venue",event.venue],["🎫 Category",event.category]].map(([l,v]) => (
-              <div key={l} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
-                <div style={{ fontSize:12, color:"var(--muted)", marginBottom:4 }}>{l}</div>
-                <div style={{ fontWeight:600 }}>{v}</div>
+          {/* Info cards — 2-col on desktop, 2-col on mobile too but smaller */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:24 }}>
+            {[["📅","Date",fmtDate(event.date)],["🕐","Time",event.time||"TBA"],["📍","Venue",event.venue],["🎫","Category",event.category]].map(([icon,l,v]) => (
+              <div key={l} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 16px" }}>
+                <div style={{ fontSize:13, color:"var(--muted)", marginBottom:4 }}>{icon} {l}</div>
+                <div style={{ fontWeight:600, fontSize:14, lineHeight:1.3 }}>{v}</div>
               </div>
             ))}
           </div>
-          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:24 }}>
-            <h3 style={{ fontSize:20, marginBottom:12 }}>ABOUT THIS EVENT</h3>
-            <p style={{ color:"rgba(232,224,208,0.7)", lineHeight:1.8 }}>{event.description}</p>
-          </div>
+          {event.description && (
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
+              <h3 style={{ fontSize:18, marginBottom:10 }}>ABOUT THIS EVENT</h3>
+              <p style={{ color:"var(--muted)", lineHeight:1.8, fontSize:14 }}>{event.description}</p>
+            </div>
+          )}
         </div>
+
+        {/* Right — ticket selector */}
         <div style={{ position:"sticky", top:80 }}>
-          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28 }}>
-            <h3 style={{ fontSize:22, marginBottom:24 }}>SELECT TICKETS</h3>
-            <div style={{ display:"flex", flexDirection:"column", gap:16, marginBottom:24 }}>
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24 }}>
+            <h3 style={{ fontSize:20, marginBottom:20 }}>SELECT TICKETS</h3>
+            <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:20 }}>
               {event.tiers.map(tier => {
                 const available = tier.total-tier.sold;
                 const qty = cart[tier.id]||0;
                 return (
-                  <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0?"var(--gold)":"var(--border)"}`, borderRadius:12, padding:16, transition:"border-color 0.2s" }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                  <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0?"var(--gold)":"var(--border)"}`, borderRadius:12, padding:"14px 16px", transition:"border-color 0.2s" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                       <div>
-                        <div style={{ fontWeight:600, marginBottom:2 }}>{tier.name}</div>
+                        <div style={{ fontWeight:600, fontSize:14, marginBottom:2 }}>{tier.name}</div>
                         <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(tier.price)}</div>
                       </div>
-                      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                        <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:32, height:32, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor:"pointer", fontSize:18 }}>−</button>
-                        <span style={{ fontFamily:"DM Mono", fontSize:18, minWidth:20, textAlign:"center" }}>{qty}</span>
-                        <button onClick={() => adjust(tier.id,1)} disabled={available===0} style={{ width:32, height:32, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor:"pointer", fontSize:18 }}>+</button>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor: qty===0?"not-allowed":"pointer", fontSize:20, opacity: qty===0?0.4:1 }}>−</button>
+                        <span style={{ fontFamily:"DM Mono", fontSize:18, minWidth:22, textAlign:"center" }}>{qty}</span>
+                        <button onClick={() => adjust(tier.id,1)} disabled={available===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor: available===0?"not-allowed":"pointer", fontSize:20, opacity: available===0?0.4:1 }}>+</button>
                       </div>
                     </div>
-                    <div style={{ fontSize:12, color: available<20?"var(--red)":"var(--muted)" }}>{available===0?"SOLD OUT":`${available} remaining`}</div>
+                    <div style={{ fontSize:12, color: available===0?"var(--red)":available<20?"var(--red)":"var(--muted)" }}>
+                      {available===0?"SOLD OUT":`${available} remaining`}
+                    </div>
                   </div>
                 );
               })}
             </div>
             {totalItems>0 && (
-              <div style={{ borderTop:"1px solid var(--border)", paddingTop:20, marginBottom:20 }}>
-                <div style={{ display:"flex", justifyContent:"space-between" }}>
-                  <span style={{ color:"var(--muted)" }}>{totalItems} ticket(s)</span>
-                  <span style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(totalPrice)}</span>
+              <div style={{ borderTop:"1px solid var(--border)", paddingTop:16, marginBottom:16 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ color:"var(--muted)", fontSize:14 }}>{totalItems} ticket{totalItems>1?"s":""}</span>
+                  <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{fmt(totalPrice)}</span>
                 </div>
               </div>
             )}
-            <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:15, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+            <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:16, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
               {!currentUser?"SIGN IN TO BUY":totalItems===0?"SELECT TICKETS":"PROCEED TO CHECKOUT →"}
             </button>
           </div>
