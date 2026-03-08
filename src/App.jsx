@@ -174,6 +174,13 @@ const STYLE = `
   @keyframes fadeUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+  @media (max-width: 768px) {
+    .footer-grid { grid-template-columns: 1fr 1fr !important; gap: 32px !important; }
+    .footer-brand { grid-column: 1 / -1; }
+  }
+  @media (max-width: 480px) {
+    .footer-grid { grid-template-columns: 1fr !important; }
+  }
 `;
 
 // ── Theme hook — pure auto-detect, follows OS preference ──────────────────
@@ -450,7 +457,101 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>
+      <Footer />
     </BrowserRouter>
+  );
+}
+
+// ── Footer ─────────────────────────────────────────────────────────────────
+function Footer() {
+  const year = new Date().getFullYear();
+  return (
+    <footer style={{ background:"var(--bg2)", borderTop:"1px solid var(--border)", marginTop:80 }}>
+      {/* Top section */}
+      <div className="footer-grid" style={{ maxWidth:1200, margin:"0 auto", padding:"56px 32px 40px", display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr", gap:48 }}>
+
+        {/* Brand column */}
+        <div className="footer-brand">
+          <div style={{ display:"flex", alignItems:"center", gap:4, marginBottom:16 }}>
+            <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--gold)", letterSpacing:2 }}>STAGE</span>
+            <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--text)", letterSpacing:2 }}>PRO</span>
+          </div>
+          <p style={{ color:"var(--muted)", fontSize:14, lineHeight:1.8, maxWidth:280, marginBottom:24 }}>
+            Nigeria's premier event ticketing platform. Discover, book, and manage tickets for concerts, festivals, and sporting events.
+          </p>
+          {/* Social icons */}
+          <div style={{ display:"flex", gap:10 }}>
+            {[
+              { label:"Twitter / X", icon:"𝕏", href:"#" },
+              { label:"Instagram", icon:"📸", href:"#" },
+              { label:"Facebook", icon:"f", href:"#" },
+            ].map(s => (
+              <a key={s.label} href={s.href} title={s.label} style={{ width:36, height:36, borderRadius:8, background:"var(--bg3)", border:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:700, color:"var(--muted)", transition:"all 0.2s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor="var(--gold)"; e.currentTarget.style.color="var(--gold)"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor="var(--border)"; e.currentTarget.style.color="var(--muted)"; }}
+              >{s.icon}</a>
+            ))}
+          </div>
+        </div>
+
+        {/* Discover column */}
+        <div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>DISCOVER</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {[["Browse Events","/"],["Concerts","/"],["Festivals","/"],["Sports","/"]].map(([label, href]) => (
+              <Link key={label} to={href} style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+                onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+                onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+              >{label}</Link>
+            ))}
+          </div>
+        </div>
+
+        {/* Organizers column */}
+        <div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>ORGANIZERS</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {[["Create Event","/dashboard/create"],["Dashboard","/dashboard"],["Scan Tickets","/validate"],["Sign Up","/register"]].map(([label, href]) => (
+              <Link key={label} to={href} style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+                onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+                onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+              >{label}</Link>
+            ))}
+          </div>
+        </div>
+
+        {/* Support column */}
+        <div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>SUPPORT</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {[["Help Centre","#"],["Contact Us","#"],["Terms of Service","#"],["Privacy Policy","#"]].map(([label, href]) => (
+              <a key={label} href={href} style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+                onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+                onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+              >{label}</a>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div style={{ borderTop:"1px solid var(--border)" }} />
+
+      {/* Bottom bar */}
+      <div style={{ maxWidth:1200, margin:"0 auto", padding:"20px 32px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
+        <p style={{ color:"var(--muted)", fontSize:13 }}>
+          © {year} StagePro. All rights reserved. Made in Nigeria 🇳🇬
+        </p>
+        <div style={{ display:"flex", gap:20 }}>
+          {[["Terms","#"],["Privacy","#"],["Cookies","#"]].map(([label, href]) => (
+            <a key={label} href={href} style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
+              onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+              onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+            >{label}</a>
+          ))}
+        </div>
+      </div>
+    </footer>
   );
 }
 
