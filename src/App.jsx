@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -15,6 +15,7 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
+  sendPasswordResetEmail,
 } from "firebase/auth";
 import {
   getFirestore,
@@ -623,6 +624,10 @@ function AuthPage({ mode, ctx }) {
   const [form, setForm] = useState({ name:"", email:"", password:"", role:"customer" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showReset, setShowReset] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetMsg, setResetMsg] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
 
   if (currentUser) return <Navigate to="/" />;
   const F = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
@@ -641,6 +646,44 @@ function AuthPage({ mode, ctx }) {
     }
     setLoading(false);
   };
+
+  const handleReset = async () => {
+    if (!resetEmail) { setResetMsg("Please enter your email address."); return; }
+    setResetLoading(true); setResetMsg("");
+    try {
+      await sendPasswordResetEmail(auth, resetEmail);
+      setResetMsg("✅ Reset email sent! Check your inbox.");
+    } catch {
+      setResetMsg("❌ Could not send reset email. Check the address and try again.");
+    }
+    setResetLoading(false);
+  };
+
+  // ── Reset password modal ──────────────────────────────────────────────
+  if (showReset) return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"calc(100vh - 60px)", padding:24 }}>
+      <div style={{ width:"100%", maxWidth:420, animation:"fadeUp 0.4s ease" }}>
+        <div style={{ textAlign:"center", marginBottom:40 }}>
+          <h1 style={{ fontSize:48, marginBottom:8 }}>RESET PASSWORD</h1>
+          <p style={{ color:"var(--muted)", fontSize:14 }}>We'll send a reset link to your email</p>
+        </div>
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, display:"flex", flexDirection:"column", gap:16 }}>
+          <Input label="Email Address" type="email" value={resetEmail} onChange={e => setResetEmail(e.target.value)} placeholder="you@email.com" />
+          {resetMsg && (
+            <div style={{ fontSize:13, textAlign:"center", color: resetMsg.startsWith("✅") ? "var(--green)" : "var(--red)", padding:"10px 14px", background: resetMsg.startsWith("✅") ? "rgba(61,220,132,0.08)" : "rgba(232,64,64,0.08)", borderRadius:8 }}>
+              {resetMsg}
+            </div>
+          )}
+          <button onClick={handleReset} disabled={resetLoading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: resetLoading?"not-allowed":"pointer", opacity: resetLoading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Bebas Neue", letterSpacing:2 }}>
+            {resetLoading ? "SENDING..." : "SEND RESET LINK"}
+          </button>
+          <button onClick={() => { setShowReset(false); setResetMsg(""); setResetEmail(""); }} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:13, textAlign:"center" }}>
+            ← Back to sign in
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"calc(100vh - 60px)", padding:24 }}>
@@ -669,6 +712,11 @@ function AuthPage({ mode, ctx }) {
           <button onClick={submit} disabled={loading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Bebas Neue", letterSpacing:2, marginTop:8 }}>
             {loading?"PLEASE WAIT...":mode==="login"?"SIGN IN":"CREATE ACCOUNT"}
           </button>
+          {mode === "login" && (
+            <button onClick={() => setShowReset(true)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:13, textAlign:"center" }}>
+              Forgot your password?
+            </button>
+          )}
           <p style={{ textAlign:"center", fontSize:13, color:"var(--muted)" }}>
             {mode==="login"?"No account? ":"Already registered? "}
             <Link to={mode==="login"?"/register":"/login"} style={{ color:"var(--gold)", fontWeight:600 }}>
@@ -1055,44 +1103,196 @@ function CreateEventPage({ ctx }) {
   );
 }
 
-// ── Validate Page (/validate) — manual ID entry fallback ──────────────────
+// ── Validate Page (/validate) — camera scanner + manual fallback ───────────
 function ValidatePage({ ctx }) {
   const { validateTicket } = ctx;
+  const [tab, setTab] = useState("camera"); // "camera" | "manual"
   const [input, setInput] = useState("");
   const [result, setResult] = useState(null);
   const [checking, setChecking] = useState(false);
+  const [camError, setCamError] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const rafRef = useRef(null);
+  const jsQRRef = useRef(null);
 
-  const handle = async () => {
-    if (!input) return;
-    setChecking(true);
-    const res = await validateTicket(input);
+  // Load jsQR from CDN
+  useEffect(() => {
+    if (window.jsQR) { jsQRRef.current = window.jsQR; return; }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js";
+    script.onload = () => { jsQRRef.current = window.jsQR; };
+    document.head.appendChild(script);
+  }, []);
+
+  // Start camera
+  const startCamera = async () => {
+    setCamError(""); setResult(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+        setScanning(true);
+      }
+    } catch {
+      setCamError("Camera access denied. Please allow camera permission and try again.");
+    }
+  };
+
+  // Stop camera
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    setScanning(false);
+  };
+
+  // Scan loop
+  useEffect(() => {
+    if (!scanning) return;
+    const tick = () => {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || !jsQRRef.current || video.readyState !== 4) {
+        rafRef.current = requestAnimationFrame(tick); return;
+      }
+      const ctx2d = canvas.getContext("2d");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQRRef.current(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+      if (code?.data) {
+        // Extract ticket ID from URL or use raw value
+        const match = code.data.match(/\/ticket\/([a-zA-Z0-9]+)/);
+        const ticketId = match ? match[1] : code.data;
+        stopCamera();
+        handleValidate(ticketId);
+        return;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [scanning]);
+
+  // Cleanup on unmount
+  useEffect(() => () => stopCamera(), []);
+
+  // Switch tabs
+  useEffect(() => {
+    if (tab === "manual") stopCamera();
+    else setResult(null);
+  }, [tab]);
+
+  const handleValidate = async (id) => {
+    if (!id) return;
+    setChecking(true); setResult(null);
+    const res = await validateTicket(id);
     setResult(res);
     setChecking(false);
   };
 
+  const reset = () => { setResult(null); setInput(""); if (tab === "camera") startCamera(); };
+
   return (
     <div style={{ maxWidth:560, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <h1 style={{ fontSize:48, marginBottom:8 }}>SCAN & VALIDATE</h1>
-      <p style={{ color:"var(--muted)", marginBottom:8 }}>Scan an attendee's QR code with your phone camera — it will open their ticket page automatically.</p>
-      <p style={{ color:"var(--muted)", fontSize:13, marginBottom:40 }}>Or paste the ticket ID below as a manual fallback.</p>
-      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, marginBottom:24 }}>
-        <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID (MANUAL)</label>
-        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} placeholder="e.g. aB3dEfGhIjKl..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }} />
-        <button onClick={handle} disabled={checking} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2, opacity: checking?0.7:1 }}>
-          {checking?"CHECKING FIREBASE...":"VALIDATE TICKET"}
-        </button>
+      <p style={{ color:"var(--muted)", marginBottom:24 }}>Use the camera to scan QR codes, or enter a ticket ID manually.</p>
+
+      {/* Tab toggle */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:24 }}>
+        {[["camera","📷 Camera Scan"],["manual","⌨️ Manual Entry"]].map(([t,label]) => (
+          <button key={t} onClick={() => setTab(t)} style={{ padding:"10px 0", background: tab===t?"var(--gold)":"var(--bg3)", color: tab===t?"#000":"var(--muted)", border:`1px solid ${tab===t?"var(--gold)":"var(--border)"}`, borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13 }}>{label}</button>
+        ))}
       </div>
-      {result && (
-        <div style={{ background: result.ok?"rgba(61,220,132,0.08)":"rgba(232,64,64,0.08)", border:`1px solid ${result.ok?"var(--green)":"var(--red)"}`, borderRadius:16, padding:28, animation:"fadeUp 0.3s ease" }}>
+
+      {/* ── Camera tab ── */}
+      {tab === "camera" && !result && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginBottom:24 }}>
+          <div style={{ position:"relative", background:"#000", minHeight:280, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <video ref={videoRef} style={{ width:"100%", maxHeight:320, display: scanning?"block":"none", objectFit:"cover" }} playsInline muted />
+            <canvas ref={canvasRef} style={{ display:"none" }} />
+            {/* Viewfinder overlay */}
+            {scanning && (
+              <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", pointerEvents:"none" }}>
+                <div style={{ width:200, height:200, border:"2px solid var(--gold)", borderRadius:12, boxShadow:"0 0 0 9999px rgba(0,0,0,0.45)" }}>
+                  <div style={{ position:"absolute", top:0, left:0, width:24, height:24, borderTop:"3px solid var(--gold)", borderLeft:"3px solid var(--gold)", borderRadius:"8px 0 0 0" }} />
+                  <div style={{ position:"absolute", top:0, right:0, width:24, height:24, borderTop:"3px solid var(--gold)", borderRight:"3px solid var(--gold)", borderRadius:"0 8px 0 0" }} />
+                  <div style={{ position:"absolute", bottom:0, left:0, width:24, height:24, borderBottom:"3px solid var(--gold)", borderLeft:"3px solid var(--gold)", borderRadius:"0 0 0 8px" }} />
+                  <div style={{ position:"absolute", bottom:0, right:0, width:24, height:24, borderBottom:"3px solid var(--gold)", borderRight:"3px solid var(--gold)", borderRadius:"0 0 8px 0" }} />
+                </div>
+                <div style={{ position:"absolute", bottom:16, color:"var(--gold)", fontSize:13, fontWeight:600, letterSpacing:1 }}>ALIGN QR CODE IN FRAME</div>
+              </div>
+            )}
+            {!scanning && !camError && (
+              <div style={{ textAlign:"center", padding:40 }}>
+                <div style={{ fontSize:48, marginBottom:16 }}>📷</div>
+                <p style={{ color:"var(--muted)", fontSize:14, marginBottom:20 }}>Camera is off</p>
+                <button onClick={startCamera} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2 }}>START CAMERA</button>
+              </div>
+            )}
+            {camError && (
+              <div style={{ textAlign:"center", padding:32 }}>
+                <div style={{ fontSize:40, marginBottom:12 }}>🚫</div>
+                <p style={{ color:"var(--red)", fontSize:13, marginBottom:20 }}>{camError}</p>
+                <button onClick={startCamera} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Try Again</button>
+              </div>
+            )}
+          </div>
+          {scanning && (
+            <div style={{ padding:16, textAlign:"center" }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, color:"var(--green)", fontSize:13, fontWeight:600, marginBottom:12 }}>
+                <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--green)", animation:"pulse 1s infinite" }} />
+                SCANNING FOR QR CODE...
+              </div>
+              <button onClick={stopCamera} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"6px 16px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Stop Camera</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Checking spinner */}
+      {checking && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:40, textAlign:"center", marginBottom:24 }}>
+          <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
+          <p style={{ color:"var(--muted)", fontSize:14 }}>Checking ticket...</p>
+        </div>
+      )}
+
+      {/* ── Manual tab ── */}
+      {tab === "manual" && !result && !checking && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, marginBottom:24 }}>
+          <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID</label>
+          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleValidate(input)} placeholder="e.g. aB3dEfGhIjKl..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }} />
+          <button onClick={() => handleValidate(input)} disabled={!input} style={{ width:"100%", background: input?"var(--gold)":"var(--bg3)", color: input?"#000":"var(--muted)", border:"none", padding:14, borderRadius:10, cursor: input?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+            VALIDATE TICKET
+          </button>
+        </div>
+      )}
+
+      {/* Result */}
+      {result && !checking && (
+        <div style={{ background: result.ok?"rgba(61,220,132,0.08)":"rgba(232,64,64,0.08)", border:`2px solid ${result.ok?"var(--green)":"var(--red)"}`, borderRadius:16, padding:28, animation:"fadeUp 0.3s ease", marginBottom:24 }}>
           <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16 }}>
-            <span style={{ fontSize:32 }}>{result.ok?"✅":"❌"}</span>
+            <span style={{ fontSize:40 }}>{result.ok?"✅":"❌"}</span>
             <div>
-              <div style={{ fontFamily:"Bebas Neue", fontSize:28, color: result.ok?"var(--green)":"var(--red)" }}>{result.ok?"VALID TICKET":"INVALID"}</div>
+              <div style={{ fontFamily:"Bebas Neue", fontSize:32, color: result.ok?"var(--green)":"var(--red)" }}>
+                {result.ok ? "VALID — GRANT ENTRY" : "INVALID"}
+              </div>
               <div style={{ color:"var(--muted)", fontSize:13 }}>{result.msg}</div>
             </div>
           </div>
           {result.ticket && (
-            <div style={{ display:"grid", gap:8 }}>
+            <div style={{ display:"grid", gap:10, background:"var(--bg3)", borderRadius:10, padding:16, marginBottom:20 }}>
               {[["Event",result.ticket.eventTitle],["Tier",result.ticket.tierName],["Attendee",result.ticket.userName],["Date",fmtDate(result.ticket.eventDate)]].map(([k,v]) => (
                 <div key={k} style={{ display:"flex", justifyContent:"space-between", fontSize:13 }}>
                   <span style={{ color:"var(--muted)" }}>{k}</span>
@@ -1101,7 +1301,9 @@ function ValidatePage({ ctx }) {
               ))}
             </div>
           )}
-          <button onClick={() => { setInput(""); setResult(null); }} style={{ marginTop:20, width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:10, borderRadius:8, cursor:"pointer", fontWeight:600 }}>Validate Another</button>
+          <button onClick={reset} style={{ width:"100%", background:"var(--gold)", border:"none", color:"#000", padding:12, borderRadius:8, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2 }}>
+            {tab === "camera" ? "📷 SCAN NEXT TICKET" : "VALIDATE ANOTHER"}
+          </button>
         </div>
       )}
     </div>
