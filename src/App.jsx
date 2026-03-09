@@ -1161,7 +1161,7 @@ function EventPage({ ctx }) {
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                       <div>
                         <div style={{ fontWeight:600, fontSize:14, marginBottom:2 }}>{tier.name}</div>
-                        <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{tier.price===0||tier.price==="0" ? "FREE" : (tier.price===0||tier.price==="0"?"FREE":fmt(tier.price))}</div>
+                        <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{Number(tier.price)===0 ? "FREE" : fmt(tier.price)}</div>
                       </div>
                       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                         <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor: qty===0?"not-allowed":"pointer", fontSize:20, opacity: qty===0?0.4:1 }}>−</button>
@@ -1180,12 +1180,15 @@ function EventPage({ ctx }) {
               <div style={{ borderTop:"1px solid var(--border)", paddingTop:16, marginBottom:16 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                   <span style={{ color:"var(--muted)", fontSize:14 }}>{totalItems} ticket{totalItems>1?"s":""}</span>
-                  <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{fmt(totalPrice)}</span>
+                  {totalPrice === 0
+                    ? <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--green)" }}>FREE</span>
+                    : <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{fmt(totalPrice)}</span>
+                  }
                 </div>
               </div>
             )}
             <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:16, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
-              {!currentUser?"SIGN IN TO BUY":totalItems===0?"SELECT TICKETS":"PROCEED TO CHECKOUT →"}
+              {!currentUser?"SIGN IN TO REGISTER":totalItems===0?"SELECT TICKETS": totalPrice===0 ? "CLAIM FREE TICKETS →" : "PROCEED TO CHECKOUT →"}
             </button>
           </div>
         </div>
@@ -1209,7 +1212,8 @@ function CheckoutPage({ ctx }) {
   if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
-  const total = selections.reduce((s,t) => s+cart[t.id]*t.price, 0);
+  const total = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
+  const isFree = total === 0;
 
   const handleConfirm = async () => {
     setProcessing(true);
@@ -1221,35 +1225,77 @@ function CheckoutPage({ ctx }) {
   return (
     <div style={{ maxWidth:600, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Back</button>
-      <h1 style={{ fontSize:48, marginBottom:32 }}>CHECKOUT</h1>
+      <h1 style={{ fontSize:48, marginBottom:32 }}>{isFree ? "CLAIM TICKETS" : "CHECKOUT"}</h1>
+
+      {/* Order summary */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ORDER SUMMARY</div>
         <div style={{ fontFamily:"Bebas Neue", fontSize:24, marginBottom:4 }}>{event.title}</div>
         <div style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{fmtDate(event.date)} · {event.venue}</div>
-        {selections.map(t => (
-          <div key={t.id} style={{ display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>
-            <div><span style={{ fontWeight:600 }}>{t.name}</span><span style={{ color:"var(--muted)", fontSize:13 }}> × {cart[t.id]}</span></div>
-            <span style={{ fontFamily:"DM Mono" }}>{fmt(t.price*cart[t.id])}</span>
-          </div>
-        ))}
-        <div style={{ display:"flex", justifyContent:"space-between", paddingTop:16 }}>
+        {selections.map(t => {
+          const lineTotal = cart[t.id] * Number(t.price);
+          const tFree = Number(t.price) === 0;
+          return (
+            <div key={t.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>
+              <div>
+                <span style={{ fontWeight:600 }}>{t.name}</span>
+                <span style={{ color:"var(--muted)", fontSize:13 }}> × {cart[t.id]}</span>
+              </div>
+              <span style={{ fontFamily: tFree?"DM Sans":"DM Mono", fontWeight: tFree?700:400, color: tFree?"var(--green)":"var(--text)", fontSize: tFree?13:14 }}>
+                {tFree ? "FREE" : fmt(lineTotal)}
+              </span>
+            </div>
+          );
+        })}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", paddingTop:16 }}>
           <span style={{ fontWeight:600 }}>Total</span>
-          <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--gold)" }}>{fmt(total)}</span>
+          {isFree
+            ? <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--green)" }}>FREE</span>
+            : <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--gold)" }}>{fmt(total)}</span>
+          }
         </div>
       </div>
+
+      {/* Attendee */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ATTENDEE</div>
         <div style={{ fontWeight:600 }}>{currentUser.name}</div>
         <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.email}</div>
       </div>
+
+      {/* Free banner — no payment needed */}
+      {isFree && (
+        <div style={{ background:"rgba(61,220,132,0.08)", border:"1px solid var(--green)", borderRadius:12, padding:"14px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:12 }}>
+          <span style={{ fontSize:22 }}>🎉</span>
+          <div>
+            <div style={{ fontWeight:700, color:"var(--green)", fontSize:14 }}>These tickets are free!</div>
+            <div style={{ color:"var(--muted)", fontSize:13 }}>No payment required — just confirm below to get your tickets.</div>
+          </div>
+        </div>
+      )}
+
+      {/* Agreement checkbox */}
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:24, cursor:"pointer" }} onClick={() => setAgreed(p=>!p)}>
         <div style={{ width:20, height:20, border:`2px solid ${agreed?"var(--gold)":"var(--border)"}`, borderRadius:4, background: agreed?"var(--gold)":"transparent", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s", flexShrink:0 }}>
           {agreed && <span style={{ color:"#000", fontSize:12, fontWeight:900 }}>✓</span>}
         </div>
-        <span style={{ fontSize:13, color:"var(--muted)" }}>I agree to the terms and conditions. All sales are final.</span>
+        <span style={{ fontSize:13, color:"var(--muted)" }}>
+          {isFree ? "I confirm I want to register for this event." : "I agree to the terms and conditions. All sales are final."}
+        </span>
       </div>
-      <button disabled={!agreed||processing} onClick={handleConfirm} style={{ width:"100%", padding:16, background: agreed?"var(--gold)":"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}>
-        {processing?"PROCESSING...":`CONFIRM PURCHASE · ${fmt(total)}`}
+
+      {/* Confirm button */}
+      <button
+        disabled={!agreed || processing}
+        onClick={handleConfirm}
+        style={{ width:"100%", padding:16, background: agreed?(isFree?"var(--green)":"var(--gold)"):"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}
+      >
+        {processing
+          ? (isFree ? "REGISTERING..." : "PROCESSING...")
+          : isFree
+            ? "CLAIM FREE TICKETS →"
+            : `CONFIRM PAYMENT · ${fmt(total)}`
+        }
       </button>
     </div>
   );
