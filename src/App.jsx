@@ -296,6 +296,7 @@ function ShareButton({ url, label = "Copy Link", small, stopProp }) {
 }
 
 
+function Spinner() {
   return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"60vh" }}>
       <div style={{ width:40, height:40, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
@@ -451,6 +452,7 @@ export default function App() {
   const purchaseTickets = async (eventId, cartSelections) => {
     const event = events.find(e => e.id === eventId);
     const newTickets = [];
+    // Step 1 — create ticket documents (requires only tickets.create rule)
     try {
       for (const tier of event.tiers) {
         const qty = cartSelections[tier.id] || 0;
@@ -458,8 +460,8 @@ export default function App() {
         for (let i = 0; i < qty; i++) {
           const ticketData = {
             eventId, eventTitle: event.title, eventDate: event.date,
-            eventTime: event.time, venue: event.venue,
-            tierName: tier.name, price: tier.price,
+            eventTime: event.time || "", venue: event.venue,
+            tierName: tier.name, price: Number(tier.price),
             userId: currentUser.uid, userName: currentUser.name,
             used: false, purchasedAt: new Date().toISOString(),
           };
@@ -471,25 +473,36 @@ export default function App() {
             action: "purchase", ticketId: ref.id,
             eventTitle: event.title, tierName: tier.name,
             userName: currentUser.name, email: currentUser.email,
-            price: tier.price, purchasedAt: new Date().toLocaleString("en-NG"),
+            price: Number(tier.price), purchasedAt: new Date().toLocaleString("en-NG"),
           });
         }
-        const updatedTiers = event.tiers.map(t =>
-          t.id === tier.id ? { ...t, sold: t.sold + qty } : t
-        );
-        await updateDoc(doc(db, "events", eventId), { tiers: updatedTiers });
       }
-      setTickets(prev => [...prev, ...newTickets]);
-      setEvents(prev => prev.map(e => e.id !== eventId ? e : {
-        ...e, tiers: e.tiers.map(t => ({ ...t, sold: t.sold + (cartSelections[t.id] || 0) })),
-      }));
-      notify(`${newTickets.length} ticket(s) purchased!`);
-      return true;
     } catch (err) {
-      console.error(err);
-      notify("Purchase failed. Try again.", "error");
+      console.error("Ticket creation failed:", err);
+      notify("Purchase failed. Please try again.", "error");
       return false;
     }
+    // Step 2 — update sold counts on event (best-effort, don't block on failure)
+    try {
+      let updatedTiers = [...event.tiers];
+      for (const tier of event.tiers) {
+        const qty = cartSelections[tier.id] || 0;
+        if (!qty) continue;
+        updatedTiers = updatedTiers.map(t =>
+          t.id === tier.id ? { ...t, sold: (t.sold || 0) + qty } : t
+        );
+      }
+      await updateDoc(doc(db, "events", eventId), { tiers: updatedTiers });
+    } catch (err) {
+      console.warn("Could not update sold count (non-fatal):", err.message);
+    }
+    // Update local state
+    setTickets(prev => [...prev, ...newTickets]);
+    setEvents(prev => prev.map(e => e.id !== eventId ? e : {
+      ...e, tiers: e.tiers.map(t => ({ ...t, sold: (t.sold || 0) + (cartSelections[t.id] || 0) })),
+    }));
+    notify(`🎉 ${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
+    return true;
   };
 
   // ── Core validate logic — reused by both ValidatePage and TicketPage ────
