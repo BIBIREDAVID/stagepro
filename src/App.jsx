@@ -516,7 +516,7 @@ export default function App() {
         image: "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=800&q=80",
         organizer: currentUser.uid,
         tiers: eventData.tiers.map((t, i) => ({
-          ...t, id: `t${i+1}`, price: Number(t.price), total: Number(t.total), sold: 0,
+          id: `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: 0,
         })),
       };
       const ref = await addDoc(collection(db, "events"), data);
@@ -536,7 +536,7 @@ export default function App() {
       const data = {
         ...eventData,
         tiers: eventData.tiers.map((t, i) => ({
-          ...t, id: t.id || `t${i+1}`, price: Number(t.price), total: Number(t.total),
+          id: t.id || `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: t.sold||0,
         })),
       };
       await updateDoc(doc(db, "events", eventId), data);
@@ -1161,7 +1161,7 @@ function EventPage({ ctx }) {
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                       <div>
                         <div style={{ fontWeight:600, fontSize:14, marginBottom:2 }}>{tier.name}</div>
-                        <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(tier.price)}</div>
+                        <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{tier.price===0||tier.price==="0" ? "FREE" : (tier.price===0||tier.price==="0"?"FREE":fmt(tier.price))}</div>
                       </div>
                       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                         <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor: qty===0?"not-allowed":"pointer", fontSize:20, opacity: qty===0?0.4:1 }}>−</button>
@@ -1472,75 +1472,146 @@ function DashboardPage({ ctx }) {
 }
 
 // ── Create Event Page ──────────────────────────────────────────────────────
-function CreateEventPage({ ctx }) {
-  const { createEvent } = ctx;
-  const navigate = useNavigate();
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", description:"", tiers:[{ name:"General", price:"", total:"" }] });
-  const F = (k) => (e) => setForm(p=>({...p,[k]:e.target.value}));
-  const updateTier = (i,k,v) => setForm(p=>({...p,tiers:p.tiers.map((t,j)=>j===i?{...t,[k]:v}:t)}));
-  const addTier = () => setForm(p=>({...p,tiers:[...p.tiers,{name:"",price:"",total:""}]}));
-  const removeTier = (i) => setForm(p=>({...p,tiers:p.tiers.filter((_,j)=>j!==i)}));
-  const valid = form.title && form.date && form.venue && form.tiers.every(t=>t.name&&t.price&&t.total);
+// ── Shared EventForm ──────────────────────────────────────────────────────
+function Req() {
+  return <span style={{ color:"var(--red)", marginLeft:2 }}>*</span>;
+}
 
-  const handle = async () => {
-    setSaving(true);
-    const ev = await createEvent(form);
-    if (ev) navigate(`/event/${ev.id}`);
-    setSaving(false);
-  };
+function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, pageSubtitle }) {
+  const navigate = useNavigate();
+  const [form, setForm] = useState(initialForm);
+  const [touched, setTouched] = useState({});
+
+  const F = (k) => (e) => { setForm(p=>({...p,[k]:e.target.value})); setTouched(p=>({...p,[k]:true})); };
+  const updateTier = (i,k,v) => setForm(p=>({...p,tiers:p.tiers.map((t,j)=>j===i?{...t,[k]:v}:t)}));
+  const addTier = () => setForm(p=>({...p,tiers:[...p.tiers,{name:"",price:"",total:"",sold:0}]}));
+  const removeTier = (i) => setForm(p=>({...p,tiers:p.tiers.filter((_,j)=>j!==i)}));
+
+  const isValid = form.title && form.date && form.venue && form.tiers.every(t=>t.name&&t.price!==""&&t.total);
+
+  const fieldErr = (k) => touched[k] && !form[k]
+    ? <div style={{ color:"var(--red)", fontSize:11, marginTop:4 }}>This field is required</div>
+    : null;
+
+  const iStyle = (k, hasErr) => ({
+    width:"100%", background:"var(--bg2)", borderRadius:8, padding:"10px 12px",
+    color:"var(--text)", fontSize:14, outline:"none",
+    border:`1px solid ${hasErr ? "var(--red)" : "var(--border)"}`,
+  });
 
   return (
     <div style={{ maxWidth:700, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <button onClick={() => navigate("/dashboard")} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Dashboard</button>
-      <h1 style={{ fontSize:48, marginBottom:32 }}>CREATE EVENT</h1>
+      <h1 style={{ fontSize:48, marginBottom: pageSubtitle?8:24 }}>{pageTitle}</h1>
+      {pageSubtitle && <p style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{pageSubtitle}</p>}
+      <p style={{ fontSize:12, color:"var(--muted)", marginBottom:28 }}>Fields marked <span style={{ color:"var(--red)" }}>*</span> are required</p>
+
       <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+
+        {/* Title & Subtitle */}
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
-          <Input label="Event Title" value={form.title} onChange={F("title")} placeholder="e.g. Neon Festival 2025" />
-          <Input label="Subtitle / Artist" value={form.subtitle} onChange={F("subtitle")} placeholder="e.g. ft. Burna Boy" />
-        </div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 }}>
-          <Input label="Date" type="date" value={form.date} onChange={F("date")} />
-          <Input label="Time" type="time" value={form.time} onChange={F("time")} />
           <div>
-            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>CATEGORY</label>
-            <select value={form.category} onChange={F("category")} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14 }}>
+            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT TITLE <Req /></label>
+            <input value={form.title} onChange={F("title")} onBlur={()=>setTouched(p=>({...p,title:true}))} placeholder="e.g. Neon Festival 2025" style={iStyle("title", touched.title&&!form.title)} />
+            {fieldErr("title")}
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>SUBTITLE / ARTIST</label>
+            <input value={form.subtitle} onChange={F("subtitle")} placeholder="e.g. ft. Burna Boy" style={iStyle("subtitle", false)} />
+          </div>
+        </div>
+
+        {/* Date, Time, Category */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 }}>
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DATE <Req /></label>
+            <input type="date" value={form.date} onChange={F("date")} onBlur={()=>setTouched(p=>({...p,date:true}))} style={iStyle("date", touched.date&&!form.date)} />
+            {fieldErr("date")}
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>TIME</label>
+            <input type="time" value={form.time} onChange={F("time")} style={iStyle("time", false)} />
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>CATEGORY <Req /></label>
+            <select value={form.category} onChange={F("category")} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }}>
               {["Concert","Festival","Sports","Comedy","Conference"].map(c=><option key={c}>{c}</option>)}
             </select>
           </div>
         </div>
-        <Input label="Venue" value={form.venue} onChange={F("venue")} placeholder="e.g. Eko Convention Centre, Lagos" />
+
+        {/* Venue */}
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>VENUE <Req /></label>
+          <input value={form.venue} onChange={F("venue")} onBlur={()=>setTouched(p=>({...p,venue:true}))} placeholder="e.g. Eko Convention Centre, Lagos" style={iStyle("venue", touched.venue&&!form.venue)} />
+          {fieldErr("venue")}
+        </div>
+
+        {/* Description */}
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DESCRIPTION</label>
-          <textarea value={form.description} onChange={F("description")} rows={3} placeholder="Describe your event..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans" }} />
+          <textarea value={form.description} onChange={F("description")} rows={4} placeholder="Describe your event — lineup, dress code, what to expect..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans", outline:"none" }} />
         </div>
+
+        {/* Ticket Tiers */}
         <div>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>TICKET TIERS</label>
-            <button onClick={addTier} style={{ background:"none", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontSize:12 }}>+ Add Tier</button>
+            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>TICKET TIERS <Req /></label>
+            <button onClick={addTier} style={{ background:"none", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"5px 14px", borderRadius:6, cursor:"pointer", fontSize:12, fontWeight:600 }}>+ Add Tier</button>
           </div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
             {form.tiers.map((tier,i) => (
-              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr auto", gap:10, background:"var(--bg3)", padding:16, borderRadius:10, border:"1px solid var(--border)" }}>
-                <Input label="Tier Name" value={tier.name} onChange={e=>updateTier(i,"name",e.target.value)} placeholder="e.g. VIP" />
-                <Input label="Price (₦)" type="number" value={tier.price} onChange={e=>updateTier(i,"price",e.target.value)} placeholder="15000" />
-                <Input label="Capacity" type="number" value={tier.total} onChange={e=>updateTier(i,"total",e.target.value)} placeholder="200" />
-                <div style={{ display:"flex", alignItems:"flex-end" }}>
-                  <button onClick={()=>removeTier(i)} disabled={form.tiers.length===1} style={{ width:38, height:38, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--red)", borderRadius:8, cursor:"pointer", fontSize:18 }}>×</button>
+              <div key={i} style={{ background:"var(--bg3)", padding:20, borderRadius:12, border:"1px solid var(--border)" }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr auto", gap:12 }}>
+                  <div>
+                    <label style={{ fontSize:11, color:"var(--muted)", marginBottom:6, display:"block", letterSpacing:1 }}>TIER NAME <Req /></label>
+                    <input value={tier.name} onChange={e=>updateTier(i,"name",e.target.value)} onBlur={()=>setTouched(p=>({...p,[`t${i}n`]:true}))} placeholder="e.g. VIP" style={{ width:"100%", background:"var(--bg2)", border:`1px solid ${!tier.name&&touched[`t${i}n`]?"var(--red)":"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                    {!tier.name&&touched[`t${i}n`]&&<div style={{ color:"var(--red)", fontSize:11, marginTop:3 }}>Required</div>}
+                  </div>
+                  <div>
+                    <label style={{ fontSize:11, color:"var(--muted)", marginBottom:6, display:"block", letterSpacing:1 }}>PRICE (₦) <Req /></label>
+                    <input type="number" min="0" value={tier.price} onChange={e=>updateTier(i,"price",e.target.value)} disabled={tier._free} placeholder="e.g. 15000" style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, outline:"none", opacity:tier._free?0.4:1 }} />
+                    <label style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", fontSize:12, color:"var(--gold)", marginTop:6 }}>
+                      <input type="checkbox" checked={tier._free||false} onChange={e=>{updateTier(i,"_free",e.target.checked); updateTier(i,"price",e.target.checked?"0":"");}} style={{ accentColor:"var(--gold)", width:13, height:13 }} />
+                      Free ticket
+                    </label>
+                  </div>
+                  <div>
+                    <label style={{ fontSize:11, color:"var(--muted)", marginBottom:6, display:"block", letterSpacing:1 }}>CAPACITY <Req /></label>
+                    <input type="number" min="1" value={tier.total} onChange={e=>updateTier(i,"total",e.target.value)} onBlur={()=>setTouched(p=>({...p,[`t${i}c`]:true}))} placeholder="e.g. 200" style={{ width:"100%", background:"var(--bg2)", border:`1px solid ${!tier.total&&touched[`t${i}c`]?"var(--red)":"var(--border)"}`, borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                    {!tier.total&&touched[`t${i}c`]&&<div style={{ color:"var(--red)", fontSize:11, marginTop:3 }}>Required</div>}
+                  </div>
+                  <div style={{ display:"flex", alignItems:"flex-start", paddingTop:22 }}>
+                    <button onClick={()=>removeTier(i)} disabled={form.tiers.length===1} title="Remove tier" style={{ width:36, height:36, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--red)", borderRadius:8, cursor:form.tiers.length===1?"not-allowed":"pointer", fontSize:18, opacity:form.tiers.length===1?0.3:1 }}>×</button>
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         </div>
-        <button onClick={handle} disabled={!valid||saving} style={{ width:"100%", padding:16, background: valid?"var(--gold)":"var(--bg3)", color: valid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: valid?"pointer":"not-allowed", opacity: saving?0.7:1 }}>
-          {saving?"CREATING EVENT...":"PUBLISH EVENT"}
+
+        <button onClick={()=>onSubmit(form)} disabled={!isValid||saving} style={{ width:"100%", padding:16, background:isValid?"var(--gold)":"var(--bg3)", color:isValid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor:isValid?"pointer":"not-allowed", opacity:saving?0.7:1, marginTop:8 }}>
+          {saving ? "PLEASE WAIT..." : submitLabel}
         </button>
       </div>
     </div>
   );
 }
 
-
+// ── Create Event Page ──────────────────────────────────────────────────────
+function CreateEventPage({ ctx }) {
+  const { createEvent } = ctx;
+  const navigate = useNavigate();
+  const [saving, setSaving] = useState(false);
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", description:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const handle = async (form) => {
+    setSaving(true);
+    const ev = await createEvent(form);
+    if (ev) navigate(`/event/${ev.id}`);
+    setSaving(false);
+  };
+  return <EventForm initialForm={blank} onSubmit={handle} saving={saving} submitLabel="PUBLISH EVENT" pageTitle="CREATE EVENT" />;
+}
 
 // ── Edit Event Page ────────────────────────────────────────────────────────
 function EditEventPage({ ctx }) {
@@ -1549,78 +1620,26 @@ function EditEventPage({ ctx }) {
   const navigate = useNavigate();
   const event = events.find(e => e.id === eventId);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState(event ? {
+
+  if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
+
+  const prefilled = {
     title: event.title, subtitle: event.subtitle||"", date: event.date,
     time: event.time||"", venue: event.venue, category: event.category||"Concert",
     description: event.description||"",
-    tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold })),
-  } : null);
+    tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold||0, _free: Number(t.price)===0 })),
+  };
 
-  if (!event || !form) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
-
-  const F = (k) => (e) => setForm(p=>({...p,[k]:e.target.value}));
-  const updateTier = (i,k,v) => setForm(p=>({...p,tiers:p.tiers.map((t,j)=>j===i?{...t,[k]:v}:t)}));
-  const addTier = () => setForm(p=>({...p,tiers:[...p.tiers,{name:"",price:"",total:"",sold:0}]}));
-  const removeTier = (i) => setForm(p=>({...p,tiers:p.tiers.filter((_,j)=>j!==i)}));
-  const valid = form.title && form.date && form.venue && form.tiers.every(t=>t.name&&t.price&&t.total);
-
-  const handle = async () => {
+  const handle = async (form) => {
     setSaving(true);
     const ok = await updateEvent(eventId, form);
     if (ok) navigate("/dashboard");
     setSaving(false);
   };
 
-  return (
-    <div style={{ maxWidth:700, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
-      <button onClick={() => navigate("/dashboard")} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Dashboard</button>
-      <h1 style={{ fontSize:48, marginBottom:8 }}>EDIT EVENT</h1>
-      <p style={{ color:"var(--muted)", fontSize:13, marginBottom:32 }}>Changes will go live immediately after saving.</p>
-      <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
-          <Input label="Event Title" value={form.title} onChange={F("title")} placeholder="e.g. Neon Festival 2025" />
-          <Input label="Subtitle / Artist" value={form.subtitle} onChange={F("subtitle")} placeholder="e.g. ft. Burna Boy" />
-        </div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 }}>
-          <Input label="Date" type="date" value={form.date} onChange={F("date")} />
-          <Input label="Time" type="time" value={form.time} onChange={F("time")} />
-          <div>
-            <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>CATEGORY</label>
-            <select value={form.category} onChange={F("category")} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14 }}>
-              {["Concert","Festival","Sports","Comedy","Conference"].map(c=><option key={c}>{c}</option>)}
-            </select>
-          </div>
-        </div>
-        <Input label="Venue" value={form.venue} onChange={F("venue")} placeholder="e.g. Eko Convention Centre, Lagos" />
-        <div>
-          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DESCRIPTION</label>
-          <textarea value={form.description} onChange={F("description")} rows={3} placeholder="Describe your event..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans" }} />
-        </div>
-        <div>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
-            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>TICKET TIERS</label>
-            <button onClick={addTier} style={{ background:"none", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"4px 12px", borderRadius:6, cursor:"pointer", fontSize:12 }}>+ Add Tier</button>
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            {form.tiers.map((tier,i) => (
-              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr auto", gap:10, background:"var(--bg3)", padding:16, borderRadius:10, border:"1px solid var(--border)" }}>
-                <Input label="Tier Name" value={tier.name} onChange={e=>updateTier(i,"name",e.target.value)} placeholder="e.g. VIP" />
-                <Input label="Price (₦)" type="number" value={tier.price} onChange={e=>updateTier(i,"price",e.target.value)} placeholder="15000" />
-                <Input label="Capacity" type="number" value={tier.total} onChange={e=>updateTier(i,"total",e.target.value)} placeholder="200" />
-                <div style={{ display:"flex", alignItems:"flex-end" }}>
-                  <button onClick={()=>removeTier(i)} disabled={form.tiers.length===1} style={{ width:38, height:38, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--red)", borderRadius:8, cursor:"pointer", fontSize:18 }}>×</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <button onClick={handle} disabled={!valid||saving} style={{ width:"100%", padding:16, background: valid?"var(--gold)":"var(--bg3)", color: valid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: valid?"pointer":"not-allowed", opacity:saving?0.7:1 }}>
-          {saving ? "SAVING..." : "SAVE CHANGES"}
-        </button>
-      </div>
-    </div>
-  );
+  return <EventForm initialForm={prefilled} onSubmit={handle} saving={saving} submitLabel="SAVE CHANGES" pageTitle="EDIT EVENT" pageSubtitle="Changes go live immediately after saving." />;
 }
+
 // ── Validate Page — snap photo → decode QR → confirm attendance ────────────
 function ValidatePage({ ctx }) {
   const { validateTicket } = ctx;
