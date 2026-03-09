@@ -438,8 +438,9 @@ export default function App() {
 
   const register = async (name, email, password, role) => {
     try {
-      const res = await createUserWithEmailAndPassword(auth, email, password);
-      const userData = { name, email, role };
+      const normalizedEmail = email.trim().toLowerCase();
+      const res = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+      const userData = { name: name.trim(), email: normalizedEmail, role };
       await setDoc(doc(db, "users", res.user.uid), userData);
       setCurrentUser({ uid: res.user.uid, ...userData });
       notify(`Account created! Welcome, ${name.split(" ")[0]}!`);
@@ -578,19 +579,48 @@ export default function App() {
 
   const transferTicket = async (ticketId, toEmail) => {
     try {
-      // find user by email
-      const q = query(collection(db, "users"), where("email", "==", toEmail.trim().toLowerCase()));
+      const normalizedEmail = toEmail.trim().toLowerCase();
+
+      // Prevent self-transfer early (no Firestore call needed)
+      if (normalizedEmail === currentUser.email.toLowerCase()) {
+        return { ok: false, msg: "You can't transfer a ticket to yourself." };
+      }
+
+      // Query users by email — requires Firestore rule: allow read: if request.auth != null
+      const q = query(collection(db, "users"), where("email", "==", normalizedEmail));
       const snap = await getDocs(q);
-      if (snap.empty) return { ok: false, msg: "No account found with that email." };
-      const recipient = { id: snap.docs[0].id, ...snap.docs[0].data() };
-      if (recipient.id === currentUser.uid) return { ok: false, msg: "You can't transfer to yourself." };
-      await updateDoc(doc(db, "tickets", ticketId), { userId: recipient.id, userName: recipient.name });
+
+      // Also try original casing in case email was stored non-lowercase
+      let recipientDoc = snap.docs[0];
+      if (!recipientDoc) {
+        const q2 = query(collection(db, "users"), where("email", "==", toEmail.trim()));
+        const snap2 = await getDocs(q2);
+        recipientDoc = snap2.docs[0];
+      }
+
+      if (!recipientDoc) {
+        return { ok: false, msg: "No StagePro account found with that email address." };
+      }
+
+      const recipient = { id: recipientDoc.id, ...recipientDoc.data() };
+      if (recipient.id === currentUser.uid) {
+        return { ok: false, msg: "You can't transfer a ticket to yourself." };
+      }
+
+      await updateDoc(doc(db, "tickets", ticketId), {
+        userId: recipient.id,
+        userName: recipient.name,
+      });
+
       setTickets(prev => prev.filter(t => t.id !== ticketId));
       notify(`Ticket transferred to ${recipient.name}!`);
       return { ok: true };
     } catch (err) {
-      console.error(err);
-      return { ok: false, msg: "Transfer failed. Try again." };
+      console.error("Transfer error:", err);
+      if (err.code === "permission-denied") {
+        return { ok: false, msg: "Permission denied. Make sure your Firestore rules allow reading users." };
+      }
+      return { ok: false, msg: "Transfer failed. Please try again." };
     }
   };
 
@@ -1416,10 +1446,15 @@ function DashboardPage({ ctx }) {
   const { events, tickets, currentUser, deleteEvent } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
   const myEvents = events.filter(e => e.organizer === currentUser.uid);
-  const revenue = tickets.reduce((s,t) => s+t.price, 0);
-  const totalSold = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.sold,0), 0);
-  const totalCap = myEvents.reduce((s,e) => s+e.tiers.reduce((ss,t) => ss+t.total,0), 0);
-  const totalCheckedIn = tickets.filter(t => t.used).length;
+  const myEventIds = new Set(myEvents.map(e => e.id));
+  const myTickets = tickets.filter(t => myEventIds.has(t.eventId));
+
+  // Use tier.sold from event docs as the source of truth for sold counts (more reliable than ticket docs)
+  const totalSold = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.sold||0), 0), 0);
+  const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
+  const revenue   = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.sold||0) * (t.price||0), 0), 0);
+  // Check-ins come from ticket docs (only place used:true is stored)
+  const totalCheckedIn = myTickets.filter(t => t.used).length;
 
   const handleDelete = async (event) => {
     await deleteEvent(event.id);
@@ -1473,13 +1508,14 @@ function DashboardPage({ ctx }) {
         {myEvents.length===0 ? (
           <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
         ) : myEvents.map((event, i) => {
-          const sold = event.tiers.reduce((s,t) => s+t.sold, 0);
-          const cap = event.tiers.reduce((s,t) => s+t.total, 0);
-          const rev = event.tiers.reduce((s,t) => s+t.sold*t.price, 0);
+          const sold = event.tiers.reduce((s,t) => s + (t.sold||0), 0);
+          const cap = event.tiers.reduce((s,t) => s + (t.total||0), 0);
+          const rev = event.tiers.reduce((s,t) => s + (t.sold||0) * (t.price||0), 0);
           const pct = cap ? Math.round((sold/cap)*100) : 0;
           const eventTickets = tickets.filter(t => t.eventId === event.id);
           const checkedIn = eventTickets.filter(t => t.used).length;
-          const checkInPct = eventTickets.length ? Math.round((checkedIn/eventTickets.length)*100) : 0;
+          // Use sold (from event tiers) as denominator so check-in matches tickets sold stat
+          const checkInPct = sold ? Math.round((checkedIn/sold)*100) : 0;
           return (
             <div key={event.id} style={{ padding:"20px 24px", borderBottom: i<myEvents.length-1?"1px solid var(--border)":"none" }}>
               <div style={{ display:"flex", alignItems:"center", gap:20, flexWrap:"wrap" }}>
@@ -1506,7 +1542,7 @@ function DashboardPage({ ctx }) {
                   <div style={{ height:4, background:"var(--border)", borderRadius:2, marginBottom:2 }}>
                     <div style={{ height:"100%", width:`${checkInPct}%`, background:"var(--green)", borderRadius:2, transition:"width 0.4s" }} />
                   </div>
-                  <div style={{ fontSize:12, fontFamily:"DM Mono", color:"var(--muted)" }}>{checkedIn}/{eventTickets.length}</div>
+                  <div style={{ fontSize:12, fontFamily:"DM Mono", color:"var(--muted)" }}>{checkedIn}/{sold}</div>
                 </div>
                 <div style={{ textAlign:"right", minWidth:90 }}>
                   <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(rev)}</div>
