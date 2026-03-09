@@ -218,45 +218,76 @@ function useTheme() {
 }
 
 // ── Shared components ──────────────────────────────────────────────────────
-// ── ShareButton — clipboard with WhatsApp fallback + visible URL modal ──────
-function ShareButton({ url, label = "Copy Link", onClick, small }) {
+// ── ShareButton — works on iOS Safari, Android, and desktop ─────────────────
+function ShareButton({ url, label = "Copy Link", small, stopProp }) {
   const [state, setState] = useState("idle"); // idle | copied | modal
 
-  const handle = async (e) => {
-    if (onClick) onClick(e);
-    // Try native share sheet first (mobile)
+  const handle = (e) => {
+    e.stopPropagation(); // always stop — button may be inside a clickable card
+    // Native share sheet (Android Chrome, iOS Safari 12.1+)
     if (navigator.share) {
-      try { await navigator.share({ url }); return; } catch {}
+      navigator.share({ title: "StagePro Ticket", url })
+        .catch(() => {}); // user cancelled — do nothing
+      return;
     }
-    // Try clipboard
-    try {
-      await navigator.clipboard.writeText(url);
-      setState("copied");
-      setTimeout(() => setState("idle"), 2000);
-    } catch {
-      // Clipboard blocked — show modal with URL so user can copy manually
-      setState("modal");
+    // Clipboard API
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(url)
+        .then(() => { setState("copied"); setTimeout(() => setState("idle"), 2500); })
+        .catch(() => setState("modal"));
+      return;
     }
+    // Fallback — show modal with the URL
+    setState("modal");
   };
 
   return (
     <>
-      <button onClick={handle} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color: state==="copied"?"var(--green)":"var(--text)", padding: small?"6px 14px":"8px 14px", borderRadius:8, cursor:"pointer", fontSize: small?12:13, display:"flex", alignItems:"center", gap:6, transition:"color 0.2s" }}>
-        {state==="copied" ? "✅ Copied!" : `🔗 ${label}`}
+      <button
+        onClick={handle}
+        style={{ background:"var(--bg3)", border:"1px solid var(--border)", color: state==="copied" ? "var(--green)" : "var(--text)", padding: small ? "5px 12px" : "8px 14px", borderRadius:8, cursor:"pointer", fontSize: small ? 12 : 13, display:"flex", alignItems:"center", gap:6, transition:"color 0.2s", whiteSpace:"nowrap" }}
+      >
+        {state === "copied" ? "✅ Copied!" : `🔗 ${label}`}
       </button>
-      {state==="modal" && (
-        <div onClick={() => setState("idle")} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, width:"100%", maxWidth:480, animation:"fadeUp 0.3s ease" }}>
-            <h3 style={{ fontFamily:"Bebas Neue", fontSize:24, marginBottom:8 }}>SHARE LINK</h3>
-            <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>Copy the link below or share directly to WhatsApp.</p>
+
+      {state === "modal" && (
+        <div
+          onClick={e => { e.stopPropagation(); setState("idle"); }}
+          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.8)", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, width:"100%", maxWidth:460, animation:"fadeUp 0.3s ease" }}
+          >
+            <h3 style={{ fontFamily:"Bebas Neue", fontSize:26, marginBottom:8 }}>SHARE LINK</h3>
+            <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>Tap the link to select it, then copy — or share directly to WhatsApp.</p>
+            {/* URL input — tap to select all */}
             <div style={{ display:"flex", gap:8, marginBottom:16 }}>
-              <input readOnly value={url} onClick={e => e.target.select()} style={{ flex:1, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 14px", color:"var(--text)", fontSize:13, fontFamily:"DM Mono", outline:"none" }} />
-              <button onClick={() => { try { navigator.clipboard.writeText(url); setState("copied"); } catch {} }} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"10px 16px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>Copy</button>
+              <input
+                readOnly value={url}
+                onFocus={e => e.target.select()}
+                onClick={e => e.target.select()}
+                style={{ flex:1, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:12, fontFamily:"DM Mono", outline:"none", minWidth:0 }}
+              />
+              <button
+                onClick={() => {
+                  if (navigator.clipboard) {
+                    navigator.clipboard.writeText(url).then(() => setState("copied")).catch(() => {});
+                  }
+                }}
+                style={{ background:"var(--gold)", border:"none", color:"#000", padding:"10px 16px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap", flexShrink:0 }}
+              >Copy</button>
             </div>
-            <a href={`https://wa.me/?text=${encodeURIComponent(url)}`} target="_blank" rel="noopener noreferrer" style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, background:"#25D366", color:"#fff", padding:"12px 20px", borderRadius:10, fontWeight:700, fontSize:14, marginBottom:12 }}>
-              <span style={{ fontSize:18 }}>📱</span> Share on WhatsApp
+            {/* WhatsApp */}
+            <a
+              href={`https://wa.me/?text=${encodeURIComponent(url)}`}
+              target="_blank" rel="noopener noreferrer"
+              onClick={e => e.stopPropagation()}
+              style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, background:"#25D366", color:"#fff", padding:"13px 20px", borderRadius:10, fontWeight:700, fontSize:14, marginBottom:12, textDecoration:"none" }}
+            >
+              <span style={{ fontSize:20 }}>📱</span> Share on WhatsApp
             </a>
-            <button onClick={() => setState("idle")} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Close</button>
+            <button onClick={e => { e.stopPropagation(); setState("idle"); }} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:10, borderRadius:8, cursor:"pointer", fontSize:13 }}>Close</button>
           </div>
         </div>
       )}
@@ -361,16 +392,19 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       setEventsLoading(true);
+      // Cleanup seed events separately — don't let failures block the fetch
       try {
-        // Delete legacy seed events if they still exist in Firestore
         for (const id of ["evt-001", "evt-002", "evt-003"]) {
           const ref = doc(db, "events", id);
           const snap = await getDoc(ref);
           if (snap.exists()) await deleteDoc(ref);
         }
+      } catch (err) { console.warn("Seed cleanup skipped:", err.message); }
+      // Always fetch events regardless of cleanup result
+      try {
         const snapshot = await getDocs(collection(db, "events"));
         setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) { console.error(err); }
+      } catch (err) { console.error("Events fetch failed:", err); }
       setEventsLoading(false);
     };
     init();
@@ -1307,7 +1341,7 @@ function MyTicketsPage({ ctx }) {
                 <div style={{ textAlign:"center" }}>
                   <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all", marginBottom:4 }}>{ticket.id}</div>
                   <div style={{ fontSize:12, color:"var(--muted)" }}>Scan QR code at entrance — or share your ticket link:</div>
-                  <ShareButton url={`${window.location.origin}/ticket/${ticket.id}`} label="Copy ticket link" onClick={e => e.stopPropagation()} small />
+                  <ShareButton url={`${window.location.origin}/ticket/${ticket.id}`} label="Copy ticket link" small />
                 </div>
               </div>
             )}
@@ -1499,7 +1533,7 @@ function CreateEventPage({ ctx }) {
           </div>
         </div>
         <button onClick={handle} disabled={!valid||saving} style={{ width:"100%", padding:16, background: valid?"var(--gold)":"var(--bg3)", color: valid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: valid?"pointer":"not-allowed", opacity: saving?0.7:1 }}>
-          {saving?"SAVING TO FIREBASE...":"PUBLISH EVENT"}
+          {saving?"CREATING EVENT...":"PUBLISH EVENT"}
         </button>
       </div>
     </div>
