@@ -415,15 +415,30 @@ export default function App() {
     if (!currentUser) { setTickets([]); return; }
     const load = async () => {
       try {
-        const q = currentUser.role === "organizer"
-          ? collection(db, "tickets")
-          : query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
-        const snap = await getDocs(q);
-        setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) { console.error(err); }
+        if (currentUser.role === "organizer") {
+          // Organizer: fetch tickets for each of their events by eventId
+          // (full collection scan is blocked by Firestore rules)
+          const myEventIds = events.filter(e => e.organizer === currentUser.uid).map(e => e.id);
+          if (myEventIds.length === 0) { setTickets([]); return; }
+          // Firestore "in" query supports up to 30 values; chunk if needed
+          const chunks = [];
+          for (let i = 0; i < myEventIds.length; i += 30) chunks.push(myEventIds.slice(i, i + 30));
+          const allTickets = [];
+          for (const chunk of chunks) {
+            const q = query(collection(db, "tickets"), where("eventId", "in", chunk));
+            const snap = await getDocs(q);
+            snap.docs.forEach(d => allTickets.push({ id: d.id, ...d.data() }));
+          }
+          setTickets(allTickets);
+        } else {
+          const q = query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
+          const snap = await getDocs(q);
+          setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }
+      } catch (err) { console.error("Tickets fetch error:", err); }
     };
     load();
-  }, [currentUser]);
+  }, [currentUser, events]);
 
   const login = async (email, password) => {
     try {
@@ -497,11 +512,19 @@ export default function App() {
     } catch (err) {
       console.warn("Could not update sold count (non-fatal):", err.message);
     }
-    // Update local state
-    setTickets(prev => [...prev, ...newTickets]);
-    setEvents(prev => prev.map(e => e.id !== eventId ? e : {
-      ...e, tiers: e.tiers.map(t => ({ ...t, sold: (t.sold || 0) + (cartSelections[t.id] || 0) })),
-    }));
+    // Step 3 — re-fetch the event from Firestore to get authoritative sold counts
+    try {
+      const freshSnap = await getDoc(doc(db, "events", eventId));
+      if (freshSnap.exists()) {
+        const freshEvent = { id: freshSnap.id, ...freshSnap.data() };
+        setEvents(prev => prev.map(e => e.id !== eventId ? e : freshEvent));
+      }
+    } catch (err) {
+      // Fallback to optimistic local update
+      setEvents(prev => prev.map(e => e.id !== eventId ? e : {
+        ...e, tiers: e.tiers.map(t => ({ ...t, sold: (t.sold || 0) + (cartSelections[t.id] || 0) })),
+      }));
+    }
     notify(`🎉 ${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
     return true;
   };
@@ -626,7 +649,14 @@ export default function App() {
 
   if (authLoading) return <><style>{STYLE}</style><Spinner /></>;
 
-  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket };
+  const refreshEvents = async () => {
+    try {
+      const snapshot = await getDocs(collection(db, "events"));
+      setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) { console.error(err); }
+  };
+
+  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents };
 
   return (
     <BrowserRouter>
@@ -1443,7 +1473,7 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { events, tickets, currentUser, deleteEvent } = ctx;
+  const { events, tickets, currentUser, deleteEvent, refreshEvents } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
   const myEvents = events.filter(e => e.organizer === currentUser.uid);
   const myEventIds = new Set(myEvents.map(e => e.id));
@@ -1480,7 +1510,10 @@ function DashboardPage({ ctx }) {
 
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:40 }}>
         <h1 style={{ fontSize:48 }}>DASHBOARD</h1>
-        <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
+        <div style={{ display:"flex", gap:10 }}>
+          <button onClick={refreshEvents} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 16px", borderRadius:10, cursor:"pointer", fontSize:13 }}>↻ Refresh</button>
+          <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
+        </div>
       </div>
 
       {/* Stats */}
