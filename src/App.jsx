@@ -187,6 +187,7 @@ const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
 // ── Global styles ──────────────────────────────────────────────────────────
 const STYLE = `
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+  @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
@@ -289,7 +290,7 @@ function ShareButton({ url, label = "Copy Link", small, stopProp }) {
         onClick={handle}
         style={{ background:"var(--bg3)", border:"1px solid var(--border)", color: state==="copied" ? "var(--green)" : "var(--text)", padding: small ? "5px 12px" : "8px 14px", borderRadius:8, cursor:"pointer", fontSize: small ? 12 : 13, display:"flex", alignItems:"center", gap:6, transition:"color 0.2s", whiteSpace:"nowrap" }}
       >
-        {state === "copied" ? "✅ Copied!" : `🔗 ${label}`}
+        {state === "copied" ? "Copied!" : `${label}`}
       </button>
 
       {state === "modal" && (
@@ -327,7 +328,7 @@ function ShareButton({ url, label = "Copy Link", small, stopProp }) {
               onClick={e => e.stopPropagation()}
               style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, background:"#25D366", color:"#fff", padding:"13px 20px", borderRadius:10, fontWeight:700, fontSize:14, marginBottom:12, textDecoration:"none" }}
             >
-              <span style={{ fontSize:20 }}>📱</span> Share on WhatsApp
+              <i className="fa-brands fa-whatsapp" style={{marginRight:8,fontSize:18}} /> Share on WhatsApp
             </a>
             <button onClick={e => { e.stopPropagation(); setState("idle"); }} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:10, borderRadius:8, cursor:"pointer", fontSize:13 }}>Close</button>
           </div>
@@ -566,7 +567,7 @@ export default function App() {
         ...e, tiers: e.tiers.map(t => ({ ...t, sold: (t.sold || 0) + (cartSelections[t.id] || 0) })),
       }));
     }
-    notify(`🎉 ${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
+    notify(`${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
     return true;
   };
 
@@ -718,7 +719,7 @@ export default function App() {
         createdAt: new Date().toISOString(),
       };
       const ref = await addDoc(collection(db, "reviews"), reviewData);
-      notify("Review submitted! Thanks 🙏");
+      notify("Review submitted! Thanks");
       return { ok: true, id: ref.id };
     } catch (err) {
       console.error(err);
@@ -727,7 +728,33 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview };
+  const joinWaitlist = async (eventId, tierId) => {
+    try {
+      // Check if already on waitlist
+      const q = query(collection(db, "waitlist"),
+        where("eventId","==",eventId),
+        where("tierId","==",tierId),
+        where("userId","==",currentUser.uid)
+      );
+      const existing = await getDocs(q);
+      if (!existing.empty) return { ok: false, msg: "You're already on the waitlist for this tier." };
+      const event = events.find(e => e.id === eventId);
+      const tier = event?.tiers?.find(t => t.id === tierId);
+      await addDoc(collection(db, "waitlist"), {
+        eventId, tierId, tierName: tier?.name||"",
+        eventTitle: event?.title||"",
+        userId: currentUser.uid, userName: currentUser.name, userEmail: currentUser.email,
+        joinedAt: new Date().toISOString(), notified: false,
+      });
+      notify("You're on the waitlist! We'll notify you if a spot opens.");
+      return { ok: true };
+    } catch (err) {
+      console.error(err);
+      return { ok: false, msg: "Failed to join waitlist." };
+    }
+  };
+
+  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
 
   return (
     <BrowserRouter>
@@ -750,6 +777,9 @@ export default function App() {
           <Route path="/event/:eventId/reviews" element={<ReviewsPage ctx={ctx} />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/cookies" element={<CookiesPage />} />
+          <Route path="/help" element={<HelpPage />} />
+          <Route path="/contact" element={<ContactPage />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>
@@ -778,8 +808,8 @@ function Footer() {
           {/* Social icons */}
           <div style={{ display:"flex", gap:10 }}>
             {[
-              { label:"Twitter / X", icon:"𝕏", href:"#" },
-              { label:"Instagram", icon:"📸", href:"#" },
+              { label:"Twitter / X", icon:<i className="fa-brands fa-x-twitter" />, href:"#" },
+              { label:"Instagram", icon:<i className="fa-brands fa-instagram" />, href:"#" },
               { label:"Facebook", icon:"f", href:"#" },
             ].map(s => (
               <a key={s.label} href={s.href} title={s.label} style={{ width:36, height:36, borderRadius:8, background:"var(--bg3)", border:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:14, fontWeight:700, color:"var(--muted)", transition:"all 0.2s" }}
@@ -820,12 +850,14 @@ function Footer() {
         <div>
           <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>SUPPORT</div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            {[["Help Centre","#"],["Contact Us","#"]].map(([label, href]) => (
-              <a key={label} href={href} style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
-                onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
-                onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
-              >{label}</a>
-            ))}
+            <Link to="/help" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+              onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+              onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+            >Help Centre</Link>
+            <Link to="/contact" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+              onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+              onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+            >Contact Us</Link>
             <Link to="/terms" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
@@ -844,19 +876,15 @@ function Footer() {
       {/* Bottom bar */}
       <div style={{ maxWidth:1200, margin:"0 auto", padding:"20px 32px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
         <p style={{ color:"var(--muted)", fontSize:13 }}>
-          © {year} StagePro. All rights reserved. Made in Nigeria 🇳🇬
+          © {year} StagePro. All rights reserved. Made in Nigeria
         </p>
         <div style={{ display:"flex", gap:20 }}>
-          {[["Terms","/terms"],["Privacy","/privacy"]].map(([label, href]) => (
+          {[["Terms","/terms"],["Privacy","/privacy"],["Cookies","/cookies"]].map(([label, href]) => (
             <Link key={label} to={href} style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >{label}</Link>
           ))}
-          <a href="#" style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
-            onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
-            onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
-          >Cookies</a>
         </div>
       </div>
     </footer>
@@ -895,7 +923,7 @@ function TicketPage({ ctx }) {
 
   if (!ticket) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh", gap:16, padding:24, textAlign:"center" }}>
-      <div style={{ fontSize:64 }}>❌</div>
+      <div style={{ fontSize:64 }}><i className="fa-solid fa-circle-xmark" style={{color:"var(--red)"}} /></div>
       <h2 style={{ fontFamily:"Bebas Neue", fontSize:40, color:"var(--red)" }}>TICKET NOT FOUND</h2>
       <p style={{ color:"var(--muted)" }}>This ticket ID does not exist in our system.</p>
     </div>
@@ -913,7 +941,7 @@ function TicketPage({ ctx }) {
         background: alreadyUsed ? "rgba(232,64,64,0.1)" : "rgba(61,220,132,0.1)",
         border: `2px solid ${alreadyUsed ? "var(--red)" : "var(--green)"}`,
       }}>
-        <div style={{ fontSize:48, marginBottom:8 }}>{alreadyUsed ? "❌" : "✅"}</div>
+        <div style={{ fontSize:48, marginBottom:8 }}>{alreadyUsed ? <i className="fa-solid fa-circle-xmark" style={{color:"var(--red)"}} /> : <i className="fa-solid fa-circle-check" style={{color:"var(--green)"}} />}</div>
         <div style={{ fontFamily:"Bebas Neue", fontSize:36, color: alreadyUsed ? "var(--red)" : "var(--green)" }}>
           {alreadyUsed ? "TICKET USED" : "VALID TICKET"}
         </div>
@@ -930,12 +958,12 @@ function TicketPage({ ctx }) {
         </div>
         <div style={{ padding:"20px 24px", display:"grid", gap:16 }}>
           {[
-            ["🎫 Tier", ticket.tierName],
-            ["📅 Date", fmtDate(ticket.eventDate)],
-            ["🕐 Time", ticket.eventTime],
-            ["📍 Venue", ticket.venue],
-            ["👤 Holder", ticket.userName],
-            ["💰 Price", fmt(ticket.price)],
+            ["Tier", ticket.tierName],
+            ["Date", fmtDate(ticket.eventDate)],
+            ["Time", ticket.eventTime],
+            ["Venue", ticket.venue],
+            ["Holder", ticket.userName],
+            ["Price", fmt(ticket.price)],
           ].map(([label, value]) => (
             <div key={label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:14 }}>
               <span style={{ color:"var(--muted)" }}>{label}</span>
@@ -956,7 +984,7 @@ function TicketPage({ ctx }) {
           disabled={validating}
           style={{ width:"100%", padding:18, background:"var(--green)", color:"#000", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:24, letterSpacing:2, cursor: validating?"not-allowed":"pointer", opacity: validating?0.7:1, marginBottom:12 }}
         >
-          {validating ? "VALIDATING..." : "✓ MARK AS USED — GRANT ENTRY"}
+          {validating ? "VALIDATING..." : "MARK AS USED — GRANT ENTRY"}
         </button>
       )}
 
@@ -964,7 +992,7 @@ function TicketPage({ ctx }) {
       {result && (
         <div style={{ background: result.ok?"rgba(61,220,132,0.1)":"rgba(232,64,64,0.1)", border:`1px solid ${result.ok?"var(--green)":"var(--red)"}`, borderRadius:12, padding:20, textAlign:"center", animation:"fadeUp 0.3s ease", marginBottom:12 }}>
           <div style={{ fontFamily:"Bebas Neue", fontSize:28, color: result.ok?"var(--green)":"var(--red)" }}>
-            {result.ok ? "✅ ENTRY GRANTED" : "❌ " + result.msg}
+            {result.ok ? <><i className="fa-solid fa-circle-check" style={{marginRight:8}} />ENTRY GRANTED</> : <><i className="fa-solid fa-circle-xmark" style={{marginRight:8}} />{result.msg}</>}
           </div>
         </div>
       )}
@@ -972,7 +1000,7 @@ function TicketPage({ ctx }) {
       {/* Organizer: already used notice */}
       {isOrganizer && alreadyUsed && (
         <div style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", borderRadius:12, padding:20, textAlign:"center", marginBottom:12 }}>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--red)" }}>⛔ DO NOT ALLOW ENTRY</div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
           <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>This ticket was already used for entry</div>
         </div>
       )}
@@ -1000,12 +1028,54 @@ function HomePage({ ctx }) {
   const { events, eventsLoading } = ctx;
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
-  const cats = ["All", "Concert", "Festival", "Sports"];
+  const [showFilters, setShowFilters] = useState(false);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo]     = useState("");
+  const [priceMin, setPriceMin] = useState("");
+  const [priceMax, setPriceMax] = useState("");
+  const [location, setLocation] = useState("");
+  const [sortBy, setSortBy]     = useState("date"); // date | price | name
+
+  const cats = ["All", "Concert", "Festival", "Sports", "Comedy", "Conference"];
+
+  const hasAdvanced = dateFrom || dateTo || priceMin || priceMax || location;
+
+  const clearAll = () => {
+    setSearch(""); setFilter("All");
+    setDateFrom(""); setDateTo("");
+    setPriceMin(""); setPriceMax("");
+    setLocation(""); setSortBy("date");
+  };
+
   const filtered = events
     .filter(e => filter === "All" || e.category === filter)
     .filter(e => {
       const q = search.toLowerCase();
       return !q || e.title.toLowerCase().includes(q) || e.venue.toLowerCase().includes(q) || (e.subtitle||"").toLowerCase().includes(q);
+    })
+    .filter(e => {
+      if (location) {
+        const l = location.toLowerCase();
+        return e.venue.toLowerCase().includes(l) || (e.city||"").toLowerCase().includes(l);
+      }
+      return true;
+    })
+    .filter(e => {
+      if (dateFrom && e.date < dateFrom) return false;
+      if (dateTo   && e.date > dateTo)   return false;
+      return true;
+    })
+    .filter(e => {
+      const minPrice = Math.min(...e.tiers.map(t => Number(t.price)));
+      if (priceMin && minPrice < Number(priceMin)) return false;
+      if (priceMax && minPrice > Number(priceMax)) return false;
+      return true;
+    })
+    .sort((a,b) => {
+      if (sortBy === "date")  return new Date(a.date) - new Date(b.date);
+      if (sortBy === "price") return Math.min(...a.tiers.map(t=>t.price)) - Math.min(...b.tiers.map(t=>t.price));
+      if (sortBy === "name")  return a.title.localeCompare(b.title);
+      return 0;
     });
 
   if (eventsLoading) return <Spinner />;
@@ -1023,32 +1093,99 @@ function HomePage({ ctx }) {
           Discover concerts, festivals, and sporting events. Secure tickets with instant QR delivery.
         </p>
       </div>
-      {/* Search bar */}
-      <div style={{ position:"relative", maxWidth:560, margin:"0 auto 32px" }}>
-        <span style={{ position:"absolute", left:18, top:"50%", transform:"translateY(-50%)", fontSize:18, pointerEvents:"none" }}>🔍</span>
-        <input
-          value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search events, artists, venues..."
-          style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:100, padding:"14px 20px 14px 48px", color:"var(--text)", fontSize:15, outline:"none", transition:"border 0.2s" }}
-          onFocus={e => e.target.style.borderColor="var(--gold)"}
-          onBlur={e => e.target.style.borderColor="var(--border)"}
-        />
-        {search && (
-          <button onClick={() => setSearch("")} style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:18, lineHeight:1 }}>×</button>
+
+      {/* Search bar + filter toggle */}
+      <div style={{ maxWidth:700, margin:"0 auto 20px" }}>
+        <div style={{ display:"flex", gap:10 }}>
+          <div style={{ position:"relative", flex:1 }}>
+            <i className="fa-solid fa-magnifying-glass" style={{ position:"absolute", left:18, top:"50%", transform:"translateY(-50%)", fontSize:15, color:"var(--muted)", pointerEvents:"none" }} />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search events, artists, venues..."
+              style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:100, padding:"14px 20px 14px 48px", color:"var(--text)", fontSize:15, outline:"none", transition:"border 0.2s" }}
+              onFocus={e => e.target.style.borderColor="var(--gold)"}
+              onBlur={e => e.target.style.borderColor="var(--border)"}
+            />
+            {search && <button onClick={() => setSearch("")} style={{ position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:18 }}>×</button>}
+          </div>
+          <button onClick={() => setShowFilters(p=>!p)}
+            style={{ background: hasAdvanced||showFilters?"var(--gold)":"var(--bg2)", color: hasAdvanced||showFilters?"#000":"var(--muted)", border:"1px solid var(--border)", borderRadius:100, padding:"0 20px", cursor:"pointer", fontWeight:600, fontSize:13, whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:6, transition:"all 0.2s" }}
+          >
+            <i className="fa-solid fa-sliders" style={{marginRight:6}} />Filters {hasAdvanced && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 7px", fontSize:11 }}>{[dateFrom,dateTo,priceMin,priceMax,location].filter(Boolean).length}</span>}
+          </button>
+        </div>
+
+        {/* Advanced filter panel */}
+        {showFilters && (
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginTop:12, animation:"fadeUp 0.25s ease" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:16, marginBottom:16 }}>
+              {/* Location */}
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}><i className="fa-solid fa-location-dot" style={{marginRight:5}} />LOCATION / VENUE</label>
+                <input value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Lagos, Abuja..."
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+              {/* Date from */}
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}><i className="fa-regular fa-calendar" style={{marginRight:5}} />DATE FROM</label>
+                <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+              {/* Date to */}
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}><i className="fa-regular fa-calendar" style={{marginRight:5}} />DATE TO</label>
+                <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+              {/* Price min */}
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}><i className="fa-solid fa-naira-sign" style={{marginRight:5}} />MIN PRICE (₦)</label>
+                <input type="number" min="0" value={priceMin} onChange={e => setPriceMin(e.target.value)} placeholder="0"
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+              {/* Price max */}
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}><i className="fa-solid fa-naira-sign" style={{marginRight:5}} />MAX PRICE (₦)</label>
+                <input type="number" min="0" value={priceMax} onChange={e => setPriceMax(e.target.value)} placeholder="Any"
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+              {/* Sort */}
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}><i className="fa-solid fa-arrow-up-arrow-down" style={{marginRight:5}} />SORT BY</label>
+                <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }}>
+                  <option value="date">Date (Soonest)</option>
+                  <option value="price">Price (Lowest)</option>
+                  <option value="name">Name (A–Z)</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ display:"flex", justifyContent:"flex-end", gap:10 }}>
+              <button onClick={clearAll} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"8px 18px", borderRadius:8, cursor:"pointer", fontSize:13 }}>Clear All</button>
+              <button onClick={() => setShowFilters(false)} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"8px 18px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>Apply</button>
+            </div>
+          </div>
         )}
       </div>
+
       {/* Category filters */}
-      <div style={{ display:"flex", gap:8, marginBottom:40, flexWrap:"wrap" }}>
+      <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
         {cats.map(c => (
           <button key={c} onClick={() => setFilter(c)} style={{ background: filter===c?"var(--gold)":"var(--bg3)", color: filter===c?"#000":"var(--muted)", border:`1px solid ${filter===c?"var(--gold)":"var(--border)"}`, padding:"8px 20px", borderRadius:100, cursor:"pointer", fontWeight:600, fontSize:13, transition:"all 0.2s" }}>{c}</button>
         ))}
       </div>
+
+      {/* Results count */}
+      <div style={{ fontSize:13, color:"var(--muted)", marginBottom:24 }}>
+        {filtered.length} event{filtered.length!==1?"s":""} found
+        {(search||hasAdvanced||filter!=="All") && <button onClick={clearAll} style={{ marginLeft:12, background:"none", border:"none", color:"var(--gold)", cursor:"pointer", fontSize:13, textDecoration:"underline" }}>Clear all filters</button>}
+      </div>
+
       {filtered.length === 0 ? (
         <div style={{ textAlign:"center", padding:"80px 24px", color:"var(--muted)" }}>
-          <div style={{ fontSize:48, marginBottom:16 }}>🔍</div>
+          <div style={{ fontSize:48, marginBottom:16 }}><i className="fa-solid fa-magnifying-glass" style={{color:"var(--muted)"}} /></div>
           <div style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--text)", marginBottom:8 }}>NO RESULTS FOUND</div>
-          <p>Try a different search or browse all events</p>
-          <button onClick={() => { setSearch(""); setFilter("All"); }} style={{ marginTop:16, background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Clear Filters</button>
+          <p>Try adjusting your search or filters</p>
+          <button onClick={clearAll} style={{ marginTop:16, background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Clear Filters</button>
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
@@ -1083,8 +1220,8 @@ function EventCard({ event, index }) {
       <div style={{ padding:"20px 24px 24px" }}>
         <h3 style={{ fontFamily:"Bebas Neue", fontSize:28, lineHeight:1, marginBottom:4 }}>{event.title}</h3>
         <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>{event.subtitle}</p>
-        <div style={{ fontSize:13, marginBottom:4 }}>📅 {fmtDate(event.date)} · {event.time}</div>
-        <div style={{ fontSize:13, color:"var(--muted)", marginBottom:16 }}>📍 {event.venue}</div>
+        <div style={{ fontSize:13, marginBottom:4 }}><i className="fa-regular fa-calendar" style={{marginRight:6,color:"var(--gold)"}} />{fmtDate(event.date)} · {event.time}</div>
+        <div style={{ fontSize:13, color:"var(--muted)", marginBottom:16 }}><i className="fa-solid fa-location-dot" style={{marginRight:6,color:"var(--gold)"}} />{event.venue}</div>
         <div style={{ marginBottom:16 }}>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"var(--muted)", marginBottom:6 }}>
             <span>{totalSold} sold</span><span>{pct}% full</span>
@@ -1140,9 +1277,9 @@ function AuthPage({ mode, ctx }) {
     setResetLoading(true); setResetMsg("");
     try {
       await sendPasswordResetEmail(auth, resetEmail);
-      setResetMsg("✅ Reset email sent! Check your inbox.");
+      setResetMsg("Reset email sent! Check your inbox.");
     } catch {
-      setResetMsg("❌ Could not send reset email. Check the address and try again.");
+      setResetMsg("Could not send reset email. Check the address and try again.");
     }
     setResetLoading(false);
   };
@@ -1161,7 +1298,7 @@ function AuthPage({ mode, ctx }) {
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, display:"flex", flexDirection:"column", gap:16 }}>
           <Input label="Email Address" type="email" value={resetEmail} onChange={e => setResetEmail(e.target.value)} placeholder="you@email.com" />
           {resetMsg && (
-            <div style={{ fontSize:13, textAlign:"center", color: resetMsg.startsWith("✅") ? "var(--green)" : "var(--red)", padding:"10px 14px", background: resetMsg.startsWith("✅") ? "rgba(61,220,132,0.08)" : "rgba(232,64,64,0.08)", borderRadius:8 }}>
+            <div style={{ fontSize:13, textAlign:"center", color: resetMsg.startsWith("Reset") ? "var(--green)" : "var(--red)", padding:"10px 14px", background: resetMsg.startsWith("Reset") ? "rgba(61,220,132,0.08)" : "rgba(232,64,64,0.08)", borderRadius:8 }}>
               {resetMsg}
             </div>
           )}
@@ -1193,7 +1330,7 @@ function AuthPage({ mode, ctx }) {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                 {["customer","organizer"].map(r => (
                   <button key={r} onClick={() => setForm(p=>({...p,role:r}))} style={{ background: form.role===r?"rgba(245,166,35,0.15)":"var(--bg3)", border:`1px solid ${form.role===r?"var(--gold)":"var(--border)"}`, color: form.role===r?"var(--gold)":"var(--muted)", padding:12, borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>
-                    {r==="customer"?"🎟 Attendee":"🎪 Organizer"}
+                    {r==="customer"?<><i className="fa-solid fa-ticket" style={{marginRight:6}} />Attendee</>:<><i className="fa-solid fa-star" style={{marginRight:6}} />Organizer</>}
                   </button>
                 ))}
               </div>
@@ -1223,11 +1360,12 @@ function AuthPage({ mode, ctx }) {
 // ── Event Page ──────────────────────────────────────────────────────────────
 function EventPage({ ctx }) {
   const { eventId } = useParams();
-  const { events, currentUser } = ctx;
+  const { events, currentUser, joinWaitlist } = ctx;
   const navigate = useNavigate();
   const [cart, setCart] = useState({});
   const [event, setEvent] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [waitlistStatus, setWaitlistStatus] = useState({}); // tierId -> "joining"|"joined"|"error"
 
   useEffect(() => {
     const local = events.find(e => e.id === eventId);
@@ -1289,7 +1427,7 @@ function EventPage({ ctx }) {
         <div>
           {/* Info cards — 2-col on desktop, 2-col on mobile too but smaller */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:24 }}>
-            {[["📅","Date",fmtDate(event.date)],["🕐","Time",event.time||"TBA"],["📍","Venue",event.venue],["🎫","Category",event.category]].map(([icon,l,v]) => (
+            {[[<i className="fa-regular fa-calendar" />,"Date",fmtDate(event.date)],[<i className="fa-regular fa-clock" />,"Time",event.time||"TBA"],[<i className="fa-solid fa-location-dot" />,"Venue",event.venue],[<i className="fa-solid fa-tag" />,"Category",event.category]].map(([icon,l,v]) => (
               <div key={l} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 16px" }}>
                 <div style={{ fontSize:13, color:"var(--muted)", marginBottom:4 }}>{icon} {l}</div>
                 <div style={{ fontWeight:600, fontSize:14, lineHeight:1.3 }}>{v}</div>
@@ -1315,21 +1453,37 @@ function EventPage({ ctx }) {
               {event.tiers.map(tier => {
                 const available = tier.total - getSold(event, tier.id);
                 const qty = cart[tier.id]||0;
+                const wStatus = waitlistStatus[tier.id];
                 return (
-                  <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0?"var(--gold)":"var(--border)"}`, borderRadius:12, padding:"14px 16px", transition:"border-color 0.2s" }}>
+                  <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0?"var(--gold)":available===0?"rgba(232,64,64,0.3)":"var(--border)"}`, borderRadius:12, padding:"14px 16px", transition:"border-color 0.2s" }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                       <div>
                         <div style={{ fontWeight:600, fontSize:14, marginBottom:2 }}>{tier.name}</div>
-                        <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{Number(tier.price)===0 ? "FREE" : fmt(tier.price)}</div>
+                        <div style={{ fontFamily:"Bebas Neue", fontSize:22, color: available===0?"var(--muted)":"var(--gold)" }}>{Number(tier.price)===0 ? "FREE" : fmt(tier.price)}</div>
                       </div>
-                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                        <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor: qty===0?"not-allowed":"pointer", fontSize:20, opacity: qty===0?0.4:1 }}>−</button>
-                        <span style={{ fontFamily:"DM Mono", fontSize:18, minWidth:22, textAlign:"center" }}>{qty}</span>
-                        <button onClick={() => adjust(tier.id,1)} disabled={available===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor: available===0?"not-allowed":"pointer", fontSize:20, opacity: available===0?0.4:1 }}>+</button>
-                      </div>
+                      {available > 0 ? (
+                        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                          <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor: qty===0?"not-allowed":"pointer", fontSize:20, opacity: qty===0?0.4:1 }}>−</button>
+                          <span style={{ fontFamily:"DM Mono", fontSize:18, minWidth:22, textAlign:"center" }}>{qty}</span>
+                          <button onClick={() => adjust(tier.id,1)} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor:"pointer", fontSize:20 }}>+</button>
+                        </div>
+                      ) : (
+                        <button
+                          disabled={!currentUser || wStatus==="joined"}
+                          onClick={async () => {
+                            if (!currentUser) { navigate("/login"); return; }
+                            setWaitlistStatus(p=>({...p,[tier.id]:"joining"}));
+                            const res = await joinWaitlist(event.id, tier.id);
+                            setWaitlistStatus(p=>({...p,[tier.id]: res.ok?"joined":"error"}));
+                          }}
+                          style={{ background: wStatus==="joined"?"var(--bg3)":"rgba(232,64,64,0.15)", border:`1px solid ${wStatus==="joined"?"var(--border)":"rgba(232,64,64,0.4)"}`, color: wStatus==="joined"?"var(--muted)":"var(--red)", padding:"8px 14px", borderRadius:8, cursor: wStatus==="joined"?"default":"pointer", fontSize:12, fontWeight:700, whiteSpace:"nowrap" }}
+                        >
+                          {wStatus==="joining" ? "..." : wStatus==="joined" ? <><i className="fa-solid fa-check" style={{marginRight:6}} />On Waitlist</> : <><i className="fa-solid fa-bell" style={{marginRight:6}} />Join Waitlist</>}
+                        </button>
+                      )}
                     </div>
                     <div style={{ fontSize:12, color: available===0?"var(--red)":available<20?"var(--red)":"var(--muted)" }}>
-                      {available===0?"SOLD OUT":`${available} remaining`}
+                      {available===0 ? "SOLD OUT — join waitlist to be notified if tickets become available" : `${available} remaining`}
                     </div>
                   </div>
                 );
@@ -1425,7 +1579,7 @@ function CheckoutPage({ ctx }) {
       {/* Free banner — no payment needed */}
       {isFree && (
         <div style={{ background:"rgba(61,220,132,0.08)", border:"1px solid var(--green)", borderRadius:12, padding:"14px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:12 }}>
-          <span style={{ fontSize:22 }}>🎉</span>
+          <i className="fa-solid fa-champagne-glasses" style={{fontSize:22,color:"var(--gold)"}} />
           <div>
             <div style={{ fontWeight:700, color:"var(--green)", fontSize:14 }}>These tickets are free!</div>
             <div style={{ color:"var(--muted)", fontSize:13 }}>No payment required — just confirm below to get your tickets.</div>
@@ -1436,7 +1590,7 @@ function CheckoutPage({ ctx }) {
       {/* Agreement checkbox */}
       <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:24, cursor:"pointer" }} onClick={() => setAgreed(p=>!p)}>
         <div style={{ width:20, height:20, border:`2px solid ${agreed?"var(--gold)":"var(--border)"}`, borderRadius:4, background: agreed?"var(--gold)":"transparent", display:"flex", alignItems:"center", justifyContent:"center", transition:"all 0.2s", flexShrink:0 }}>
-          {agreed && <span style={{ color:"#000", fontSize:12, fontWeight:900 }}>✓</span>}
+          {agreed && <i className="fa-solid fa-check" style={{ color:"#000", fontSize:11 }} />}
         </div>
         <span style={{ fontSize:13, color:"var(--muted)" }}>
           {isFree ? "I confirm I want to register for this event." : "I agree to the terms and conditions. All sales are final."}
@@ -1500,7 +1654,7 @@ function MyTicketsPage({ ctx }) {
 
   if (tickets.length===0) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh", gap:16, color:"var(--muted)" }}>
-      <div style={{ fontSize:64 }}>🎟</div>
+      <div style={{ fontSize:64, color:"var(--gold)" }}><i className="fa-solid fa-ticket" /></div>
       <h2 style={{ fontFamily:"Bebas Neue", fontSize:36, color:"var(--text)" }}>NO TICKETS YET</h2>
       <p>Purchase tickets to events to see them here</p>
       <Link to="/" style={{ background:"var(--gold)", color:"#000", padding:"10px 24px", borderRadius:8, fontWeight:700 }}>Browse Events</Link>
@@ -1529,7 +1683,7 @@ function MyTicketsPage({ ctx }) {
                     <button
                       onClick={e => { e.stopPropagation(); setTransfering(ticket); }}
                       style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"4px 12px", borderRadius:100, fontSize:12, cursor:"pointer", fontWeight:600 }}
-                    >↗ Transfer</button>
+                    ><i className="fa-solid fa-arrow-up-right-from-square" style={{marginRight:5}} />Transfer</button>
                   )}
                 </div>
               </div>
@@ -1561,21 +1715,38 @@ function MyTicketsPage({ ctx }) {
 function DashboardPage({ ctx }) {
   const { events, tickets, currentUser, deleteEvent, refreshEvents } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [view, setView] = useState("list"); // list | calendar
+  const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const myEvents = events.filter(e => e.organizer === currentUser.uid);
   const myEventIds = new Set(myEvents.map(e => e.id));
   const myTickets = tickets.filter(t => myEventIds.has(t.eventId));
 
-  // Use tier.sold from event docs as the source of truth for sold counts (more reliable than ticket docs)
   const totalSold = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id), 0), 0);
   const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
   const revenue   = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id) * (t.price||0), 0), 0);
-  // Check-ins come from ticket docs (only place used:true is stored)
   const totalCheckedIn = myTickets.filter(t => t.used).length;
 
-  const handleDelete = async (event) => {
-    await deleteEvent(event.id);
-    setConfirmDelete(null);
-  };
+  const handleDelete = async (event) => { await deleteEvent(event.id); setConfirmDelete(null); };
+
+  // Calendar helpers
+  const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const { year, month } = calMonth;
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const prevMonth = () => setCalMonth(p => p.month===0 ? {year:p.year-1,month:11} : {year:p.year,month:p.month-1});
+  const nextMonth = () => setCalMonth(p => p.month===11 ? {year:p.year+1,month:0} : {year:p.year,month:p.month+1});
+
+  // Map event dates to day numbers for this month
+  const eventsByDay = {};
+  myEvents.forEach(e => {
+    const d = new Date(e.date);
+    if (d.getFullYear()===year && d.getMonth()===month) {
+      const day = d.getDate();
+      if (!eventsByDay[day]) eventsByDay[day] = [];
+      eventsByDay[day].push(e);
+    }
+  });
 
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
@@ -1583,7 +1754,7 @@ function DashboardPage({ ctx }) {
       {confirmDelete && (
         <div onClick={() => setConfirmDelete(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, maxWidth:400, width:"100%", animation:"fadeUp 0.3s ease" }}>
-            <div style={{ fontSize:40, marginBottom:16 }}>🗑️</div>
+            <div style={{ fontSize:40, marginBottom:16, color:"var(--red)" }}><i className="fa-solid fa-trash" /></div>
             <h2 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:8 }}>DELETE EVENT?</h2>
             <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>This will permanently delete <strong style={{ color:"var(--text)" }}>{confirmDelete.title}</strong>. This action cannot be undone.</p>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
@@ -1594,10 +1765,16 @@ function DashboardPage({ ctx }) {
         </div>
       )}
 
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:40 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:40, flexWrap:"wrap", gap:12 }}>
         <h1 style={{ fontSize:48 }}>DASHBOARD</h1>
-        <div style={{ display:"flex", gap:10 }}>
-          <button onClick={refreshEvents} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 16px", borderRadius:10, cursor:"pointer", fontSize:13 }}>↻ Refresh</button>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          {/* View toggle */}
+          <div style={{ display:"flex", background:"var(--bg3)", borderRadius:10, padding:4, border:"1px solid var(--border)" }}>
+            {[["list",<><i className="fa-solid fa-list" style={{marginRight:6}} />List</>],["calendar",<><i className="fa-regular fa-calendar" style={{marginRight:6}} />Calendar</>]].map(([id,label]) => (
+              <button key={id} onClick={() => setView(id)} style={{ padding:"7px 14px", borderRadius:7, border:"none", cursor:"pointer", fontSize:13, fontWeight:600, background: view===id?"var(--bg2)":"transparent", color: view===id?"var(--text)":"var(--muted)", transition:"all 0.2s" }}>{label}</button>
+            ))}
+          </div>
+          <button onClick={refreshEvents} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 16px", borderRadius:10, cursor:"pointer", fontSize:13 }}><i className="fa-solid fa-rotate-right" style={{marginRight:6}} />Refresh</button>
           <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
         </div>
       </div>
@@ -1605,24 +1782,78 @@ function DashboardPage({ ctx }) {
       {/* Stats */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:40 }}>
         {[
-          { label:"Total Revenue", value:fmt(revenue), icon:"💰" },
-          { label:"Tickets Sold", value:totalSold.toLocaleString(), icon:"🎟" },
-          { label:"Checked In", value:totalCheckedIn.toLocaleString(), icon:"✅" },
-          { label:"Avg. Fill Rate", value: totalCap?`${Math.round((totalSold/totalCap)*100)}%`:"0%", icon:"📊" },
+          { label:"Total Revenue", value:fmt(revenue), icon:"fa-solid fa-naira-sign" },
+          { label:"Tickets Sold", value:totalSold.toLocaleString(), icon:"fa-solid fa-ticket" },
+          { label:"Checked In", value:totalCheckedIn.toLocaleString(), icon:"fa-solid fa-circle-check" },
+          { label:"Avg. Fill Rate", value: totalCap?`${Math.round((totalSold/totalCap)*100)}%`:"0%", icon:"fa-solid fa-chart-pie" },
         ].map(s => (
           <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:24 }}>
-            <div style={{ fontSize:28, marginBottom:8 }}>{s.icon}</div>
+            <div style={{ fontSize:28, marginBottom:8, color:"var(--gold)" }}><i className={s.icon} /></div>
             <div style={{ fontFamily:"Bebas Neue", fontSize:32, color:"var(--gold)" }}>{s.value}</div>
             <div style={{ fontSize:12, color:"var(--muted)", marginTop:4 }}>{s.label}</div>
           </div>
         ))}
       </div>
 
+      {/* Calendar View */}
+      {view === "calendar" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginBottom:32 }}>
+          {/* Calendar header */}
+          <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <button onClick={prevMonth} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:16 }}>‹</button>
+            <h3 style={{ fontFamily:"Bebas Neue", fontSize:24, letterSpacing:1 }}>{MONTHS[month]} {year}</h3>
+            <button onClick={nextMonth} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:16 }}>›</button>
+          </div>
+          {/* Day headers */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", borderBottom:"1px solid var(--border)" }}>
+            {DAYS.map(d => <div key={d} style={{ padding:"10px 0", textAlign:"center", fontSize:11, color:"var(--muted)", fontWeight:700, letterSpacing:1 }}>{d}</div>)}
+          </div>
+          {/* Calendar grid */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)" }}>
+            {/* Empty cells before first day */}
+            {Array.from({length:firstDay}).map((_,i) => <div key={`e${i}`} style={{ minHeight:80, borderRight:"1px solid var(--border)", borderBottom:"1px solid var(--border)" }} />)}
+            {/* Day cells */}
+            {Array.from({length:daysInMonth}).map((_,i) => {
+              const day = i+1;
+              const dayEvents = eventsByDay[day] || [];
+              const isToday = new Date().getDate()===day && new Date().getMonth()===month && new Date().getFullYear()===year;
+              return (
+                <div key={day} style={{ minHeight:80, borderRight:"1px solid var(--border)", borderBottom:"1px solid var(--border)", padding:6, background: isToday?"rgba(245,166,35,0.05)":"transparent" }}>
+                  <div style={{ fontSize:13, fontWeight: isToday?700:400, color: isToday?"var(--gold)":"var(--text)", marginBottom:4, width:24, height:24, borderRadius:"50%", background: isToday?"rgba(245,166,35,0.15)":"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>{day}</div>
+                  {dayEvents.map(e => (
+                    <Link key={e.id} to={`/event/${e.id}`}
+                      style={{ display:"block", background: e.theme&&THEMES[e.theme]?THEMES[e.theme]:"var(--gold)", backgroundSize:"cover", color:"#000", fontSize:10, fontWeight:700, padding:"2px 6px", borderRadius:4, marginBottom:3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", textDecoration:"none" }}
+                      title={e.title}
+                    >{e.title}</Link>
+                  ))}
+                </div>
+              );
+            })}
+            {/* Trailing empty cells to complete last row */}
+            {Array.from({length:(7 - ((firstDay + daysInMonth) % 7)) % 7}).map((_,i) => <div key={`t${i}`} style={{ minHeight:80, borderRight:"1px solid var(--border)", borderBottom:"1px solid var(--border)" }} />)}
+          </div>
+          {/* Legend */}
+          {myEvents.length > 0 && (
+            <div style={{ padding:"12px 24px", borderTop:"1px solid var(--border)", display:"flex", gap:12, flexWrap:"wrap" }}>
+              {myEvents.filter(e => { const d=new Date(e.date); return d.getFullYear()===year&&d.getMonth()===month; }).map(e => (
+                <div key={e.id} style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:"var(--muted)" }}>
+                  <div style={{ width:10, height:10, borderRadius:2, background: e.theme&&THEMES[e.theme]?THEMES[e.theme]:"var(--gold)" }} />
+                  {e.title}
+                </div>
+              ))}
+              {myEvents.filter(e => { const d=new Date(e.date); return d.getFullYear()===year&&d.getMonth()===month; }).length===0 && (
+                <span style={{ fontSize:12, color:"var(--muted)" }}>No events this month</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Events table */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
         <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
           <h3 style={{ fontSize:22 }}>YOUR EVENTS</h3>
-          <span style={{ fontSize:12, color:"var(--muted)" }}>⬇ CSV downloads buyer list</span>
+          <span style={{ fontSize:12, color:"var(--muted)" }}><i className="fa-solid fa-circle-info" style={{marginRight:4}} />CSV downloads buyer list</span>
         </div>
         {myEvents.length===0 ? (
           <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
@@ -1669,13 +1900,13 @@ function DashboardPage({ ctx }) {
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                   <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
-                  <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>✏️ Edit</Link>
-                  <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>📊 Stats</Link>
+                  <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>
+                  <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>
                   <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
                   <button onClick={() => downloadCSV(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
-                    ⬇ {eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
+                    <i className="fa-solid fa-download" style={{marginRight:5}} />{eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
                   </button>
-                  <button onClick={() => setConfirmDelete(event)} style={{ background:"rgba(232,64,64,0.1)", border:"1px solid rgba(232,64,64,0.3)", color:"var(--red)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}>🗑️</button>
+                  <button onClick={() => setConfirmDelete(event)} style={{ background:"rgba(232,64,64,0.1)", border:"1px solid rgba(232,64,64,0.3)", color:"var(--red)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-trash" /></button>
                 </div>
               </div>
             </div>
@@ -2071,7 +2302,7 @@ function ValidatePage({ ctx }) {
             onClick={() => fileInputRef.current?.click()}
             style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:16, padding:"28px 24px", cursor:"pointer", marginBottom:16, display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}
           >
-            <span style={{ fontSize:52 }}>📷</span>
+            <i className="fa-solid fa-camera" style={{fontSize:52,color:"var(--gold)"}} />
             <span style={{ fontFamily:"Bebas Neue", fontSize:28, letterSpacing:2 }}>SNAP QR CODE</span>
             <span style={{ fontSize:13, fontWeight:500, opacity:0.75 }}>Opens your camera — take a photo of the ticket</span>
           </button>
@@ -2118,7 +2349,7 @@ function ValidatePage({ ctx }) {
           {/* Already used warning */}
           {scannedTicket.used && (
             <div style={{ background:"rgba(232,64,64,0.12)", border:"2px solid var(--red)", borderRadius:12, padding:"14px 20px", marginBottom:16, display:"flex", alignItems:"center", gap:10 }}>
-              <span style={{ fontSize:24 }}>⚠️</span>
+              <i className="fa-solid fa-triangle-exclamation" style={{fontSize:24,color:"var(--gold)"}} />
               <div>
                 <div style={{ fontFamily:"Bebas Neue", fontSize:20, color:"var(--red)" }}>ALREADY USED</div>
                 <div style={{ fontSize:12, color:"var(--muted)" }}>This ticket was already scanned at entry</div>
@@ -2134,12 +2365,12 @@ function ValidatePage({ ctx }) {
             </div>
             <div style={{ padding:"20px 24px", display:"grid", gap:12 }}>
               {[
-                ["👤 Attendee", scannedTicket.userName],
-                ["🎫 Tier", scannedTicket.tierName],
-                ["📅 Date", fmtDate(scannedTicket.eventDate)],
-                ["📍 Venue", scannedTicket.venue],
-                ["💰 Paid", fmt(scannedTicket.price)],
-                ["Status", scannedTicket.used ? "⛔ Already Used" : "✅ Valid"],
+                ["Attendee", scannedTicket.userName],
+                ["Tier", scannedTicket.tierName],
+                ["Date", fmtDate(scannedTicket.eventDate)],
+                ["Venue", scannedTicket.venue],
+                ["Paid", fmt(scannedTicket.price)],
+                ["Status", scannedTicket.used ? <span style={{color:"var(--red)"}}><i className="fa-solid fa-ban" style={{marginRight:5}} />Already Used</span> : <span style={{color:"var(--green)"}}><i className="fa-solid fa-circle-check" style={{marginRight:5}} />Valid</span>],
               ].map(([k, v]) => (
                 <div key={k} style={{ display:"flex", justifyContent:"space-between", fontSize:14 }}>
                   <span style={{ color:"var(--muted)" }}>{k}</span>
@@ -2159,12 +2390,12 @@ function ValidatePage({ ctx }) {
             </button>
           ) : (
             <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:12, padding:"16px 24px", textAlign:"center", marginBottom:10 }}>
-              <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--red)" }}>⛔ DO NOT ALLOW ENTRY</div>
+              <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
               <div style={{ fontSize:13, color:"var(--muted)", marginTop:4 }}>Ticket already redeemed</div>
             </div>
           )}
           <button onClick={reset} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:"12px 24px", cursor:"pointer", fontWeight:600, fontSize:14 }}>
-            📷 Scan Another Ticket
+            <i className="fa-solid fa-camera" style={{marginRight:8}} />Scan Another Ticket
           </button>
         </div>
       )}
@@ -2181,7 +2412,7 @@ function ValidatePage({ ctx }) {
       {stage === "done" && confirmResult && (
         <div style={{ animation:"fadeUp 0.3s ease" }}>
           <div style={{ background: confirmResult.ok ? "rgba(61,220,132,0.1)" : "rgba(232,64,64,0.1)", border:`2px solid ${confirmResult.ok ? "var(--green)" : "var(--red)"}`, borderRadius:16, padding:32, textAlign:"center", marginBottom:16 }}>
-            <div style={{ fontSize:64, marginBottom:12 }}>{confirmResult.ok ? "✅" : "❌"}</div>
+            <div style={{ fontSize:64, marginBottom:12 }}>{confirmResult.ok ? <i className="fa-solid fa-circle-check" style={{color:"var(--green)"}} /> : <i className="fa-solid fa-circle-xmark" style={{color:"var(--red)"}} />}</div>
             <div style={{ fontFamily:"Bebas Neue", fontSize:36, color: confirmResult.ok ? "var(--green)" : "var(--red)", marginBottom:8 }}>
               {confirmResult.ok ? "ENTRY GRANTED" : "ENTRY DENIED"}
             </div>
@@ -2191,7 +2422,7 @@ function ValidatePage({ ctx }) {
             <div style={{ fontSize:13, color:"var(--muted)" }}>{confirmResult.msg}</div>
           </div>
           <button onClick={reset} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, padding:"16px 24px", cursor:"pointer", fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2 }}>
-            📷 SCAN NEXT TICKET
+            <i className="fa-solid fa-camera" style={{marginRight:8}} />SCAN NEXT TICKET
           </button>
         </div>
       )}
@@ -2199,11 +2430,11 @@ function ValidatePage({ ctx }) {
       {/* ── ERROR ── */}
       {stage === "error" && (
         <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:16, padding:32, textAlign:"center", animation:"fadeUp 0.3s ease" }}>
-          <div style={{ fontSize:48, marginBottom:12 }}>❌</div>
+          <div style={{ fontSize:48, marginBottom:12, color:"var(--red)" }}><i className="fa-solid fa-circle-xmark" /></div>
           <div style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--red)", marginBottom:8 }}>SCAN FAILED</div>
           <p style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{errorMsg}</p>
           <button onClick={() => fileInputRef.current?.click()} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, marginBottom:10, width:"100%" }}>
-            📷 TRY AGAIN
+            <i className="fa-solid fa-camera" style={{marginRight:8}} />TRY AGAIN
           </button>
           <button onClick={reset} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>
             ← Back
@@ -2292,15 +2523,15 @@ function AnalyticsPage({ ctx }) {
       {/* KPI cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:16, marginBottom:32 }}>
         {[
-          { label:"Revenue", value:fmt(rev), icon:"💰", color:"var(--gold)" },
-          { label:"Tickets Sold", value:`${sold} / ${cap}`, icon:"🎟", color:"var(--text)" },
-          { label:"Fill Rate", value:`${fillPct}%`, icon:"📊", color: fillPct>80?"var(--red)":"var(--green)" },
-          { label:"Checked In", value:`${checkedIn} / ${sold}`, icon:"✅", color:"var(--green)" },
-          { label:"Check-in Rate", value:`${checkPct}%`, icon:"🚪", color:"var(--text)" },
-          { label:"Avg. Ticket", value: sold ? fmt(Math.round(rev/sold)) : "₦0", icon:"🧾", color:"var(--muted)" },
+          { label:"Revenue", value:fmt(rev), icon:"fa-solid fa-naira-sign", color:"var(--gold)" },
+          { label:"Tickets Sold", value:`${sold} / ${cap}`, icon:"fa-solid fa-ticket", color:"var(--text)" },
+          { label:"Fill Rate", value:`${fillPct}%`, icon:"fa-solid fa-chart-pie", color: fillPct>80?"var(--red)":"var(--green)" },
+          { label:"Checked In", value:`${checkedIn} / ${sold}`, icon:"fa-solid fa-circle-check", color:"var(--green)" },
+          { label:"Check-in Rate", value:`${checkPct}%`, icon:"fa-solid fa-door-open", color:"var(--text)" },
+          { label:"Avg. Ticket", value: sold ? fmt(Math.round(rev/sold)) : "₦0", icon:"fa-solid fa-receipt", color:"var(--muted)" },
         ].map(s => (
           <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"20px 16px" }}>
-            <div style={{ fontSize:24, marginBottom:8 }}>{s.icon}</div>
+            <div style={{ fontSize:24, marginBottom:8, color:s.color }}><i className={s.icon} /></div>
             <div style={{ fontFamily:"Bebas Neue", fontSize:26, color:s.color, lineHeight:1, marginBottom:4 }}>{s.value}</div>
             <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{s.label.toUpperCase()}</div>
           </div>
@@ -2350,6 +2581,9 @@ function AnalyticsPage({ ctx }) {
       {/* Push notification panel */}
       <NotificationSender event={event} eventTickets={eventTickets} onSend={sendNotification} status={notifStatus} />
 
+      {/* Waitlist panel */}
+      <WaitlistPanel eventId={eventId} event={event} />
+
       {/* Recent buyers */}
       {eventTickets.length > 0 && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginTop:24 }}>
@@ -2396,8 +2630,8 @@ function NotificationSender({ event, eventTickets, onSend, status }) {
   const buyers = [...new Set(eventTickets.map(t => t.userId))].length;
 
   const quickMessages = [
-    { label:"🎉 Event Reminder", title:`${event.title} is Tomorrow!`, body:`Don't forget — ${event.title} is happening tomorrow at ${event.venue}. See you there! 🎶` },
-    { label:"📍 Venue Update", title:"Venue Information", body:`Gates open at ${event.time||"the event time"}. Please bring your QR ticket for quick entry at ${event.venue}.` },
+    { label:"Event Reminder", title:`${event.title} is Tomorrow!`, body:`Don't forget — ${event.title} is happening tomorrow at ${event.venue}. See you there!` },
+    { label:"Venue Update", title:"Venue Information", body:`Gates open at ${event.time||"the event time"}. Please bring your QR ticket for quick entry at ${event.venue}.` },
     { label:"⚡ Last Tickets", title:"Almost Sold Out!", body:`Only a few tickets left for ${event.title}. Share with friends before it's too late!` },
   ];
 
@@ -2405,7 +2639,7 @@ function NotificationSender({ event, eventTickets, onSend, status }) {
     <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
       <button onClick={() => setOpen(p=>!p)} style={{ width:"100%", padding:"20px 24px", background:"none", border:"none", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", color:"var(--text)" }}>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-          <span style={{ fontSize:24 }}>🔔</span>
+          <i className="fa-solid fa-bell" style={{fontSize:22,color:"var(--gold)"}} />
           <div style={{ textAlign:"left" }}>
             <div style={{ fontFamily:"Bebas Neue", fontSize:20, letterSpacing:1 }}>SEND NOTIFICATION</div>
             <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Message all {buyers} ticket holder{buyers!==1?"s":""} for this event</div>
@@ -2447,7 +2681,7 @@ function NotificationSender({ event, eventTickets, onSend, status }) {
               <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:14 }}>
                 <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:8 }}>PREVIEW</div>
                 <div style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
-                  <div style={{ width:36, height:36, borderRadius:8, background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>🎪</div>
+                  <div style={{ width:36, height:36, borderRadius:8, background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><i className="fa-solid fa-star" style={{color:"#000",fontSize:16}} /></div>
                   <div>
                     <div style={{ fontWeight:700, fontSize:13, marginBottom:2 }}>{title || "Notification title"}</div>
                     <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.5 }}>{body || "Your message here..."}</div>
@@ -2461,7 +2695,7 @@ function NotificationSender({ event, eventTickets, onSend, status }) {
               disabled={!title || !body || status === "sending" || buyers === 0}
               style={{ background: title&&body&&buyers>0?"var(--gold)":"var(--bg3)", color: title&&body&&buyers>0?"#000":"var(--muted)", border:"none", padding:"13px 20px", borderRadius:10, cursor: title&&body&&buyers>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, transition:"all 0.2s" }}
             >
-              {status === "sending" ? "SENDING..." : status === "sent" ? "✅ SENT!" : status === "error" ? "❌ FAILED" : `🔔 SEND TO ${buyers} ATTENDEE${buyers!==1?"S":""}`}
+              {status === "sending" ? "SENDING..." : status === "sent" ? "SENT!" : status === "error" ? "FAILED" : `SEND TO ${buyers} ATTENDEE${buyers!==1?"S":""}`}
             </button>
             {buyers === 0 && <div style={{ fontSize:12, color:"var(--muted)", textAlign:"center" }}>No ticket holders yet — notifications will be available once tickets are sold.</div>}
           </div>
@@ -2601,7 +2835,7 @@ function ProfilePage({ ctx }) {
           <h1 style={{ fontSize:"clamp(28px,5vw,48px)", lineHeight:1, marginBottom:4 }}>{currentUser.name}</h1>
           <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.email}</div>
           <div style={{ display:"inline-block", marginTop:6, background:"rgba(245,166,35,0.15)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"2px 12px", borderRadius:100, fontSize:12, fontWeight:700 }}>
-            {currentUser.role === "organizer" ? "🎪 Organizer" : "🎟 Attendee"}
+            {currentUser.role === "organizer" ? <><i className="fa-solid fa-star" style={{marginRight:6}} />Organizer</> : <><i className="fa-solid fa-ticket" style={{marginRight:6}} />Attendee</>}
           </div>
         </div>
       </div>
@@ -2610,12 +2844,12 @@ function ProfilePage({ ctx }) {
       {currentUser.role === "customer" && (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:32 }}>
           {[
-            { label:"Events", value:eventsAttended, icon:"🎪" },
-            { label:"Tickets", value:myTickets.length, icon:"🎟" },
-            { label:"Spent", value:fmt(totalSpent), icon:"💰" },
+            { label:"Events", value:eventsAttended, icon:"fa-solid fa-calendar-check" },
+            { label:"Tickets", value:myTickets.length, icon:"fa-solid fa-ticket" },
+            { label:"Spent", value:fmt(totalSpent), icon:"fa-solid fa-naira-sign" },
           ].map(s => (
             <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"16px 12px", textAlign:"center" }}>
-              <div style={{ fontSize:24, marginBottom:6 }}>{s.icon}</div>
+              <div style={{ fontSize:24, marginBottom:6, color:"var(--gold)" }}><i className={s.icon} /></div>
               <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{s.value}</div>
               <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{s.label.toUpperCase()}</div>
             </div>
@@ -2625,7 +2859,7 @@ function ProfilePage({ ctx }) {
 
       {/* Tabs */}
       <div style={{ display:"flex", gap:4, marginBottom:24, background:"var(--bg3)", borderRadius:10, padding:4 }}>
-        {[["info","👤 Account"],["history","🎟 Purchase History"]].map(([id,label]) => (
+        {[["info",<><i className="fa-solid fa-user" style={{marginRight:6}} />Account</>],["history",<><i className="fa-solid fa-clock-rotate-left" style={{marginRight:6}} />Purchase History</>]].map(([id,label]) => (
           <button key={id} onClick={() => setTab(id)} style={{ flex:1, padding:"10px 16px", borderRadius:8, border:"none", cursor:"pointer", fontWeight:600, fontSize:13, background: tab===id?"var(--bg2)":"transparent", color: tab===id?"var(--text)":"var(--muted)", transition:"all 0.2s" }}>{label}</button>
         ))}
       </div>
@@ -2652,7 +2886,7 @@ function ProfilePage({ ctx }) {
           <div style={{ borderTop:"1px solid var(--border)", paddingTop:20 }}>
             <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:12, display:"block" }}>ACCOUNT TYPE</label>
             <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-              <span style={{ fontSize:32 }}>{currentUser.role==="organizer"?"🎪":"🎟"}</span>
+              <span style={{ fontSize:28 }}>{currentUser.role==="organizer"?<i className="fa-solid fa-star" style={{color:"var(--gold)"}} />:<i className="fa-solid fa-ticket" style={{color:"var(--gold)"}} />}</span>
               <div>
                 <div style={{ fontWeight:600, fontSize:15 }}>{currentUser.role==="organizer"?"Event Organizer":"Event Attendee"}</div>
                 <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.role==="organizer"?"You can create and manage events":"You can purchase and manage tickets"}</div>
@@ -2667,7 +2901,7 @@ function ProfilePage({ ctx }) {
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
           {myTickets.length === 0 ? (
             <div style={{ textAlign:"center", padding:"48px 24px", color:"var(--muted)" }}>
-              <div style={{ fontSize:48, marginBottom:12 }}>🎟</div>
+              <div style={{ fontSize:48, marginBottom:12, color:"var(--gold)" }}><i className="fa-solid fa-ticket" /></div>
               <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO TICKETS YET</div>
               <Link to="/" style={{ color:"var(--gold)", fontSize:14 }}>Browse events →</Link>
             </div>
@@ -2752,7 +2986,7 @@ function EventReviewsPreview({ eventId, currentUser, tickets, submitReview }) {
         </div>
         {canReview && !alreadyReviewed && !showForm && (
           <button onClick={() => setShowForm(true)} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>
-            ✍️ Write a Review
+            <i className="fa-solid fa-pen-to-square" style={{marginRight:8}} />Write a Review
           </button>
         )}
       </div>
@@ -2869,7 +3103,7 @@ function ReviewsPage({ ctx }) {
 
       {loading ? <Spinner /> : filtered.length === 0 ? (
         <div style={{ textAlign:"center", padding:"48px 0", color:"var(--muted)" }}>
-          <div style={{ fontSize:48, marginBottom:12 }}>⭐</div>
+          <div style={{ fontSize:48, marginBottom:12, color:"var(--gold)" }}><i className="fa-solid fa-star" /></div>
           <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO REVIEWS YET</div>
         </div>
       ) : (
@@ -2887,6 +3121,101 @@ function ReviewsPage({ ctx }) {
                 <div style={{ color:"var(--gold)", fontSize:18 }}>{"★".repeat(r.rating)}{"☆".repeat(5-r.rating)}</div>
               </div>
               <p style={{ color:"var(--muted)", fontSize:14, lineHeight:1.8 }}>{r.comment}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Waitlist Panel (shown in AnalyticsPage) ───────────────────────────────
+function WaitlistPanel({ eventId, event }) {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [notifying, setNotifying] = useState(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const q = query(collection(db, "waitlist"), where("eventId","==",eventId));
+        const snap = await getDocs(q);
+        setEntries(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>new Date(a.joinedAt)-new Date(b.joinedAt)));
+      } catch {}
+      setLoading(false);
+    };
+    load();
+  }, [open, eventId]);
+
+  const notifyEntry = async (entry) => {
+    setNotifying(entry.id);
+    try {
+      // Save a targeted notification for this user
+      await addDoc(collection(db, "notifications"), {
+        eventId, eventTitle: event.title,
+        title: `A ${entry.tierName} ticket is available!`,
+        body: `Good news — a ticket for ${event.title} (${entry.tierName}) has become available. Grab it before it's gone!`,
+        targetUsers: [entry.userId],
+        sentAt: new Date().toISOString(),
+        readBy: [],
+      });
+      // Mark as notified
+      await updateDoc(doc(db, "waitlist", entry.id), { notified: true });
+      setEntries(prev => prev.map(e => e.id===entry.id ? {...e, notified:true} : e));
+    } catch (err) { console.error(err); }
+    setNotifying(null);
+  };
+
+  const byTier = entries.reduce((acc, e) => {
+    if (!acc[e.tierName]) acc[e.tierName] = [];
+    acc[e.tierName].push(e);
+    return acc;
+  }, {});
+
+  return (
+    <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginTop:16 }}>
+      <button onClick={() => setOpen(p=>!p)} style={{ width:"100%", padding:"20px 24px", background:"none", border:"none", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", color:"var(--text)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <i className="fa-solid fa-clipboard-list" style={{fontSize:22,color:"var(--gold)"}} />
+          <div style={{ textAlign:"left" }}>
+            <div style={{ fontFamily:"Bebas Neue", fontSize:20, letterSpacing:1 }}>WAITLIST</div>
+            <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Attendees waiting for sold-out tiers</div>
+          </div>
+        </div>
+        <span style={{ color:"var(--muted)", fontSize:20, transition:"transform 0.2s", transform: open?"rotate(180deg)":"rotate(0)" }}>▾</span>
+      </button>
+
+      {open && (
+        <div style={{ borderTop:"1px solid var(--border)", padding:24 }}>
+          {loading ? <Spinner /> : entries.length === 0 ? (
+            <div style={{ textAlign:"center", padding:"24px 0", color:"var(--muted)", fontSize:13 }}>No one on the waitlist yet.</div>
+          ) : Object.entries(byTier).map(([tierName, tierEntries]) => (
+            <div key={tierName} style={{ marginBottom:24 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:"var(--gold)", letterSpacing:1, marginBottom:12 }}>{tierName.toUpperCase()} — {tierEntries.length} waiting</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {tierEntries.map((e, i) => (
+                  <div key={e.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"var(--bg3)", borderRadius:10, padding:"12px 16px", flexWrap:"wrap", gap:10 }}>
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ fontSize:11, color:"var(--muted)", fontFamily:"DM Mono" }}>#{i+1}</span>
+                        <span style={{ fontWeight:600, fontSize:13 }}>{e.userName}</span>
+                        {e.notified && <span style={{ fontSize:10, background:"rgba(61,220,132,0.15)", color:"var(--green)", padding:"1px 8px", borderRadius:100, fontWeight:700 }}>NOTIFIED</span>}
+                      </div>
+                      <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>{e.userEmail} · Joined {new Date(e.joinedAt).toLocaleDateString("en-NG")}</div>
+                    </div>
+                    <button
+                      onClick={() => notifyEntry(e)}
+                      disabled={e.notified || notifying===e.id}
+                      style={{ background: e.notified?"var(--bg2)":"var(--gold)", color: e.notified?"var(--muted)":"#000", border:`1px solid ${e.notified?"var(--border)":"var(--gold)"}`, padding:"7px 14px", borderRadius:8, cursor: e.notified?"default":"pointer", fontSize:12, fontWeight:700 }}
+                    >
+                      {notifying===e.id ? "..." : e.notified ? "✓ Notified" : <><i className="fa-solid fa-bell" style={{marginRight:4}} />Notify</>}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>
@@ -3095,5 +3424,365 @@ function PrivacyPage() {
         <p>For privacy-related enquiries or complaints, contact our Data Protection Officer at <span style={{ color:"var(--gold)" }}>privacy@stagepro.ng</span>. If you are unsatisfied with our response, you may lodge a complaint with the Nigeria Data Protection Bureau (NDPB) at <span style={{ color:"var(--gold)" }}>ndpb.gov.ng</span>.</p>
       </LegalSection>
     </LegalPage>
+  );
+}
+
+// ── Cookies Policy Page (/cookies) ────────────────────────────────────────
+function CookiesPage() {
+  return (
+    <LegalPage
+      title="COOKIE POLICY"
+      subtitle={"Last updated: " + new Date().toLocaleDateString("en-NG", { year:"numeric", month:"long", day:"numeric" })}
+    >
+      <LegalSection title="1. What Are Cookies?">
+        <p>Cookies are small text files placed on your device when you visit a website. They are widely used to make websites work efficiently, remember your preferences, and provide information to site owners. StagePro uses browser storage technologies (including localStorage and sessionStorage) that function similarly to cookies to deliver a smooth experience on our platform.</p>
+      </LegalSection>
+
+      <LegalSection title="2. What We Use and Why">
+        <p style={{ marginBottom:12 }}>StagePro uses the following types of browser storage:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:12 }}>
+          <li>
+            <strong style={{ color:"var(--text)" }}>Session Storage — Essential:</strong> We use sessionStorage to temporarily hold your ticket cart while you navigate from an event page to checkout. This data is automatically deleted when you close your browser tab and is never sent to our servers.
+          </li>
+          <li>
+            <strong style={{ color:"var(--text)" }}>Firebase Authentication Tokens — Essential:</strong> When you sign in, Google Firebase stores a secure authentication token in your browser's localStorage. This keeps you signed in between visits without requiring you to re-enter your password each time. Without this, the platform cannot function for signed-in users.
+          </li>
+          <li>
+            <strong style={{ color:"var(--text)" }}>Theme Preference — Functional:</strong> StagePro detects your operating system's light or dark mode preference automatically. No data about this preference is stored on our servers.
+          </li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="3. What We Do NOT Use">
+        <p style={{ marginBottom:12 }}>StagePro does not use:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li>Third-party advertising or tracking cookies</li>
+          <li>Analytics cookies from services such as Google Analytics</li>
+          <li>Social media tracking pixels (e.g. Meta Pixel, Twitter Pixel)</li>
+          <li>Any cookies designed to build profiles of your browsing behaviour across other websites</li>
+        </ul>
+        <p style={{ marginTop:12 }}>We are committed to using only the minimum storage necessary to operate the platform. We do not sell, share, or monetise any data derived from your browser storage.</p>
+      </LegalSection>
+
+      <LegalSection title="4. Third-Party Services">
+        <p>StagePro is built on Google Firebase, which may set its own cookies or local storage entries as part of its authentication and database services. These are governed by Google's Privacy Policy, available at <span style={{ color:"var(--gold)" }}>policies.google.com/privacy</span>. We do not control these entries directly, but they are limited to what is necessary for authentication to function.</p>
+      </LegalSection>
+
+      <LegalSection title="5. Managing and Clearing Storage">
+        <p style={{ marginBottom:12 }}>You can clear all browser storage set by StagePro at any time through your browser settings. The steps vary by browser:</p>
+        <ul style={{ paddingLeft:20, display:"flex", flexDirection:"column", gap:8 }}>
+          <li><strong style={{ color:"var(--text)" }}>Chrome:</strong> Settings → Privacy and Security → Clear Browsing Data → Cookies and other site data</li>
+          <li><strong style={{ color:"var(--text)" }}>Safari:</strong> Settings → Safari → Advanced → Website Data → Remove All Website Data</li>
+          <li><strong style={{ color:"var(--text)" }}>Firefox:</strong> Settings → Privacy & Security → Cookies and Site Data → Clear Data</li>
+        </ul>
+        <p style={{ marginTop:12 }}>Please note that clearing storage will sign you out of StagePro and delete any items currently in your ticket cart.</p>
+      </LegalSection>
+
+      <LegalSection title="6. Your Consent">
+        <p>By using StagePro, you consent to our use of browser storage as described in this policy. Since we only use storage that is strictly necessary for the platform to function, we do not require a separate cookie consent banner. If we introduce any optional or non-essential storage in the future, we will update this policy and seek your explicit consent where required by Nigerian law or applicable international standards.</p>
+      </LegalSection>
+
+      <LegalSection title="7. Changes to This Policy">
+        <p>We may update this Cookie Policy from time to time to reflect changes in our technology or legal requirements. Any changes will be posted on this page with an updated date. We encourage you to review this page periodically.</p>
+      </LegalSection>
+
+      <LegalSection title="8. Contact Us">
+        <p>If you have any questions about our use of cookies or browser storage, please contact us at <span style={{ color:"var(--gold)" }}>privacy@stagepro.ng</span> or visit our <Link to="/contact" style={{ color:"var(--gold)" }}>Contact Us</Link> page.</p>
+      </LegalSection>
+    </LegalPage>
+  );
+}
+
+// ── Help Centre Page (/help) ───────────────────────────────────────────────
+function HelpPage() {
+  const [openFaq, setOpenFaq] = useState(null);
+
+  const faqs = [
+    {
+      category: "BUYING TICKETS",
+      items: [
+        {
+          q: "How do I buy tickets on StagePro?",
+          a: "Browse events on the homepage, select the event you want to attend, choose your ticket tier and quantity, then click 'Proceed to Checkout'. You'll need a StagePro account to complete your purchase. After confirming, your ticket will appear instantly under 'My Tickets'."
+        },
+        {
+          q: "Do I need to print my ticket?",
+          a: "No — StagePro tickets are 100% digital. Simply open the StagePro app or website on your phone, go to 'My Tickets', tap the ticket, and present the QR code at the event entrance for scanning."
+        },
+        {
+          q: "Can I buy tickets for someone else?",
+          a: "Yes. You can purchase tickets and then transfer them to another person's StagePro account. Go to 'My Tickets', tap the ticket you'd like to transfer, and use the 'Transfer' button to send it to their registered email address."
+        },
+        {
+          q: "What payment methods are accepted?",
+          a: "StagePro currently supports ticket reservations through the platform. Payment gateway integration (cards, bank transfer, USSD) is coming soon via Paystack. Free events require no payment at all."
+        },
+        {
+          q: "Is it safe to buy tickets on StagePro?",
+          a: "Yes. All transactions are secured using industry-standard encryption. Your account is protected by Google Firebase Authentication. We never store card details on our servers."
+        },
+      ]
+    },
+    {
+      category: "MY TICKETS",
+      items: [
+        {
+          q: "Where can I find my tickets?",
+          a: "Sign in to your StagePro account and click 'My Tickets' in the navigation bar. All your purchased tickets will be listed there, including past and upcoming events."
+        },
+        {
+          q: "My QR code isn't scanning at the venue — what do I do?",
+          a: "Make sure your screen brightness is turned up fully and that there is no glare. If the QR code still won't scan, ask the organiser to look up your ticket by Ticket ID — you can find it displayed below the QR code on your ticket page. You can also show them the URL: stagepro-phi.vercel.app/ticket/[your-ticket-id]."
+        },
+        {
+          q: "Can I get a refund?",
+          a: "All ticket sales are final unless the event is cancelled or significantly changed by the organiser. If an event you have tickets for is cancelled, the organiser is required to issue a full refund within 14 days. Contact the event organiser directly or reach us at support@stagepro.ng if you need assistance."
+        },
+        {
+          q: "How do I transfer a ticket to someone else?",
+          a: "Go to 'My Tickets', tap the ticket you want to transfer, then tap the 'Transfer' button. Enter the recipient's email address — they must already have a StagePro account. The ticket will be moved to their account instantly."
+        },
+        {
+          q: "What happens if I lose my phone before the event?",
+          a: "Your tickets are stored securely in the cloud, not just on your device. Simply sign in to StagePro on any device using your email and password, and your tickets will be there."
+        },
+      ]
+    },
+    {
+      category: "ACCOUNTS & SECURITY",
+      items: [
+        {
+          q: "How do I create a StagePro account?",
+          a: "Click 'Get Started' on the homepage, enter your full name, email address, and a password. Choose whether you're an Attendee (buying tickets) or an Organiser (creating events), then click 'Create Account'."
+        },
+        {
+          q: "I forgot my password — how do I reset it?",
+          a: "On the login page, click 'Forgot your password?' and enter your registered email address. We'll send you a password reset link. Check your spam folder if you don't see it within a few minutes."
+        },
+        {
+          q: "Can I change my email address?",
+          a: "Email addresses cannot be changed once registered as they are tied to your account identity. If you need to change your email, please contact us at support@stagepro.ng and we will assist you."
+        },
+        {
+          q: "How do I update my display name?",
+          a: "Click your profile avatar (the gold circle with your initial) in the top navigation bar to go to your Profile page. You can update your display name there and save the changes."
+        },
+      ]
+    },
+    {
+      category: "FOR ORGANISERS",
+      items: [
+        {
+          q: "How do I create an event on StagePro?",
+          a: "Register for a StagePro account and choose 'Organiser' as your account type. Once signed in, go to your Dashboard and click '+ Create Event'. Fill in your event details, upload a flyer, set your ticket tiers and pricing, then click 'Publish Event'."
+        },
+        {
+          q: "How do I scan tickets at my event?",
+          a: "Go to the 'Scan' page from your navigation bar. Tap 'Snap QR Code' and point your camera at the attendee's QR code. StagePro will immediately tell you if the ticket is valid and allow you to mark it as used. You can also look up tickets manually by entering the Ticket ID."
+        },
+        {
+          q: "How do I download my buyer list?",
+          a: "On your Dashboard, find the event and click the gold download (⬇) button. A CSV file will be downloaded containing all ticket holders for that event, including names, email addresses, ticket tiers, and purchase dates."
+        },
+        {
+          q: "Can I edit an event after publishing?",
+          a: "Yes. From your Dashboard, click 'Edit' on any event to update its details. Changes go live immediately. Please note that changing ticket prices after tickets have been sold is not recommended and may cause disputes with existing ticket holders."
+        },
+        {
+          q: "How do I notify attendees about my event?",
+          a: "Go to your Dashboard → click '📊 Stats' on the event → scroll to the 'Send Notification' panel. You can write a custom message or use a quick template to notify all ticket holders instantly. They will see it in their notification bell on the StagePro platform."
+        },
+      ]
+    },
+  ];
+
+  return (
+    <div style={{ maxWidth:860, margin:"0 auto", padding:"48px 24px 80px", animation:"fadeUp 0.4s ease" }}>
+      <Link to="/" style={{ color:"var(--muted)", fontSize:14, display:"inline-block", marginBottom:32 }}>← Back</Link>
+
+      <div style={{ marginBottom:56 }}>
+        <div style={{ fontSize:12, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:12, fontWeight:500 }}>Support</div>
+        <h1 style={{ fontSize:"clamp(40px,8vw,72px)", lineHeight:0.95, marginBottom:16 }}>HELP CENTRE</h1>
+        <p style={{ color:"var(--muted)", fontSize:15, maxWidth:560 }}>Find answers to the most common questions about buying tickets, managing your account, and running events on StagePro.</p>
+      </div>
+
+      {/* Quick links */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12, marginBottom:56 }}>
+        {[
+          { icon:<i className="fa-solid fa-ticket" />, label:"Buying Tickets", anchor:"buying-tickets" },
+          { icon:<i className="fa-solid fa-mobile-screen-button" />, label:"My Tickets", anchor:"my-tickets" },
+          { icon:<i className="fa-solid fa-lock" />, label:"Accounts", anchor:"accounts-security" },
+          { icon:<i className="fa-solid fa-star" />, label:"For Organisers", anchor:"for-organisers" },
+        ].map(c => (
+          <a key={c.label} href={`#${c.anchor}`}
+            style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"16px 20px", textDecoration:"none", display:"flex", alignItems:"center", gap:12, transition:"border-color 0.2s, transform 0.2s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor="var(--gold)"; e.currentTarget.style.transform="translateY(-2px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor="var(--border)"; e.currentTarget.style.transform=""; }}
+          >
+            <span style={{ fontSize:28 }}>{c.icon}</span>
+            <span style={{ fontWeight:600, fontSize:14, color:"var(--text)" }}>{c.label}</span>
+          </a>
+        ))}
+      </div>
+
+      {/* FAQ sections */}
+      {faqs.map(section => (
+        <div key={section.category} id={section.category.toLowerCase().replace(/\s+/g,"-")} style={{ marginBottom:48 }}>
+          <h2 style={{ fontFamily:"Bebas Neue", fontSize:26, letterSpacing:2, color:"var(--gold)", marginBottom:20, paddingBottom:12, borderBottom:"1px solid var(--border)" }}>{section.category}</h2>
+          <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+            {section.items.map((item, i) => {
+              const key = `${section.category}-${i}`;
+              const isOpen = openFaq === key;
+              return (
+                <div key={key} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, overflow:"hidden", transition:"border-color 0.2s" }}
+                  onMouseEnter={e => { if (!isOpen) e.currentTarget.style.borderColor="var(--gold-dim)"; }}
+                  onMouseLeave={e => { if (!isOpen) e.currentTarget.style.borderColor="var(--border)"; }}
+                >
+                  <button onClick={() => setOpenFaq(isOpen ? null : key)}
+                    style={{ width:"100%", padding:"18px 24px", background:"none", border:"none", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", gap:16, textAlign:"left" }}
+                  >
+                    <span style={{ fontWeight:600, fontSize:15, color:"var(--text)", lineHeight:1.4 }}>{item.q}</span>
+                    <span style={{ color:"var(--gold)", fontSize:22, flexShrink:0, transition:"transform 0.25s", transform: isOpen?"rotate(45deg)":"rotate(0)" }}>+</span>
+                  </button>
+                  {isOpen && (
+                    <div style={{ padding:"0 24px 20px", color:"var(--muted)", fontSize:14, lineHeight:1.85, animation:"fadeUp 0.2s ease", borderTop:"1px solid var(--border)" }}>
+                      <div style={{ paddingTop:16 }}>{item.a}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* Still need help? */}
+      <div style={{ background:"linear-gradient(135deg,rgba(245,166,35,0.12),rgba(245,166,35,0.04))", border:"1px solid var(--gold-dim)", borderRadius:16, padding:"32px 40px", textAlign:"center" }}>
+        <div style={{ fontSize:40, marginBottom:12, color:"var(--gold)" }}><i className="fa-solid fa-headset" /></div>
+        <h3 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:8 }}>STILL NEED HELP?</h3>
+        <p style={{ color:"var(--muted)", fontSize:14, marginBottom:20 }}>Can't find the answer you're looking for? Our support team is happy to help.</p>
+        <Link to="/contact" style={{ background:"var(--gold)", color:"#000", padding:"12px 32px", borderRadius:10, fontWeight:700, fontSize:15, display:"inline-block" }}>Contact Support →</Link>
+      </div>
+    </div>
+  );
+}
+
+// ── Contact Us Page (/contact) ─────────────────────────────────────────────
+function ContactPage() {
+  const [form, setForm] = useState({ name:"", email:"", subject:"", category:"general", message:"" });
+  const [status, setStatus] = useState("idle"); // idle | sending | sent | error
+  const F = k => e => setForm(p=>({...p,[k]:e.target.value}));
+
+  const handleSubmit = async () => {
+    if (!form.name || !form.email || !form.message) return;
+    setStatus("sending");
+    // Save to Firestore so organizers/admin can view enquiries
+    try {
+      await addDoc(collection(db, "enquiries"), {
+        ...form,
+        submittedAt: new Date().toISOString(),
+        status: "open",
+      });
+      setStatus("sent");
+    } catch {
+      setStatus("error");
+    }
+  };
+
+  const iStyle = { width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"DM Sans" };
+
+  return (
+    <div style={{ maxWidth:860, margin:"0 auto", padding:"48px 24px 80px", animation:"fadeUp 0.4s ease" }}>
+      <Link to="/" style={{ color:"var(--muted)", fontSize:14, display:"inline-block", marginBottom:32 }}>← Back</Link>
+
+      <div style={{ marginBottom:48 }}>
+        <div style={{ fontSize:12, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:12, fontWeight:500 }}>Support</div>
+        <h1 style={{ fontSize:"clamp(40px,8vw,72px)", lineHeight:0.95, marginBottom:16 }}>CONTACT US</h1>
+        <p style={{ color:"var(--muted)", fontSize:15 }}>We're here to help. Fill in the form below and we'll get back to you within 24 hours on business days.</p>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:40, alignItems:"start" }}>
+
+        {/* Contact form */}
+        <div style={{ gridColumn:"1 / -1" }}>
+          {status === "sent" ? (
+            <div style={{ background:"rgba(61,220,132,0.08)", border:"1px solid var(--green)", borderRadius:16, padding:"48px 32px", textAlign:"center", animation:"fadeUp 0.4s ease" }}>
+              <div style={{ fontSize:56, marginBottom:16, color:"var(--green)" }}><i className="fa-solid fa-circle-check" /></div>
+              <h2 style={{ fontFamily:"Bebas Neue", fontSize:36, color:"var(--green)", marginBottom:8 }}>MESSAGE SENT!</h2>
+              <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>Thanks for reaching out. We'll get back to you at <strong style={{ color:"var(--text)" }}>{form.email}</strong> within 24 hours.</p>
+              <button onClick={() => { setForm({ name:"", email:"", subject:"", category:"general", message:"" }); setStatus("idle"); }}
+                style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:14 }}>Send Another Message</button>
+            </div>
+          ) : (
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+                <div>
+                  <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>FULL NAME *</label>
+                  <input value={form.name} onChange={F("name")} placeholder="Amara Okafor" style={iStyle} />
+                </div>
+                <div>
+                  <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>EMAIL ADDRESS *</label>
+                  <input type="email" value={form.email} onChange={F("email")} placeholder="you@email.com" style={iStyle} />
+                </div>
+              </div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+                <div>
+                  <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>CATEGORY</label>
+                  <select value={form.category} onChange={F("category")} style={{...iStyle, background:"var(--bg3)"}}>
+                    <option value="general">General Enquiry</option>
+                    <option value="tickets">Ticket Issue</option>
+                    <option value="refund">Refund Request</option>
+                    <option value="organiser">Organiser Support</option>
+                    <option value="technical">Technical Problem</option>
+                    <option value="account">Account Help</option>
+                    <option value="partnership">Partnership / Business</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>SUBJECT</label>
+                  <input value={form.subject} onChange={F("subject")} placeholder="Brief summary of your issue" style={iStyle} />
+                </div>
+              </div>
+
+              <div style={{ marginBottom:24 }}>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>YOUR MESSAGE *</label>
+                <textarea value={form.message} onChange={F("message")} rows={6}
+                  placeholder="Please describe your issue or question in as much detail as possible. Include any relevant ticket IDs, event names, or error messages."
+                  style={{...iStyle, resize:"vertical"}} />
+              </div>
+
+              {status === "error" && (
+                <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:8, padding:"10px 16px", marginBottom:16, fontSize:13, color:"var(--red)" }}>
+                  Something went wrong. Please try again or email us directly at <strong>support@stagepro.ng</strong>
+                </div>
+              )}
+
+              <button onClick={handleSubmit} disabled={!form.name||!form.email||!form.message||status==="sending"}
+                style={{ width:"100%", background: form.name&&form.email&&form.message?"var(--gold)":"var(--bg3)", color: form.name&&form.email&&form.message?"#000":"var(--muted)", border:"none", padding:"15px 24px", borderRadius:10, cursor: form.name&&form.email&&form.message?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+                {status==="sending" ? "SENDING..." : "SEND MESSAGE →"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Contact info cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:16, marginTop:48 }}>
+        {[
+          { icon:<i className="fa-solid fa-envelope" />, title:"Email Support", detail:"support@stagepro.ng", sub:"Response within 24 hours" },
+          { icon:<i className="fa-solid fa-building" />, title:"Office", detail:"Victoria Island, Lagos", sub:"Nigeria" },
+          { icon:<i className="fa-solid fa-clock" />, title:"Support Hours", detail:"Mon – Fri, 9am – 6pm", sub:"West Africa Time (WAT)" },
+          { icon:<i className="fa-solid fa-bolt" />, title:"Urgent Issues", detail:"legal@stagepro.ng", sub:"For time-sensitive event matters" },
+        ].map(c => (
+          <div key={c.title} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"20px 24px" }}>
+            <div style={{ fontSize:28, marginBottom:10 }}>{c.icon}</div>
+            <div style={{ fontFamily:"Bebas Neue", fontSize:17, letterSpacing:1, marginBottom:4 }}>{c.title}</div>
+            <div style={{ fontSize:14, color:"var(--text)", fontWeight:600, marginBottom:2 }}>{c.detail}</div>
+            <div style={{ fontSize:12, color:"var(--muted)" }}>{c.sub}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
