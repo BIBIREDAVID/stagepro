@@ -31,6 +31,13 @@ import {
   where,
   increment,
 } from "firebase/firestore";
+import {
+  getStorage,
+  ref as storageRef,
+  uploadBytesResumable,
+  getDownloadURL,
+  deleteObject,
+} from "firebase/storage";
 
 // ── EmailJS setup (optional — for auto email tickets) ─────────────────────
 // Add to .env and Vercel environment variables:
@@ -53,6 +60,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const storage = getStorage(app);
 
 // ── Google Sheets logger (non-blocking) ────────────────────────────────────
 const logToSheets = async (payload) => {
@@ -333,7 +341,7 @@ function Input({ label, ...props }) {
 }
 
 // ── Nav ────────────────────────────────────────────────────────────────────
-function Nav({ currentUser, logout, notification }) {
+function Nav({ currentUser, logout, notification, events }) {
   return (
     <>
       <style>{STYLE}</style>
@@ -353,7 +361,10 @@ function Nav({ currentUser, logout, notification }) {
                 </>
               )}
               {currentUser.role === "customer" && (
-                <Link to="/tickets" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>My Tickets</Link>
+                <>
+                  <Link to="/tickets" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>My Tickets</Link>
+                  <NotificationBell currentUser={currentUser} events={events} />
+                </>
               )}
               <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13 }}>
                 {currentUser.name?.[0] ?? "U"}
@@ -366,7 +377,6 @@ function Nav({ currentUser, logout, notification }) {
               <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:6, fontWeight:600, fontSize:14 }}>Get Started</Link>
             </>
           )}
-
         </div>
       </nav>
     </>
@@ -558,7 +568,7 @@ export default function App() {
     try {
       const data = {
         ...eventData,
-        image: "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=800&q=80",
+        image: eventData.image || "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=800&q=80",
         organizer: currentUser.uid,
         tiers: eventData.tiers.map((t, i) => ({
           id: `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: 0,
@@ -668,7 +678,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <Nav currentUser={currentUser} logout={logout} notification={notification} />
+      <Nav currentUser={currentUser} logout={logout} notification={notification} events={events} />
       <main style={{ minHeight:"calc(100vh - 60px)" }}>
         <Routes>
           <Route path="/" element={<HomePage ctx={ctx} />} />
@@ -681,6 +691,7 @@ export default function App() {
           <Route path="/dashboard" element={currentUser?.role === "organizer" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
@@ -1592,6 +1603,7 @@ function DashboardPage({ ctx }) {
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                   <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
                   <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>✏️ Edit</Link>
+                  <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>📊 Stats</Link>
                   <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
                   <button onClick={() => downloadCSV(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
                     ⬇ {eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
@@ -1617,11 +1629,41 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
   const navigate = useNavigate();
   const [form, setForm] = useState(initialForm);
   const [touched, setTouched] = useState({});
+  const [imageUploading, setImageUploading] = useState(false);
+  const [imageProgress, setImageProgress] = useState(0);
+  const fileInputRef = useRef(null);
 
   const F = (k) => (e) => { setForm(p=>({...p,[k]:e.target.value})); setTouched(p=>({...p,[k]:true})); };
   const updateTier = (i,k,v) => setForm(p=>({...p,tiers:p.tiers.map((t,j)=>j===i?{...t,[k]:v}:t)}));
   const addTier = () => setForm(p=>({...p,tiers:[...p.tiers,{name:"",price:"",total:"",sold:0}]}));
   const removeTier = (i) => setForm(p=>({...p,tiers:p.tiers.filter((_,j)=>j!==i)}));
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { alert("Please select an image file."); return; }
+    if (file.size > 5 * 1024 * 1024) { alert("Image must be under 5MB."); return; }
+    setImageUploading(true);
+    setImageProgress(0);
+    try {
+      const ext = file.name.split(".").pop();
+      const path = `events/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const ref = storageRef(storage, path);
+      const task = uploadBytesResumable(ref, file);
+      task.on("state_changed",
+        snap => setImageProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+        err => { console.error(err); setImageUploading(false); alert("Upload failed. Try again."); },
+        async () => {
+          const url = await getDownloadURL(task.snapshot.ref);
+          setForm(p => ({ ...p, image: url }));
+          setImageUploading(false);
+          setImageProgress(0);
+        }
+      );
+    } catch (err) {
+      console.error(err); setImageUploading(false);
+    }
+  };
 
   const isValid = form.title && form.date && form.venue && form.tiers.every(t=>t.name&&t.price!==""&&t.total);
 
@@ -1681,6 +1723,40 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>VENUE <Req /></label>
           <input value={form.venue} onChange={F("venue")} onBlur={()=>setTouched(p=>({...p,venue:true}))} placeholder="e.g. Eko Convention Centre, Lagos" style={iStyle("venue", touched.venue&&!form.venue)} />
           {fieldErr("venue")}
+        </div>
+
+        {/* Event Image Upload */}
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT IMAGE / FLYER</label>
+          <input ref={fileInputRef} type="file" accept="image/*" style={{ display:"none" }} onChange={handleImageUpload} />
+          {form.image ? (
+            <div style={{ position:"relative", borderRadius:12, overflow:"hidden", border:"1px solid var(--border)" }}>
+              <img src={form.image} alt="Event" style={{ width:"100%", height:200, objectFit:"cover", display:"block" }} />
+              <div style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.4)", display:"flex", alignItems:"center", justifyContent:"center", opacity:0, transition:"opacity 0.2s" }}
+                onMouseEnter={e => e.currentTarget.style.opacity=1}
+                onMouseLeave={e => e.currentTarget.style.opacity=0}
+              >
+                <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 20px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>
+                  🖼️ Change Image
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={imageUploading}
+              style={{ width:"100%", border:"2px dashed var(--border)", borderRadius:12, padding:"32px 24px", background:"var(--bg3)", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:10, color:"var(--muted)", transition:"border-color 0.2s" }}
+              onMouseEnter={e => e.currentTarget.style.borderColor="var(--gold)"}
+              onMouseLeave={e => e.currentTarget.style.borderColor="var(--border)"}
+            >
+              <span style={{ fontSize:36 }}>🖼️</span>
+              <span style={{ fontWeight:600, fontSize:14 }}>{imageUploading ? `Uploading... ${imageProgress}%` : "Click to upload event image"}</span>
+              <span style={{ fontSize:12 }}>JPG, PNG, WEBP — max 5MB</span>
+            </button>
+          )}
+          {imageUploading && (
+            <div style={{ marginTop:8, height:4, background:"var(--border)", borderRadius:2 }}>
+              <div style={{ height:"100%", width:`${imageProgress}%`, background:"var(--gold)", borderRadius:2, transition:"width 0.3s" }} />
+            </div>
+          )}
         </div>
 
         {/* Description */}
@@ -1763,6 +1839,7 @@ function EditEventPage({ ctx }) {
     title: event.title, subtitle: event.subtitle||"", date: event.date,
     time: event.time||"", venue: event.venue, category: event.category||"Concert",
     description: event.description||"",
+    image: event.image||"",
     tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold||0, _free: Number(t.price)===0 })),
   };
 
@@ -2032,6 +2109,363 @@ function ValidatePage({ ctx }) {
             ← Back
           </button>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Analytics Page (/dashboard/analytics/:eventId) ────────────────────────
+function AnalyticsPage({ ctx }) {
+  const { eventId } = useParams();
+  const { events, tickets, currentUser } = ctx;
+  const navigate = useNavigate();
+  const event = events.find(e => e.id === eventId);
+  const [notifStatus, setNotifStatus] = useState("idle"); // idle | sending | sent | error
+
+  if (!event || event.organizer !== currentUser.uid) return <Navigate to="/dashboard" />;
+
+  const eventTickets = tickets.filter(t => t.eventId === eventId);
+  const sold = event.tiers.reduce((s,t) => s + getSold(event, t.id), 0);
+  const cap  = event.tiers.reduce((s,t) => s + (t.total||0), 0);
+  const rev  = event.tiers.reduce((s,t) => s + getSold(event, t.id) * (t.price||0), 0);
+  const checkedIn = eventTickets.filter(t => t.used).length;
+  const fillPct = cap ? Math.round((sold/cap)*100) : 0;
+  const checkPct = sold ? Math.round((checkedIn/sold)*100) : 0;
+
+  // Build daily sales data from ticket purchasedAt
+  const dailySales = {};
+  eventTickets.forEach(t => {
+    const day = new Date(t.purchasedAt).toLocaleDateString("en-NG", { month:"short", day:"numeric" });
+    dailySales[day] = (dailySales[day]||0) + 1;
+  });
+  const salesData = Object.entries(dailySales).slice(-14); // last 14 days
+
+  // Tier breakdown
+  const tierData = event.tiers.map(t => ({
+    name: t.name,
+    sold: getSold(event, t.id),
+    total: t.total,
+    rev: getSold(event, t.id) * t.price,
+    pct: t.total ? Math.round((getSold(event, t.id)/t.total)*100) : 0,
+  }));
+
+  // Send push notification to all ticket holders
+  const sendNotification = async (title, body) => {
+    setNotifStatus("sending");
+    try {
+      // Get unique userIds from ticket holders
+      const userIds = [...new Set(eventTickets.map(t => t.userId))];
+      // Save notification to Firestore — clients poll for new ones
+      await addDoc(collection(db, "notifications"), {
+        eventId, eventTitle: event.title,
+        title, body,
+        sentBy: currentUser.uid,
+        sentAt: new Date().toISOString(),
+        targetUsers: userIds,
+        readBy: [],
+      });
+      setNotifStatus("sent");
+      setTimeout(() => setNotifStatus("idle"), 3000);
+    } catch (err) {
+      console.error(err);
+      setNotifStatus("error");
+      setTimeout(() => setNotifStatus("idle"), 3000);
+    }
+  };
+
+  const maxBar = Math.max(...salesData.map(([,v]) => v), 1);
+
+  return (
+    <div style={{ maxWidth:900, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      <button onClick={() => navigate("/dashboard")} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Dashboard</button>
+
+      {/* Header */}
+      <div style={{ display:"flex", gap:20, alignItems:"center", marginBottom:40, flexWrap:"wrap" }}>
+        <img src={event.image} style={{ width:80, height:80, objectFit:"cover", borderRadius:12, flexShrink:0 }} alt="" />
+        <div>
+          <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:4 }}>ANALYTICS</div>
+          <h1 style={{ fontSize:"clamp(28px,5vw,48px)", lineHeight:1 }}>{event.title}</h1>
+          <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>{fmtDate(event.date)} · {event.venue}</div>
+        </div>
+      </div>
+
+      {/* KPI cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:16, marginBottom:32 }}>
+        {[
+          { label:"Revenue", value:fmt(rev), icon:"💰", color:"var(--gold)" },
+          { label:"Tickets Sold", value:`${sold} / ${cap}`, icon:"🎟", color:"var(--text)" },
+          { label:"Fill Rate", value:`${fillPct}%`, icon:"📊", color: fillPct>80?"var(--red)":"var(--green)" },
+          { label:"Checked In", value:`${checkedIn} / ${sold}`, icon:"✅", color:"var(--green)" },
+          { label:"Check-in Rate", value:`${checkPct}%`, icon:"🚪", color:"var(--text)" },
+          { label:"Avg. Ticket", value: sold ? fmt(Math.round(rev/sold)) : "₦0", icon:"🧾", color:"var(--muted)" },
+        ].map(s => (
+          <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"20px 16px" }}>
+            <div style={{ fontSize:24, marginBottom:8 }}>{s.icon}</div>
+            <div style={{ fontFamily:"Bebas Neue", fontSize:26, color:s.color, lineHeight:1, marginBottom:4 }}>{s.value}</div>
+            <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{s.label.toUpperCase()}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Daily sales chart */}
+      {salesData.length > 0 && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:24 }}>
+          <h3 style={{ fontSize:20, marginBottom:20 }}>DAILY TICKET SALES</h3>
+          <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:120, overflowX:"auto", paddingBottom:8 }}>
+            {salesData.map(([day, count]) => (
+              <div key={day} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, flex:"0 0 auto", minWidth:40 }}>
+                <div style={{ fontSize:11, color:"var(--gold)", fontWeight:700 }}>{count}</div>
+                <div style={{ width:32, background:"var(--gold)", borderRadius:"4px 4px 0 0", height:`${(count/maxBar)*100}px`, transition:"height 0.4s", minHeight:4 }} />
+                <div style={{ fontSize:10, color:"var(--muted)", whiteSpace:"nowrap", transform:"rotate(-35deg)", transformOrigin:"top center", marginTop:8 }}>{day}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Tier breakdown */}
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:24 }}>
+        <h3 style={{ fontSize:20, marginBottom:20 }}>TIER BREAKDOWN</h3>
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          {tierData.map(t => (
+            <div key={t.name}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                <div>
+                  <span style={{ fontWeight:600, fontSize:14 }}>{t.name}</span>
+                  <span style={{ color:"var(--muted)", fontSize:13, marginLeft:10 }}>{t.sold} / {t.total} sold</span>
+                </div>
+                <div style={{ display:"flex", gap:16, alignItems:"center" }}>
+                  <span style={{ fontFamily:"Bebas Neue", fontSize:20, color:"var(--gold)" }}>{fmt(t.rev)}</span>
+                  <span style={{ fontSize:12, color: t.pct>80?"var(--red)":"var(--muted)", minWidth:36, textAlign:"right" }}>{t.pct}%</span>
+                </div>
+              </div>
+              <div style={{ height:6, background:"var(--border)", borderRadius:3 }}>
+                <div style={{ height:"100%", width:`${t.pct}%`, background: t.pct>80?"var(--red)":"var(--gold)", borderRadius:3, transition:"width 0.4s" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Push notification panel */}
+      <NotificationSender event={event} eventTickets={eventTickets} onSend={sendNotification} status={notifStatus} />
+
+      {/* Recent buyers */}
+      {eventTickets.length > 0 && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginTop:24 }}>
+          <div style={{ padding:"16px 24px", borderBottom:"1px solid var(--border)" }}>
+            <h3 style={{ fontSize:20 }}>RECENT BUYERS</h3>
+          </div>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ background:"var(--bg3)" }}>
+                  {["Buyer","Tier","Price","Purchased","Status"].map(h => (
+                    <th key={h} style={{ padding:"10px 16px", textAlign:"left", color:"var(--muted)", fontWeight:600, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{h.toUpperCase()}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[...eventTickets].sort((a,b) => new Date(b.purchasedAt)-new Date(a.purchasedAt)).slice(0,20).map((t,i) => (
+                  <tr key={t.id} style={{ borderTop:"1px solid var(--border)", background: i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
+                    <td style={{ padding:"10px 16px", fontWeight:600 }}>{t.userName}</td>
+                    <td style={{ padding:"10px 16px", color:"var(--gold)" }}>{t.tierName}</td>
+                    <td style={{ padding:"10px 16px", fontFamily:"DM Mono", fontSize:12 }}>{fmt(t.price)}</td>
+                    <td style={{ padding:"10px 16px", color:"var(--muted)", whiteSpace:"nowrap" }}>{new Date(t.purchasedAt).toLocaleDateString("en-NG")}</td>
+                    <td style={{ padding:"10px 16px" }}>
+                      <span style={{ background: t.used?"rgba(61,220,132,0.15)":"rgba(245,166,35,0.15)", color: t.used?"var(--green)":"var(--gold)", padding:"2px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                        {t.used ? "✓ Checked In" : "Pending"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Notification Sender Panel ─────────────────────────────────────────────
+function NotificationSender({ event, eventTickets, onSend, status }) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [open, setOpen] = useState(false);
+  const buyers = [...new Set(eventTickets.map(t => t.userId))].length;
+
+  const quickMessages = [
+    { label:"🎉 Event Reminder", title:`${event.title} is Tomorrow!`, body:`Don't forget — ${event.title} is happening tomorrow at ${event.venue}. See you there! 🎶` },
+    { label:"📍 Venue Update", title:"Venue Information", body:`Gates open at ${event.time||"the event time"}. Please bring your QR ticket for quick entry at ${event.venue}.` },
+    { label:"⚡ Last Tickets", title:"Almost Sold Out!", body:`Only a few tickets left for ${event.title}. Share with friends before it's too late!` },
+  ];
+
+  return (
+    <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+      <button onClick={() => setOpen(p=>!p)} style={{ width:"100%", padding:"20px 24px", background:"none", border:"none", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center", color:"var(--text)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <span style={{ fontSize:24 }}>🔔</span>
+          <div style={{ textAlign:"left" }}>
+            <div style={{ fontFamily:"Bebas Neue", fontSize:20, letterSpacing:1 }}>SEND NOTIFICATION</div>
+            <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Message all {buyers} ticket holder{buyers!==1?"s":""} for this event</div>
+          </div>
+        </div>
+        <span style={{ color:"var(--muted)", fontSize:20, transition:"transform 0.2s", transform: open?"rotate(180deg)":"rotate(0)" }}>▾</span>
+      </button>
+
+      {open && (
+        <div style={{ padding:"0 24px 24px", borderTop:"1px solid var(--border)" }}>
+          {/* Quick templates */}
+          <div style={{ marginTop:20, marginBottom:16 }}>
+            <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:10 }}>QUICK TEMPLATES</div>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              {quickMessages.map(q => (
+                <button key={q.label} onClick={() => { setTitle(q.title); setBody(q.body); }} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"6px 14px", borderRadius:100, cursor:"pointer", fontSize:12, fontWeight:500, transition:"border-color 0.2s" }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor="var(--gold)"}
+                  onMouseLeave={e => e.currentTarget.style.borderColor="var(--border)"}
+                >{q.label}</button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            <div>
+              <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>NOTIFICATION TITLE</label>
+              <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Event Reminder" maxLength={80}
+                style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, outline:"none" }} />
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>MESSAGE</label>
+              <textarea value={body} onChange={e => setBody(e.target.value)} rows={3} placeholder="Write your message to ticket holders..." maxLength={300}
+                style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans", outline:"none" }} />
+              <div style={{ textAlign:"right", fontSize:11, color:"var(--muted)", marginTop:4 }}>{body.length}/300</div>
+            </div>
+
+            {/* Preview */}
+            {(title || body) && (
+              <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:14 }}>
+                <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:8 }}>PREVIEW</div>
+                <div style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
+                  <div style={{ width:36, height:36, borderRadius:8, background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>🎪</div>
+                  <div>
+                    <div style={{ fontWeight:700, fontSize:13, marginBottom:2 }}>{title || "Notification title"}</div>
+                    <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.5 }}>{body || "Your message here..."}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={() => onSend(title, body)}
+              disabled={!title || !body || status === "sending" || buyers === 0}
+              style={{ background: title&&body&&buyers>0?"var(--gold)":"var(--bg3)", color: title&&body&&buyers>0?"#000":"var(--muted)", border:"none", padding:"13px 20px", borderRadius:10, cursor: title&&body&&buyers>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, transition:"all 0.2s" }}
+            >
+              {status === "sending" ? "SENDING..." : status === "sent" ? "✅ SENT!" : status === "error" ? "❌ FAILED" : `🔔 SEND TO ${buyers} ATTENDEE${buyers!==1?"S":""}`}
+            </button>
+            {buyers === 0 && <div style={{ fontSize:12, color:"var(--muted)", textAlign:"center" }}>No ticket holders yet — notifications will be available once tickets are sold.</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Notification Bell — shows in-app notifications for attendees ───────────
+function useNotifications(currentUser, events) {
+  const [notifs, setNotifs] = useState([]);
+  const [unread, setUnread] = useState(0);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== "customer") return;
+    // Poll Firestore for notifications targeting this user every 60s
+    const load = async () => {
+      try {
+        const snap = await getDocs(collection(db, "notifications"));
+        const all = snap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(n => n.targetUsers?.includes(currentUser.uid))
+          .sort((a,b) => new Date(b.sentAt) - new Date(a.sentAt))
+          .slice(0, 20);
+        setNotifs(all);
+        setUnread(all.filter(n => !n.readBy?.includes(currentUser.uid)).length);
+      } catch {}
+    };
+    load();
+    const interval = setInterval(load, 60000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
+  const markRead = async (notifId) => {
+    try {
+      await updateDoc(doc(db, "notifications", notifId), {
+        readBy: [...(notifs.find(n=>n.id===notifId)?.readBy||[]), currentUser.uid],
+      });
+      setNotifs(prev => prev.map(n => n.id===notifId ? { ...n, readBy:[...(n.readBy||[]), currentUser.uid] } : n));
+      setUnread(p => Math.max(0, p-1));
+    } catch {}
+  };
+
+  const markAllRead = async () => {
+    const unreadNotifs = notifs.filter(n => !n.readBy?.includes(currentUser.uid));
+    for (const n of unreadNotifs) await markRead(n.id);
+  };
+
+  return { notifs, unread, markRead, markAllRead };
+}
+
+function NotificationBell({ currentUser, events }) {
+  const { notifs, unread, markRead, markAllRead } = useNotifications(currentUser, events);
+  const [open, setOpen] = useState(false);
+
+  if (!currentUser || currentUser.role !== "customer") return null;
+
+  return (
+    <div style={{ position:"relative" }}>
+      <button onClick={() => { setOpen(p=>!p); if (unread>0) markAllRead(); }}
+        style={{ position:"relative", background:"none", border:"1px solid var(--border)", borderRadius:8, width:36, height:36, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}
+      >
+        🔔
+        {unread > 0 && (
+          <span style={{ position:"absolute", top:-4, right:-4, background:"var(--red)", color:"#fff", borderRadius:"50%", width:16, height:16, fontSize:10, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position:"fixed", inset:0, zIndex:998 }} />
+          <div style={{ position:"absolute", right:0, top:44, width:320, background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, zIndex:999, overflow:"hidden", boxShadow:"0 8px 32px rgba(0,0,0,0.4)", animation:"fadeUp 0.2s ease" }}>
+            <div style={{ padding:"14px 16px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <span style={{ fontFamily:"Bebas Neue", fontSize:18, letterSpacing:1 }}>NOTIFICATIONS</span>
+              {notifs.length > 0 && <button onClick={markAllRead} style={{ background:"none", border:"none", color:"var(--gold)", fontSize:12, cursor:"pointer" }}>Mark all read</button>}
+            </div>
+            {notifs.length === 0 ? (
+              <div style={{ padding:"32px 16px", textAlign:"center", color:"var(--muted)", fontSize:13 }}>No notifications yet</div>
+            ) : (
+              <div style={{ maxHeight:360, overflowY:"auto" }}>
+                {notifs.map(n => {
+                  const isRead = n.readBy?.includes(currentUser.uid);
+                  return (
+                    <div key={n.id} onClick={() => markRead(n.id)}
+                      style={{ padding:"14px 16px", borderBottom:"1px solid var(--border)", cursor:"pointer", background: isRead?"transparent":"rgba(245,166,35,0.05)", transition:"background 0.2s" }}
+                    >
+                      <div style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
+                        {!isRead && <div style={{ width:6, height:6, borderRadius:"50%", background:"var(--gold)", flexShrink:0, marginTop:5 }} />}
+                        <div style={{ flex:1, paddingLeft: isRead?16:0 }}>
+                          <div style={{ fontWeight:700, fontSize:13, marginBottom:3 }}>{n.title}</div>
+                          <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.5, marginBottom:4 }}>{n.body}</div>
+                          <div style={{ fontSize:11, color:"var(--gold)" }}>{new Date(n.sentAt).toLocaleDateString("en-NG", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" })}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
