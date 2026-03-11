@@ -29,6 +29,7 @@ import {
   deleteDoc,
   query,
   where,
+  increment,
 } from "firebase/firestore";
 
 // ── EmailJS setup (optional — for auto email tickets) ─────────────────────
@@ -100,6 +101,16 @@ const QRCode = ({ ticketId, size = 160 }) => {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => `₦${Number(n).toLocaleString()}`;
+// Sold count for a tier — reads from event.soldCounts map (atomic increments)
+// with fallback to tier.sold for legacy events
+const getSold = (event, tierId) => {
+  if (event?.soldCounts && event.soldCounts[tierId] !== undefined) {
+    return Number(event.soldCounts[tierId]);
+  }
+  const tier = event?.tiers?.find(t => t.id === tierId);
+  return Number(tier?.sold) || 0;
+};
+
 const fmtDate = (d) =>
   new Date(d).toLocaleDateString("en-NG", {
     weekday: "short", year: "numeric", month: "long", day: "numeric",
@@ -498,29 +509,26 @@ export default function App() {
       notify("Purchase failed. Please try again.", "error");
       return false;
     }
-    // Step 2 — update sold counts on event (best-effort, don't block on failure)
+    // Step 2 — atomically increment soldCounts.{tierId} on the event doc
     try {
-      let updatedTiers = [...event.tiers];
+      const soldUpdate = {};
       for (const tier of event.tiers) {
         const qty = cartSelections[tier.id] || 0;
         if (!qty) continue;
-        updatedTiers = updatedTiers.map(t =>
-          t.id === tier.id ? { ...t, sold: (t.sold || 0) + qty } : t
-        );
+        soldUpdate[`soldCounts.${tier.id}`] = increment(qty);
       }
-      await updateDoc(doc(db, "events", eventId), { tiers: updatedTiers });
+      await updateDoc(doc(db, "events", eventId), soldUpdate);
     } catch (err) {
-      console.warn("Could not update sold count (non-fatal):", err.message);
+      console.warn("Could not update soldCounts:", err.code, err.message);
     }
-    // Step 3 — re-fetch the event from Firestore to get authoritative sold counts
+    // Step 3 — re-fetch event to sync local state with Firestore
     try {
       const freshSnap = await getDoc(doc(db, "events", eventId));
       if (freshSnap.exists()) {
-        const freshEvent = { id: freshSnap.id, ...freshSnap.data() };
-        setEvents(prev => prev.map(e => e.id !== eventId ? e : freshEvent));
+        setEvents(prev => prev.map(e => e.id !== eventId ? e : { id: freshSnap.id, ...freshSnap.data() }));
       }
-    } catch (err) {
-      // Fallback to optimistic local update
+    } catch {
+      // fallback: optimistic local update
       setEvents(prev => prev.map(e => e.id !== eventId ? e : {
         ...e, tiers: e.tiers.map(t => ({ ...t, sold: (t.sold || 0) + (cartSelections[t.id] || 0) })),
       }));
@@ -987,7 +995,7 @@ function HomePage({ ctx }) {
 
 function EventCard({ event, index }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
-  const totalSold = event.tiers.reduce((s,t) => s+t.sold, 0);
+  const totalSold = event.tiers.reduce((s,t) => s + getSold(event, t.id), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
   return (
@@ -1169,7 +1177,7 @@ function EventPage({ ctx }) {
   const adjust = (tierId, delta) => {
     setCart(prev => {
       const tier = event.tiers.find(t => t.id===tierId);
-      const qty = Math.min(Math.max(0,(prev[tierId]||0)+delta), tier.total-tier.sold);
+      const qty = Math.min(Math.max(0,(prev[tierId]||0)+delta), tier.total - getSold(event, tier.id));
       return { ...prev, [tierId]: qty };
     });
   };
@@ -1227,7 +1235,7 @@ function EventPage({ ctx }) {
             <h3 style={{ fontSize:20, marginBottom:20 }}>SELECT TICKETS</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:20 }}>
               {event.tiers.map(tier => {
-                const available = tier.total-tier.sold;
+                const available = tier.total - getSold(event, tier.id);
                 const qty = cart[tier.id]||0;
                 return (
                   <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0?"var(--gold)":"var(--border)"}`, borderRadius:12, padding:"14px 16px", transition:"border-color 0.2s" }}>
@@ -1285,7 +1293,7 @@ function CheckoutPage({ ctx }) {
   if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
-  const total = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
+  const total = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);  // price only, not sold
   const isFree = total === 0;
 
   const handleConfirm = async () => {
@@ -1480,9 +1488,9 @@ function DashboardPage({ ctx }) {
   const myTickets = tickets.filter(t => myEventIds.has(t.eventId));
 
   // Use tier.sold from event docs as the source of truth for sold counts (more reliable than ticket docs)
-  const totalSold = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.sold||0), 0), 0);
+  const totalSold = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id), 0), 0);
   const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
-  const revenue   = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.sold||0) * (t.price||0), 0), 0);
+  const revenue   = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id) * (t.price||0), 0), 0);
   // Check-ins come from ticket docs (only place used:true is stored)
   const totalCheckedIn = myTickets.filter(t => t.used).length;
 
@@ -1541,9 +1549,9 @@ function DashboardPage({ ctx }) {
         {myEvents.length===0 ? (
           <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
         ) : myEvents.map((event, i) => {
-          const sold = event.tiers.reduce((s,t) => s + (t.sold||0), 0);
+          const sold = event.tiers.reduce((s,t) => s + getSold(event, t.id), 0);
           const cap = event.tiers.reduce((s,t) => s + (t.total||0), 0);
-          const rev = event.tiers.reduce((s,t) => s + (t.sold||0) * (t.price||0), 0);
+          const rev = event.tiers.reduce((s,t) => s + getSold(event, t.id) * (t.price||0), 0);
           const pct = cap ? Math.round((sold/cap)*100) : 0;
           const eventTickets = tickets.filter(t => t.eventId === event.id);
           const checkedIn = eventTickets.filter(t => t.used).length;
