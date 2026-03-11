@@ -510,7 +510,7 @@ export default function App() {
 
   const logout = async () => { await signOut(auth); setCurrentUser(null); };
 
-  const purchaseTickets = async (eventId, cartSelections) => {
+  const purchaseTickets = async (eventId, cartSelections, paystackRef = null) => {
     const event = events.find(e => e.id === eventId);
     const newTickets = [];
     // Step 1 — create ticket documents (requires only tickets.create rule)
@@ -525,6 +525,7 @@ export default function App() {
             tierName: tier.name, price: Number(tier.price),
             userId: currentUser.uid, userName: currentUser.name,
             used: false, purchasedAt: new Date().toISOString(),
+            ...(paystackRef ? { paystackRef, paymentStatus: "paid" } : { paymentStatus: "free" }),
           };
           const ref = await addDoc(collection(db, "tickets"), ticketData);
           const newTicket = { id: ref.id, ...ticketData };
@@ -535,6 +536,7 @@ export default function App() {
             eventTitle: event.title, tierName: tier.name,
             userName: currentUser.name, email: currentUser.email,
             price: Number(tier.price), purchasedAt: new Date().toLocaleString("en-NG"),
+            paystackRef: paystackRef || "free",
           });
         }
       }
@@ -1517,6 +1519,7 @@ function CheckoutPage({ ctx }) {
   const navigate = useNavigate();
   const [agreed, setAgreed] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [payStatus, setPayStatus] = useState(null); // null | "verifying" | "failed"
 
   const cart = JSON.parse(sessionStorage.getItem("cart") || "{}");
   const event = events.find(e => e.id === eventId);
@@ -1525,15 +1528,65 @@ function CheckoutPage({ ctx }) {
   if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
-  const total = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);  // price only, not sold
+  const total = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
   const isFree = total === 0;
 
-  const handleConfirm = async () => {
+  // ── Load Paystack script once ──────────────────────────────────────────
+  const loadPaystack = () => new Promise(resolve => {
+    if (window.PaystackPop) return resolve();
+    const s = document.createElement("script");
+    s.src = "https://js.paystack.co/v1/inline.js";
+    s.onload = resolve;
+    document.head.appendChild(s);
+  });
+
+  // ── Free tickets — confirm directly ───────────────────────────────────
+  const handleFree = async () => {
     setProcessing(true);
     const ok = await purchaseTickets(eventId, cart);
     if (ok) { sessionStorage.removeItem("cart"); navigate("/tickets"); }
     setProcessing(false);
   };
+
+  // ── Paid tickets — launch Paystack popup ──────────────────────────────
+  const handlePay = async () => {
+    setProcessing(true);
+    await loadPaystack();
+
+    const handler = window.PaystackPop.setup({
+      key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
+      email: currentUser.email,
+      amount: total * 100, // Paystack uses kobo
+      currency: "NGN",
+      ref: `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`,
+      metadata: {
+        custom_fields: [
+          { display_name:"Customer", variable_name:"customer", value: currentUser.name },
+          { display_name:"Event", variable_name:"event", value: event.title },
+        ]
+      },
+      onSuccess: async (response) => {
+        // Payment verified by Paystack — now create tickets in Firestore
+        setPayStatus("verifying");
+        const ok = await purchaseTickets(eventId, cart, response.reference);
+        if (ok) {
+          sessionStorage.removeItem("cart");
+          navigate("/tickets");
+        } else {
+          setPayStatus("failed");
+          setProcessing(false);
+        }
+      },
+      onCancel: () => {
+        setProcessing(false);
+        setPayStatus(null);
+      },
+    });
+
+    handler.openIframe();
+  };
+
+  const handleConfirm = isFree ? handleFree : handlePay;
 
   return (
     <div style={{ maxWidth:600, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
@@ -1597,6 +1650,26 @@ function CheckoutPage({ ctx }) {
         </span>
       </div>
 
+      {/* Paystack verifying overlay */}
+      {payStatus === "verifying" && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", zIndex:9999, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16 }}>
+          <i className="fa-solid fa-circle-notch fa-spin" style={{ fontSize:48, color:"var(--gold)" }} />
+          <div style={{ fontFamily:"Bebas Neue", fontSize:28, letterSpacing:2 }}>CONFIRMING PAYMENT...</div>
+          <div style={{ color:"var(--muted)", fontSize:14 }}>Please wait while we create your tickets</div>
+        </div>
+      )}
+
+      {/* Payment failed notice */}
+      {payStatus === "failed" && (
+        <div style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", borderRadius:12, padding:"14px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:12 }}>
+          <i className="fa-solid fa-circle-exclamation" style={{ color:"var(--red)", fontSize:20 }} />
+          <div>
+            <div style={{ fontWeight:700, color:"var(--red)", fontSize:14 }}>Payment received but ticket creation failed</div>
+            <div style={{ color:"var(--muted)", fontSize:13 }}>Please contact support@stagepro.ng with your payment reference.</div>
+          </div>
+        </div>
+      )}
+
       {/* Confirm button */}
       <button
         disabled={!agreed || processing}
@@ -1604,12 +1677,20 @@ function CheckoutPage({ ctx }) {
         style={{ width:"100%", padding:16, background: agreed?(isFree?"var(--green)":"var(--gold)"):"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}
       >
         {processing
-          ? (isFree ? "REGISTERING..." : "PROCESSING...")
+          ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")
           : isFree
             ? "CLAIM FREE TICKETS →"
-            : `CONFIRM PAYMENT · ${fmt(total)}`
+            : `PAY ${fmt(total)} WITH PAYSTACK →`
         }
       </button>
+
+      {/* Paystack trust badge */}
+      {!isFree && (
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginTop:14, color:"var(--muted)", fontSize:12 }}>
+          <i className="fa-solid fa-lock" style={{ fontSize:11 }} />
+          <span>Secured by Paystack · Cards, Bank Transfer & USSD accepted</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -3515,7 +3596,7 @@ function HelpPage() {
         },
         {
           q: "What payment methods are accepted?",
-          a: "StagePro currently supports ticket reservations through the platform. Payment gateway integration (cards, bank transfer, USSD) is coming soon via Paystack. Free events require no payment at all."
+          a: "StagePro processes payments securely via Paystack. You can pay with debit/credit cards (Visa, Mastercard, Verve), bank transfer, or USSD. Free events require no payment at all."
         },
         {
           q: "Is it safe to buy tickets on StagePro?",
