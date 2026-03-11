@@ -109,6 +109,7 @@ const QRCode = ({ ticketId, size = 160 }) => {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => `₦${Number(n).toLocaleString()}`;
+// ── Sold count for a tier ─────────────────────────────────────────────────
 // Sold count for a tier — reads from event.soldCounts map (atomic increments)
 // with fallback to tier.sold for legacy events
 const getSold = (event, tierId) => {
@@ -117,6 +118,28 @@ const getSold = (event, tierId) => {
   }
   const tier = event?.tiers?.find(t => t.id === tierId);
   return Number(tier?.sold) || 0;
+};
+
+// ── Banner themes ──────────────────────────────────────────────────────────
+const THEMES = {
+  purple:   "linear-gradient(135deg,#6a11cb,#2575fc)",
+  fire:     "linear-gradient(135deg,#f83600,#f9d423)",
+  ocean:    "linear-gradient(135deg,#0575e6,#021b79)",
+  forest:   "linear-gradient(135deg,#134e5e,#71b280)",
+  gold:     "linear-gradient(135deg,#f7971e,#ffd200)",
+  rose:     "linear-gradient(135deg,#f953c6,#b91d73)",
+  midnight: "linear-gradient(135deg,#232526,#414345)",
+  neon:     "linear-gradient(135deg,#00f260,#0575e6)",
+  sunset:   "linear-gradient(135deg,#f857a4,#ff5858)",
+  teal:     "linear-gradient(135deg,#11998e,#38ef7d)",
+  royal:    "linear-gradient(135deg,#141e30,#243b55)",
+};
+
+// Returns CSS background for an event — image takes priority, then theme, then default
+const getEventBg = (event) => {
+  if (event?.image) return `url(${event.image})`;
+  if (event?.theme && THEMES[event.theme]) return THEMES[event.theme];
+  return "linear-gradient(135deg,#1a1a1a,#2a2a2a)";
 };
 
 const fmtDate = (d) =>
@@ -366,7 +389,7 @@ function Nav({ currentUser, logout, notification, events }) {
                   <NotificationBell currentUser={currentUser} events={events} />
                 </>
               )}
-              <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13 }}>
+              <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13, cursor:"pointer" }} onClick={() => window.location.href="/profile"}>
                 {currentUser.name?.[0] ?? "U"}
               </div>
               <button onClick={logout} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Sign out</button>
@@ -674,7 +697,37 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents };
+  const updateProfile = async ({ name }) => {
+    try {
+      await updateDoc(doc(db, "users", currentUser.uid), { name: name.trim() });
+      setCurrentUser(prev => ({ ...prev, name: name.trim() }));
+      notify("Profile updated!");
+      return { ok: true };
+    } catch (err) {
+      console.error(err);
+      notify("Failed to update profile.", "error");
+      return { ok: false };
+    }
+  };
+
+  const submitReview = async (eventId, { rating, comment }) => {
+    try {
+      const reviewData = {
+        eventId, userId: currentUser.uid, userName: currentUser.name,
+        rating, comment: comment.trim(),
+        createdAt: new Date().toISOString(),
+      };
+      const ref = await addDoc(collection(db, "reviews"), reviewData);
+      notify("Review submitted! Thanks 🙏");
+      return { ok: true, id: ref.id };
+    } catch (err) {
+      console.error(err);
+      notify("Failed to submit review.", "error");
+      return { ok: false };
+    }
+  };
+
+  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview };
 
   return (
     <BrowserRouter>
@@ -693,6 +746,8 @@ export default function App() {
           <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/profile" element={currentUser ? <ProfilePage ctx={ctx} /> : <Navigate to="/login" />} />
+          <Route path="/event/:eventId/reviews" element={<ReviewsPage ctx={ctx} />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="*" element={<Navigate to="/" />} />
@@ -1009,15 +1064,21 @@ function EventCard({ event, index }) {
   const totalSold = event.tiers.reduce((s,t) => s + getSold(event, t.id), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
+  const hasImage = !!event.image;
+  const bg = getEventBg(event);
+
   return (
     <Link to={`/event/${event.id}`} style={{ display:"block", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", transition:"transform 0.3s, border-color 0.3s", animation:`fadeUp 0.5s ${index*0.1}s ease both` }}
       onMouseEnter={e => { e.currentTarget.style.transform="translateY(-4px)"; e.currentTarget.style.borderColor="var(--gold-dim)"; }}
       onMouseLeave={e => { e.currentTarget.style.transform=""; e.currentTarget.style.borderColor="var(--border)"; }}
     >
-      <div style={{ height:200, overflow:"hidden", position:"relative" }}>
-        <img src={event.image} alt={event.title} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+      <div style={{ height:200, overflow:"hidden", position:"relative", background: hasImage?"var(--bg3)":bg, backgroundSize:"cover", backgroundPosition:"center" }}>
+        {hasImage
+          ? <img src={event.image} alt={event.title} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+          : <div style={{ position:"absolute", inset:0, background:bg }} />
+        }
         <div style={{ position:"absolute", top:12, left:12, background:"var(--gold)", color:"#000", fontSize:11, fontWeight:700, padding:"4px 10px", borderRadius:100 }}>{event.category?.toUpperCase()}</div>
-        <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.8) 0%, transparent 60%)" }} />
+        <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.85) 0%, transparent 60%)" }} />
       </div>
       <div style={{ padding:"20px 24px 24px" }}>
         <h3 style={{ fontFamily:"Bebas Neue", fontSize:28, lineHeight:1, marginBottom:4 }}>{event.title}</h3>
@@ -1209,7 +1270,10 @@ function EventPage({ ctx }) {
 
       {/* Hero image */}
       <div style={{ borderRadius:16, overflow:"hidden", marginBottom:20, position:"relative" }}>
-        <img src={event.image} alt={event.title} style={{ width:"100%", height:"min(360px, 55vw)", objectFit:"cover", display:"block" }} />
+        {event.image
+          ? <img src={event.image} alt={event.title} style={{ width:"100%", height:"min(360px, 55vw)", objectFit:"cover", display:"block" }} />
+          : <div style={{ width:"100%", height:"min(360px, 55vw)", background: getEventBg(event) }} />
+        }
         <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.92) 0%, transparent 55%)" }} />
         <div style={{ position:"absolute", bottom:20, left:20, right:20 }}>
           <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:6 }}>{event.category?.toUpperCase()}</div>
@@ -1238,6 +1302,9 @@ function EventPage({ ctx }) {
               <p style={{ color:"var(--muted)", lineHeight:1.8, fontSize:14 }}>{event.description}</p>
             </div>
           )}
+
+          {/* Reviews preview */}
+          <EventReviewsPreview eventId={event.id} currentUser={ctx.currentUser} tickets={ctx.tickets} submitReview={ctx.submitReview} />
         </div>
 
         {/* Right — ticket selector */}
@@ -1759,6 +1826,38 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           )}
         </div>
 
+        {/* Banner Theme / Color */}
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>BANNER THEME <span style={{ color:"var(--muted)", fontWeight:400 }}>(used when no image is uploaded)</span></label>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(48px,1fr))", gap:8 }}>
+            {[
+              { id:"",          label:"None",     bg:"var(--bg3)",                                    border:true },
+              { id:"purple",    label:"Purple",   bg:"linear-gradient(135deg,#6a11cb,#2575fc)" },
+              { id:"fire",      label:"Fire",     bg:"linear-gradient(135deg,#f83600,#f9d423)" },
+              { id:"ocean",     label:"Ocean",    bg:"linear-gradient(135deg,#0575e6,#021b79)" },
+              { id:"forest",    label:"Forest",   bg:"linear-gradient(135deg,#134e5e,#71b280)" },
+              { id:"gold",      label:"Gold",     bg:"linear-gradient(135deg,#f7971e,#ffd200)" },
+              { id:"rose",      label:"Rose",     bg:"linear-gradient(135deg,#f953c6,#b91d73)" },
+              { id:"midnight",  label:"Midnight", bg:"linear-gradient(135deg,#232526,#414345)" },
+              { id:"neon",      label:"Neon",     bg:"linear-gradient(135deg,#00f260,#0575e6)" },
+              { id:"sunset",    label:"Sunset",   bg:"linear-gradient(135deg,#f857a4,#ff5858)" },
+              { id:"teal",      label:"Teal",     bg:"linear-gradient(135deg,#11998e,#38ef7d)" },
+              { id:"royal",     label:"Royal",    bg:"linear-gradient(135deg,#141e30,#243b55)" },
+            ].map(t => (
+              <div key={t.id} title={t.label} onClick={() => setForm(p=>({...p, theme: t.id}))}
+                style={{ height:40, borderRadius:8, background:t.bg, cursor:"pointer", border: form.theme===t.id ? "3px solid var(--gold)" : t.border ? "2px dashed var(--border)" : "2px solid transparent", transition:"border 0.15s", position:"relative" }}
+              >
+                {form.theme===t.id && <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>✓</div>}
+              </div>
+            ))}
+          </div>
+          {form.theme && (
+            <div style={{ marginTop:10, borderRadius:10, height:60, background: THEMES[form.theme]||"var(--bg3)", display:"flex", alignItems:"center", paddingLeft:16 }}>
+              <span style={{ fontFamily:"Bebas Neue", fontSize:20, color:"#fff", textShadow:"0 1px 4px rgba(0,0,0,0.5)" }}>Preview — {form.title||"Your Event Title"}</span>
+            </div>
+          )}
+        </div>
+
         {/* Description */}
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DESCRIPTION</label>
@@ -1815,7 +1914,7 @@ function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
-  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", description:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", description:"", image:"", theme:"", tiers:[{ name:"General", price:"", total:"" }] };
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
@@ -1840,6 +1939,7 @@ function EditEventPage({ ctx }) {
     time: event.time||"", venue: event.venue, category: event.category||"Concert",
     description: event.description||"",
     image: event.image||"",
+    theme: event.theme||"",
     tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold||0, _free: Number(t.price)===0 })),
   };
 
@@ -2466,6 +2566,330 @@ function NotificationBell({ currentUser, events }) {
             )}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Profile Page (/profile) ───────────────────────────────────────────────
+function ProfilePage({ ctx }) {
+  const { currentUser, tickets, events, updateProfile, notify } = ctx;
+  const [name, setName] = useState(currentUser.name);
+  const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState("info"); // info | history
+
+  const myTickets = tickets.filter(t => t.userId === currentUser.uid || currentUser.role === "customer");
+  const totalSpent = myTickets.reduce((s,t) => s + (t.price||0), 0);
+  const eventsAttended = [...new Set(myTickets.map(t => t.eventId))].length;
+  const checkedIn = myTickets.filter(t => t.used).length;
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    await updateProfile({ name });
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ maxWidth:700, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      {/* Header */}
+      <div style={{ display:"flex", alignItems:"center", gap:20, marginBottom:40, flexWrap:"wrap" }}>
+        <div style={{ width:80, height:80, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"Bebas Neue", fontSize:40, color:"#000", flexShrink:0 }}>
+          {currentUser.name?.[0]?.toUpperCase()}
+        </div>
+        <div>
+          <h1 style={{ fontSize:"clamp(28px,5vw,48px)", lineHeight:1, marginBottom:4 }}>{currentUser.name}</h1>
+          <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.email}</div>
+          <div style={{ display:"inline-block", marginTop:6, background:"rgba(245,166,35,0.15)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"2px 12px", borderRadius:100, fontSize:12, fontWeight:700 }}>
+            {currentUser.role === "organizer" ? "🎪 Organizer" : "🎟 Attendee"}
+          </div>
+        </div>
+      </div>
+
+      {/* Stats row — customers only */}
+      {currentUser.role === "customer" && (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:32 }}>
+          {[
+            { label:"Events", value:eventsAttended, icon:"🎪" },
+            { label:"Tickets", value:myTickets.length, icon:"🎟" },
+            { label:"Spent", value:fmt(totalSpent), icon:"💰" },
+          ].map(s => (
+            <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"16px 12px", textAlign:"center" }}>
+              <div style={{ fontSize:24, marginBottom:6 }}>{s.icon}</div>
+              <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{s.value}</div>
+              <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{s.label.toUpperCase()}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={{ display:"flex", gap:4, marginBottom:24, background:"var(--bg3)", borderRadius:10, padding:4 }}>
+        {[["info","👤 Account"],["history","🎟 Purchase History"]].map(([id,label]) => (
+          <button key={id} onClick={() => setTab(id)} style={{ flex:1, padding:"10px 16px", borderRadius:8, border:"none", cursor:"pointer", fontWeight:600, fontSize:13, background: tab===id?"var(--bg2)":"transparent", color: tab===id?"var(--text)":"var(--muted)", transition:"all 0.2s" }}>{label}</button>
+        ))}
+      </div>
+
+      {/* Account info tab */}
+      {tab === "info" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, display:"flex", flexDirection:"column", gap:20 }}>
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>DISPLAY NAME</label>
+            <div style={{ display:"flex", gap:10 }}>
+              <input value={name} onChange={e => setName(e.target.value)}
+                style={{ flex:1, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+              <button onClick={handleSave} disabled={saving || name.trim()===currentUser.name}
+                style={{ background: name.trim()!==currentUser.name?"var(--gold)":"var(--bg3)", color: name.trim()!==currentUser.name?"#000":"var(--muted)", border:"none", padding:"12px 20px", borderRadius:8, cursor: name.trim()!==currentUser.name?"pointer":"not-allowed", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>EMAIL ADDRESS</label>
+            <input value={currentUser.email} readOnly style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--muted)", fontSize:14, outline:"none", cursor:"not-allowed" }} />
+            <div style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>Email cannot be changed. Contact support if needed.</div>
+          </div>
+          <div style={{ borderTop:"1px solid var(--border)", paddingTop:20 }}>
+            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:12, display:"block" }}>ACCOUNT TYPE</label>
+            <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+              <span style={{ fontSize:32 }}>{currentUser.role==="organizer"?"🎪":"🎟"}</span>
+              <div>
+                <div style={{ fontWeight:600, fontSize:15 }}>{currentUser.role==="organizer"?"Event Organizer":"Event Attendee"}</div>
+                <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.role==="organizer"?"You can create and manage events":"You can purchase and manage tickets"}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Purchase history tab */}
+      {tab === "history" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          {myTickets.length === 0 ? (
+            <div style={{ textAlign:"center", padding:"48px 24px", color:"var(--muted)" }}>
+              <div style={{ fontSize:48, marginBottom:12 }}>🎟</div>
+              <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO TICKETS YET</div>
+              <Link to="/" style={{ color:"var(--gold)", fontSize:14 }}>Browse events →</Link>
+            </div>
+          ) : [...myTickets].sort((a,b) => new Date(b.purchasedAt)-new Date(a.purchasedAt)).map(t => (
+            <div key={t.id} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
+              <div>
+                <div style={{ fontWeight:600, fontSize:14, marginBottom:2 }}>{t.eventTitle}</div>
+                <div style={{ color:"var(--muted)", fontSize:12 }}>{fmtDate(t.eventDate)} · {t.tierName}</div>
+                <div style={{ color:"var(--muted)", fontSize:11, marginTop:2 }}>Purchased {new Date(t.purchasedAt).toLocaleDateString("en-NG")}</div>
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <span style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(t.price)}</span>
+                <span style={{ background: t.used?"rgba(61,220,132,0.15)":"rgba(245,166,35,0.15)", color: t.used?"var(--green)":"var(--gold)", padding:"2px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>{t.used?"✓ Used":"Valid"}</span>
+                <Link to={`/ticket/${t.id}`} style={{ color:"var(--muted)", fontSize:12, textDecoration:"underline" }}>View</Link>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Event Reviews Preview (embedded in EventPage) ──────────────────────────
+function EventReviewsPreview({ eventId, currentUser, tickets, submitReview }) {
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [rating, setRating] = useState(0);
+  const [hovered, setHovered] = useState(0);
+  const [comment, setComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  // Check if current user attended this event (has a used ticket)
+  const attended = tickets.some(t => t.eventId === eventId && t.used);
+  // Check if event date has passed
+  const eventPassed = true; // allow any ticket holder to review for now
+  const canReview = currentUser?.role === "customer" && tickets.some(t => t.eventId === eventId);
+  const alreadyReviewed = reviews.some(r => r.userId === currentUser?.uid);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const q = query(collection(db, "reviews"), where("eventId", "==", eventId));
+        const snap = await getDocs(q);
+        setReviews(snap.docs.map(d => ({ id:d.id, ...d.data() })).sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)));
+      } catch {}
+      setLoading(false);
+    };
+    load();
+  }, [eventId]);
+
+  const avgRating = reviews.length ? (reviews.reduce((s,r) => s+r.rating, 0) / reviews.length).toFixed(1) : null;
+
+  const handleSubmit = async () => {
+    if (!rating || !comment.trim()) return;
+    setSubmitting(true);
+    const res = await submitReview(eventId, { rating, comment });
+    if (res.ok) {
+      const newReview = { id:res.id, userId:currentUser.uid, userName:currentUser.name, rating, comment, createdAt:new Date().toISOString() };
+      setReviews(prev => [newReview, ...prev]);
+      setShowForm(false); setRating(0); setComment("");
+    }
+    setSubmitting(false);
+  };
+
+  if (loading) return null;
+
+  return (
+    <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20, marginTop:16 }}>
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <h3 style={{ fontSize:18 }}>REVIEWS</h3>
+          {avgRating && (
+            <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <span style={{ color:"var(--gold)", fontSize:16 }}>{"★".repeat(Math.round(Number(avgRating)))}</span>
+              <span style={{ fontFamily:"Bebas Neue", fontSize:20, color:"var(--gold)" }}>{avgRating}</span>
+              <span style={{ color:"var(--muted)", fontSize:12 }}>({reviews.length})</span>
+            </div>
+          )}
+        </div>
+        {canReview && !alreadyReviewed && !showForm && (
+          <button onClick={() => setShowForm(true)} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"8px 16px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>
+            ✍️ Write a Review
+          </button>
+        )}
+      </div>
+
+      {/* Review form */}
+      {showForm && (
+        <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:20, marginBottom:20, animation:"fadeUp 0.3s ease" }}>
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8 }}>YOUR RATING</div>
+            <div style={{ display:"flex", gap:6 }}>
+              {[1,2,3,4,5].map(s => (
+                <span key={s} onMouseEnter={() => setHovered(s)} onMouseLeave={() => setHovered(0)} onClick={() => setRating(s)}
+                  style={{ fontSize:32, cursor:"pointer", color:(hovered||rating)>=s?"var(--gold)":"var(--border)", transition:"color 0.15s" }}>★</span>
+              ))}
+            </div>
+          </div>
+          <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Share your experience..." maxLength={400}
+            style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans", outline:"none", marginBottom:12 }} />
+          <div style={{ display:"flex", gap:10 }}>
+            <button onClick={() => { setShowForm(false); setRating(0); setComment(""); }} style={{ flex:1, background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:10, borderRadius:8, cursor:"pointer", fontSize:13 }}>Cancel</button>
+            <button onClick={handleSubmit} disabled={!rating||!comment.trim()||submitting}
+              style={{ flex:2, background:rating&&comment.trim()?"var(--gold)":"var(--bg3)", color:rating&&comment.trim()?"#000":"var(--muted)", border:"none", padding:10, borderRadius:8, cursor:rating&&comment.trim()?"pointer":"not-allowed", fontWeight:700, fontSize:13 }}>
+              {submitting ? "Submitting..." : "Submit Review"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Review list */}
+      {reviews.length === 0 ? (
+        <div style={{ textAlign:"center", padding:"24px 0", color:"var(--muted)", fontSize:13 }}>No reviews yet. Be the first!</div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          {reviews.slice(0,5).map(r => (
+            <div key={r.id} style={{ borderTop:"1px solid var(--border)", paddingTop:14 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6, flexWrap:"wrap", gap:8 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:28, height:28, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700, color:"#000", flexShrink:0 }}>{r.userName?.[0]}</div>
+                  <span style={{ fontWeight:600, fontSize:13 }}>{r.userName}</span>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  <span style={{ color:"var(--gold)", fontSize:13 }}>{"★".repeat(r.rating)}{"☆".repeat(5-r.rating)}</span>
+                  <span style={{ color:"var(--muted)", fontSize:11 }}>{new Date(r.createdAt).toLocaleDateString("en-NG",{month:"short",day:"numeric",year:"numeric"})}</span>
+                </div>
+              </div>
+              <p style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7 }}>{r.comment}</p>
+            </div>
+          ))}
+          {reviews.length > 5 && (
+            <Link to={`/event/${eventId}/reviews`} style={{ color:"var(--gold)", fontSize:13, textAlign:"center", display:"block", paddingTop:8 }}>See all {reviews.length} reviews →</Link>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Full Reviews Page (/event/:eventId/reviews) ───────────────────────────
+function ReviewsPage({ ctx }) {
+  const { eventId } = useParams();
+  const { events, currentUser, tickets, submitReview } = ctx;
+  const navigate = useNavigate();
+  const event = events.find(e => e.id === eventId);
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState(0); // 0 = all
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const q = query(collection(db, "reviews"), where("eventId","==", eventId));
+        const snap = await getDocs(q);
+        setReviews(snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)));
+      } catch {}
+      setLoading(false);
+    };
+    load();
+  }, [eventId]);
+
+  if (!event) return <Navigate to="/" />;
+
+  const avgRating = reviews.length ? (reviews.reduce((s,r)=>s+r.rating,0)/reviews.length).toFixed(1) : null;
+  const filtered = filter ? reviews.filter(r=>r.rating===filter) : reviews;
+  const dist = [5,4,3,2,1].map(s => ({ stars:s, count:reviews.filter(r=>r.rating===s).length }));
+
+  return (
+    <div style={{ maxWidth:800, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      <button onClick={() => navigate(`/event/${eventId}`)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, marginBottom:24 }}>← Back to Event</button>
+
+      <h1 style={{ fontSize:48, marginBottom:4 }}>REVIEWS</h1>
+      <div style={{ color:"var(--muted)", fontSize:14, marginBottom:32 }}>{event.title}</div>
+
+      {/* Rating summary */}
+      {reviews.length > 0 && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:28, display:"grid", gridTemplateColumns:"auto 1fr", gap:32, alignItems:"center" }}>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontFamily:"Bebas Neue", fontSize:72, color:"var(--gold)", lineHeight:1 }}>{avgRating}</div>
+            <div style={{ color:"var(--gold)", fontSize:20, marginBottom:4 }}>{"★".repeat(Math.round(Number(avgRating)))}</div>
+            <div style={{ color:"var(--muted)", fontSize:12 }}>{reviews.length} review{reviews.length!==1?"s":""}</div>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {dist.map(d => (
+              <div key={d.stars} style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer" }} onClick={() => setFilter(filter===d.stars?0:d.stars)}>
+                <span style={{ fontSize:12, color: filter===d.stars?"var(--gold)":"var(--muted)", minWidth:12, fontWeight: filter===d.stars?700:400 }}>{d.stars}★</span>
+                <div style={{ flex:1, height:8, background:"var(--border)", borderRadius:4 }}>
+                  <div style={{ height:"100%", width:`${reviews.length?Math.round((d.count/reviews.length)*100):0}%`, background: filter===d.stars?"var(--gold)":"var(--gold-dim)", borderRadius:4, transition:"width 0.4s" }} />
+                </div>
+                <span style={{ fontSize:12, color:"var(--muted)", minWidth:20, textAlign:"right" }}>{d.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {loading ? <Spinner /> : filtered.length === 0 ? (
+        <div style={{ textAlign:"center", padding:"48px 0", color:"var(--muted)" }}>
+          <div style={{ fontSize:48, marginBottom:12 }}>⭐</div>
+          <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO REVIEWS YET</div>
+        </div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          {filtered.map(r => (
+            <div key={r.id} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, flexWrap:"wrap", gap:8 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:36, height:36, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, fontWeight:700, color:"#000" }}>{r.userName?.[0]}</div>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:14 }}>{r.userName}</div>
+                    <div style={{ color:"var(--muted)", fontSize:11 }}>{new Date(r.createdAt).toLocaleDateString("en-NG",{month:"long",day:"numeric",year:"numeric"})}</div>
+                  </div>
+                </div>
+                <div style={{ color:"var(--gold)", fontSize:18 }}>{"★".repeat(r.rating)}{"☆".repeat(5-r.rating)}</div>
+              </div>
+              <p style={{ color:"var(--muted)", fontSize:14, lineHeight:1.8 }}>{r.comment}</p>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
