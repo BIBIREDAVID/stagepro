@@ -96,14 +96,50 @@ function downloadCSV(event, tickets) {
   URL.revokeObjectURL(url);
 }
 
-// ── QR Code — now encodes a full URL ──────────────────────────────────────
+// ── QR Code — client-side, no external API dependency ─────────────────────
 const QRCode = ({ ticketId, size = 160 }) => {
+  const canvasRef = useRef(null);
+  const [loaded, setLoaded] = useState(false);
   const url = `${window.location.origin}/ticket/${ticketId}`;
+
+  useEffect(() => {
+    // Dynamically load qrcode-generator (tiny, no dependencies)
+    if (window._qrLoaded) { renderQR(); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
+    s.onload = () => { window._qrLoaded = true; renderQR(); };
+    document.head.appendChild(s);
+  }, [ticketId]);
+
+  const renderQR = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !window.QRCode) return;
+    // Clear previous
+    canvas.innerHTML = "";
+    try {
+      new window.QRCode(canvas, {
+        text: url,
+        width: size,
+        height: size,
+        colorDark: "#f5a623",
+        colorLight: "#0a0a0a",
+        correctLevel: window.QRCode.CorrectLevel.M,
+      });
+      setLoaded(true);
+    } catch (e) {
+      console.error("QR render failed", e);
+    }
+  };
+
   return (
-    <img
-      src={`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}&bgcolor=0a0a0a&color=f5a623&format=svg`}
-      alt="QR Code" width={size} height={size} style={{ borderRadius: 8 }}
-    />
+    <div style={{ position:"relative", width:size, height:size, borderRadius:8, overflow:"hidden", background:"#0a0a0a" }}>
+      {!loaded && (
+        <div style={{ position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <i className="fa-solid fa-circle-notch fa-spin" style={{ color:"var(--gold)", fontSize:24 }} />
+        </div>
+      )}
+      <div ref={canvasRef} style={{ width:size, height:size }} />
+    </div>
   );
 };
 
@@ -1550,11 +1586,19 @@ function CheckoutPage({ ctx }) {
 
   // ── Paid tickets — launch Paystack popup ──────────────────────────────
   const handlePay = async () => {
+    const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
+    console.log("Paystack key:", paystackKey);
+
+    if (!paystackKey) {
+      alert("Paystack key not found. Check VITE_PAYSTACK_PUBLIC_KEY in Vercel environment variables and redeploy.");
+      return;
+    }
+
     setProcessing(true);
     await loadPaystack();
 
     const handler = window.PaystackPop.setup({
-      key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
+      key: paystackKey,
       email: currentUser.email,
       amount: total * 100, // Paystack uses kobo
       currency: "NGN",
@@ -1689,6 +1733,16 @@ function CheckoutPage({ ctx }) {
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginTop:14, color:"var(--muted)", fontSize:12 }}>
           <i className="fa-solid fa-lock" style={{ fontSize:11 }} />
           <span>Secured by Paystack · Cards, Bank Transfer & USSD accepted</span>
+        </div>
+      )}
+
+      {/* Dev debug — remove after confirming key works */}
+      {!isFree && (
+        <div style={{ marginTop:12, padding:"8px 12px", borderRadius:8, background:"var(--bg3)", fontSize:11, color:"var(--muted)", fontFamily:"DM Mono", textAlign:"center" }}>
+          Key status: {import.meta.env.VITE_PAYSTACK_PUBLIC_KEY
+            ? <span style={{ color:"var(--green)" }}>✓ loaded ({import.meta.env.VITE_PAYSTACK_PUBLIC_KEY.slice(0,14)}...)</span>
+            : <span style={{ color:"var(--red)" }}>✗ NOT FOUND — redeploy needed</span>
+          }
         </div>
       )}
     </div>
