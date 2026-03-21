@@ -549,6 +549,9 @@ export default function App() {
   const purchaseTickets = async (eventId, cartSelections, paystackRef = null) => {
     const event = events.find(e => e.id === eventId);
     const newTickets = [];
+    const SERVICE_FEE = 100;
+    const orderSubtotal = event.tiers.reduce((s,t) => s + (cartSelections[t.id]||0) * Number(t.price), 0);
+    const isFreeOrder = orderSubtotal === 0;
     // Step 1 — create ticket documents (requires only tickets.create rule)
     try {
       for (const tier of event.tiers) {
@@ -571,7 +574,9 @@ export default function App() {
             action: "purchase", ticketId: ref.id,
             eventTitle: event.title, tierName: tier.name,
             userName: currentUser.name, email: currentUser.email,
-            price: Number(tier.price), purchasedAt: new Date().toLocaleString("en-NG"),
+            price: Number(tier.price),
+            serviceFee: isFreeOrder ? 0 : SERVICE_FEE,
+            purchasedAt: new Date().toLocaleString("en-NG"),
             paystackRef: paystackRef || "free",
           });
         }
@@ -1564,8 +1569,10 @@ function CheckoutPage({ ctx }) {
   if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
-  const total = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
-  const isFree = total === 0;
+  const subtotal = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
+  const SERVICE_FEE = 100; // ₦100 flat per order
+  const isFree = subtotal === 0;
+  const total = isFree ? 0 : subtotal + SERVICE_FEE;
 
   // ── Load Paystack script once ──────────────────────────────────────────
   const loadPaystack = () => new Promise(resolve => {
@@ -1587,7 +1594,6 @@ function CheckoutPage({ ctx }) {
   // ── Paid tickets — launch Paystack popup ──────────────────────────────
   const handlePay = async () => {
     const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
-    console.log("Paystack key:", paystackKey);
 
     if (!paystackKey) {
       alert("Paystack key not found. Check VITE_PAYSTACK_PUBLIC_KEY in Vercel environment variables and redeploy.");
@@ -1657,6 +1663,18 @@ function CheckoutPage({ ctx }) {
             </div>
           );
         })}
+
+        {/* Service fee line — only for paid orders */}
+        {!isFree && (
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ color:"var(--muted)", fontSize:13 }}>Service fee</span>
+              <span style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:100, padding:"1px 8px", fontSize:10, color:"var(--muted)", letterSpacing:1 }}>STAGEPRO</span>
+            </div>
+            <span style={{ fontFamily:"DM Mono", fontSize:14, color:"var(--muted)" }}>₦100</span>
+          </div>
+        )}
+
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", paddingTop:16 }}>
           <span style={{ fontWeight:600 }}>Total</span>
           {isFree
@@ -1733,16 +1751,6 @@ function CheckoutPage({ ctx }) {
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginTop:14, color:"var(--muted)", fontSize:12 }}>
           <i className="fa-solid fa-lock" style={{ fontSize:11 }} />
           <span>Secured by Paystack · Cards, Bank Transfer & USSD accepted</span>
-        </div>
-      )}
-
-      {/* Dev debug — remove after confirming key works */}
-      {!isFree && (
-        <div style={{ marginTop:12, padding:"8px 12px", borderRadius:8, background:"var(--bg3)", fontSize:11, color:"var(--muted)", fontFamily:"DM Mono", textAlign:"center" }}>
-          Key status: {import.meta.env.VITE_PAYSTACK_PUBLIC_KEY
-            ? <span style={{ color:"var(--green)" }}>✓ loaded ({import.meta.env.VITE_PAYSTACK_PUBLIC_KEY.slice(0,14)}...)</span>
-            : <span style={{ color:"var(--red)" }}>✗ NOT FOUND — redeploy needed</span>
-          }
         </div>
       )}
     </div>
