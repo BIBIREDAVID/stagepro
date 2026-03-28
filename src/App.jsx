@@ -97,39 +97,40 @@ function downloadCSV(event, tickets) {
 }
 
 // ── QR Code — client-side, no external API dependency ─────────────────────
-const QRCode = ({ ticketId, size = 160 }) => {
+function QRCode({ ticketId, size = 160 }) {
   const canvasRef = useRef(null);
   const [loaded, setLoaded] = useState(false);
   const url = `${window.location.origin}/ticket/${ticketId}`;
 
   useEffect(() => {
-    // Dynamically load qrcode-generator (tiny, no dependencies)
-    if (window._qrLoaded) { renderQR(); return; }
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
-    s.onload = () => { window._qrLoaded = true; renderQR(); };
-    document.head.appendChild(s);
-  }, [ticketId]);
+    const renderQR = () => {
+      const canvas = canvasRef.current;
+      if (!canvas || !window.QRCode) return;
+      canvas.innerHTML = "";
+      try {
+        new window.QRCode(canvas, {
+          text: url,
+          width: size,
+          height: size,
+          colorDark: "#f5a623",
+          colorLight: "#0a0a0a",
+          correctLevel: window.QRCode.CorrectLevel.M,
+        });
+        setLoaded(true);
+      } catch (e) {
+        console.error("QR render failed", e);
+      }
+    };
 
-  const renderQR = () => {
-    const canvas = canvasRef.current;
-    if (!canvas || !window.QRCode) return;
-    // Clear previous
-    canvas.innerHTML = "";
-    try {
-      new window.QRCode(canvas, {
-        text: url,
-        width: size,
-        height: size,
-        colorDark: "#f5a623",
-        colorLight: "#0a0a0a",
-        correctLevel: window.QRCode.CorrectLevel.M,
-      });
-      setLoaded(true);
-    } catch (e) {
-      console.error("QR render failed", e);
+    if (window._qrLoaded) {
+      renderQR();
+    } else {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
+      s.onload = () => { window._qrLoaded = true; renderQR(); };
+      document.head.appendChild(s);
     }
-  };
+  }, [ticketId, url, size]);
 
   return (
     <div style={{ position:"relative", width:size, height:size, borderRadius:8, overflow:"hidden", background:"#0a0a0a" }}>
@@ -141,7 +142,7 @@ const QRCode = ({ ticketId, size = 160 }) => {
       <div ref={canvasRef} style={{ width:size, height:size }} />
     </div>
   );
-};
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => `₦${Number(n).toLocaleString()}`;
