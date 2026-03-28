@@ -1448,7 +1448,8 @@ function EventPage({ ctx }) {
   const [cart, setCart] = useState({});
   const [event, setEvent] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [waitlistStatus, setWaitlistStatus] = useState({}); // tierId -> "joining"|"joined"|"error"
+  const [waitlistStatus, setWaitlistStatus] = useState({});
+  const [guestModal, setGuestModal] = useState(false);
 
   useEffect(() => {
     const local = events.find(e => e.id === eventId);
@@ -1474,8 +1475,6 @@ function EventPage({ ctx }) {
       return { ...prev, [tierId]: qty };
     });
   };
-
-  const [guestModal, setGuestModal] = useState(false);
 
   const handleCheckout = () => {
     sessionStorage.setItem("cart", JSON.stringify(cart));
@@ -3060,7 +3059,7 @@ function NotificationBell({ currentUser, events }) {
       <button onClick={() => { setOpen(p=>!p); if (unread>0) markAllRead(); }}
         style={{ position:"relative", background:"none", border:"1px solid var(--border)", borderRadius:8, width:36, height:36, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}
       >
-        🔔
+        <i className="fa-solid fa-bell" style={{ fontSize:16, color:"var(--muted)" }} />
         {unread > 0 && (
           <span style={{ position:"absolute", top:-4, right:-4, background:"var(--red)", color:"#fff", borderRadius:"50%", width:16, height:16, fontSize:10, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>
             {unread > 9 ? "9+" : unread}
