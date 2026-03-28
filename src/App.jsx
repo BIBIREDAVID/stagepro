@@ -2072,6 +2072,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
   const [touched, setTouched] = useState({});
   const [imageUploading, setImageUploading] = useState(false);
   const [imageProgress, setImageProgress] = useState(0);
+  const [imgErr, setImgErr] = useState(false);
   const fileInputRef = useRef(null);
 
   const F = (k) => (e) => { setForm(p=>({...p,[k]:e.target.value})); setTouched(p=>({...p,[k]:true})); };
@@ -2174,12 +2175,12 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           <div style={{ display:"flex", gap:8, marginBottom:10 }}>
             <input
               value={form.image}
-              onChange={e => setForm(p=>({...p, image: e.target.value}))}
-              placeholder="Paste image URL — e.g. from Imgur, Google Drive, Cloudinary..."
+              onChange={e => { setForm(p=>({...p, image: e.target.value})); setImgErr(false); }}
+              placeholder="Paste direct image URL (ends in .jpg, .png, .webp...)"
               style={{ ...iStyle("image", false), flex:1, fontSize:13 }}
             />
             {form.image && (
-              <button type="button" onClick={() => setForm(p=>({...p, image:""}))}
+              <button type="button" onClick={() => { setForm(p=>({...p, image:""})); setImgErr(false); }}
                 style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", color:"var(--red)", padding:"0 14px", borderRadius:8, cursor:"pointer", fontSize:13, flexShrink:0 }}>
                 Clear
               </button>
@@ -2187,20 +2188,34 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           </div>
 
           {/* Live preview */}
-          {form.image && (
-            <div style={{ borderRadius:12, overflow:"hidden", border:"1px solid var(--border)", marginBottom:10 }}>
-              <img src={form.image} alt="Preview" style={{ width:"100%", height:200, objectFit:"cover", display:"block" }}
-                onError={e => { e.target.style.display="none"; }}
+          {form.image && !imgErr && (
+            <div style={{ borderRadius:12, overflow:"hidden", border:"1px solid var(--border)", marginBottom:10, background:"var(--bg3)", minHeight:60, display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <img
+                src={form.image}
+                alt="Preview"
+                style={{ width:"100%", height:200, objectFit:"cover", display:"block" }}
+                onError={() => setImgErr(true)}
               />
+            </div>
+          )}
+
+          {/* Error state */}
+          {form.image && imgErr && (
+            <div style={{ borderRadius:12, border:"1px solid var(--red)", background:"rgba(232,64,64,0.06)", padding:"14px 16px", marginBottom:10, fontSize:12, color:"var(--red)", lineHeight:1.7 }}>
+              <i className="fa-solid fa-triangle-exclamation" style={{ marginRight:6 }} />
+              <strong>Image could not load.</strong> Make sure the URL is a <em>direct image link</em> ending in <code>.jpg</code>, <code>.png</code>, or <code>.webp</code>.<br />
+              <span style={{ color:"var(--muted)" }}>
+                The URL you pasted may be a page link, not the image itself. See the tip below.
+              </span>
             </div>
           )}
 
           <div style={{ fontSize:11, color:"var(--muted)", lineHeight:1.8 }}>
             <i className="fa-solid fa-circle-info" style={{ marginRight:5, color:"var(--gold)" }} />
-            <strong style={{ color:"var(--text)" }}>How to get a free image URL:</strong>{" "}
-            Upload your flyer to{" "}
-            <a href="https://imgur.com/upload" target="_blank" rel="noreferrer" style={{ color:"var(--gold)" }}>imgur.com</a>
-            {" "}→ right-click the image → <em>Copy image address</em>. Paste it above.
+            <strong style={{ color:"var(--text)" }}>Tip:</strong>{" "}
+            Upload to <a href="https://imgur.com/upload" target="_blank" rel="noreferrer" style={{ color:"var(--gold)" }}>imgur.com</a> →
+            once uploaded, <strong style={{ color:"var(--text)" }}>right-click the image → Open image in new tab</strong> →
+            copy that URL (starts with <code style={{ color:"var(--gold)" }}>https://i.imgur.com/</code>).
           </div>
         </div>
 
