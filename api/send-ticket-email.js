@@ -434,4 +434,3 @@ export default async function handler(req, res) {
     console.error("Send email error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
-}
