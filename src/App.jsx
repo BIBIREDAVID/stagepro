@@ -2166,38 +2166,42 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           {fieldErr("venue")}
         </div>
 
-        {/* Event Image Upload */}
+        {/* Event Image — URL input */}
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT IMAGE / FLYER</label>
-          <input ref={fileInputRef} type="file" accept="image/*" style={{ display:"none" }} onChange={handleImageUpload} />
-          {form.image ? (
-            <div style={{ position:"relative", borderRadius:12, overflow:"hidden", border:"1px solid var(--border)" }}>
-              <img src={form.image} alt="Event" style={{ width:"100%", height:200, objectFit:"cover", display:"block" }} />
-              <div style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.4)", display:"flex", alignItems:"center", justifyContent:"center", opacity:0, transition:"opacity 0.2s" }}
-                onMouseEnter={e => e.currentTarget.style.opacity=1}
-                onMouseLeave={e => e.currentTarget.style.opacity=0}
-              >
-                <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 20px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:13 }}>
-                  🖼️ Change Image
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={imageUploading}
-              style={{ width:"100%", border:"2px dashed var(--border)", borderRadius:12, padding:"32px 24px", background:"var(--bg3)", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:10, color:"var(--muted)", transition:"border-color 0.2s" }}
-              onMouseEnter={e => e.currentTarget.style.borderColor="var(--gold)"}
-              onMouseLeave={e => e.currentTarget.style.borderColor="var(--border)"}
-            >
-              <span style={{ fontSize:36 }}>🖼️</span>
-              <span style={{ fontWeight:600, fontSize:14 }}>{imageUploading ? `Uploading... ${imageProgress}%` : "Click to upload event image"}</span>
-              <span style={{ fontSize:12 }}>JPG, PNG, WEBP — max 5MB</span>
-            </button>
-          )}
-          {imageUploading && (
-            <div style={{ marginTop:8, height:4, background:"var(--border)", borderRadius:2 }}>
-              <div style={{ height:"100%", width:`${imageProgress}%`, background:"var(--gold)", borderRadius:2, transition:"width 0.3s" }} />
+
+          {/* URL input row */}
+          <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+            <input
+              value={form.image}
+              onChange={e => setForm(p=>({...p, image: e.target.value}))}
+              placeholder="Paste image URL — e.g. from Imgur, Google Drive, Cloudinary..."
+              style={{ ...iStyle("image", false), flex:1, fontSize:13 }}
+            />
+            {form.image && (
+              <button type="button" onClick={() => setForm(p=>({...p, image:""}))}
+                style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", color:"var(--red)", padding:"0 14px", borderRadius:8, cursor:"pointer", fontSize:13, flexShrink:0 }}>
+                Clear
+              </button>
+            )}
+          </div>
+
+          {/* Live preview */}
+          {form.image && (
+            <div style={{ borderRadius:12, overflow:"hidden", border:"1px solid var(--border)", marginBottom:10 }}>
+              <img src={form.image} alt="Preview" style={{ width:"100%", height:200, objectFit:"cover", display:"block" }}
+                onError={e => { e.target.style.display="none"; }}
+              />
             </div>
           )}
+
+          <div style={{ fontSize:11, color:"var(--muted)", lineHeight:1.8 }}>
+            <i className="fa-solid fa-circle-info" style={{ marginRight:5, color:"var(--gold)" }} />
+            <strong style={{ color:"var(--text)" }}>How to get a free image URL:</strong>{" "}
+            Upload your flyer to{" "}
+            <a href="https://imgur.com/upload" target="_blank" rel="noreferrer" style={{ color:"var(--gold)" }}>imgur.com</a>
+            {" "}→ right-click the image → <em>Copy image address</em>. Paste it above.
+          </div>
         </div>
 
         {/* Banner Theme / Color */}
