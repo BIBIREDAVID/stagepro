@@ -4044,10 +4044,10 @@ function ContactPage() {
       {/* Contact info cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:16, marginTop:48 }}>
         {[
-          { icon:<i className="fa-solid fa-envelope" />, title:"Email Support", detail:"support@stagepro.ng", sub:"Response within 24 hours" },
+          { icon:<i className="fa-solid fa-envelope" />, title:"Email Support", detail:"davidbibiresanmi@gmail.com", sub:"Response within 24 hours" },
           { icon:<i className="fa-solid fa-building" />, title:"Office", detail:"Victoria Island, Lagos", sub:"Nigeria" },
           { icon:<i className="fa-solid fa-clock" />, title:"Support Hours", detail:"Mon – Fri, 9am – 6pm", sub:"West Africa Time (WAT)" },
-          { icon:<i className="fa-solid fa-bolt" />, title:"Urgent Issues", detail:"legal@stagepro.ng", sub:"For time-sensitive event matters" },
+          { icon:<i className="fa-solid fa-bolt" />, title:"Urgent Issues", detail:"davidbibiresanmi@gmail.com", sub:"For time-sensitive event matters" },
         ].map(c => (
           <div key={c.title} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"20px 24px" }}>
             <div style={{ fontSize:28, marginBottom:10 }}>{c.icon}</div>
