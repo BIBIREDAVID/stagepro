@@ -186,7 +186,7 @@ const fmtDate = (d) =>
 
 // ── Email ticket via EmailJS ───────────────────────────────────────────────
 // ── Send ticket confirmation email via Resend (Vercel serverless function) ──
-const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
+const sendTicketEmail = async ({ toEmail, toName, ticket, eventImage, themeColor, organizerName }) => {
   try {
     const ticketUrl = `${window.location.origin}/ticket/${ticket.id}`;
     const amountPaid = ticket.price === 0 ? "FREE" : `₦${Number(ticket.price).toLocaleString()}`;
@@ -196,14 +196,17 @@ const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
       body: JSON.stringify({
         toEmail,
         toName,
-        eventTitle:  ticket.eventTitle,
-        eventDate:   new Date(ticket.eventDate).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }),
-        eventTime:   ticket.eventTime || "See event page",
-        eventVenue:  ticket.venue,
-        tierName:    ticket.tierName,
+        eventTitle:    ticket.eventTitle,
+        eventDate:     new Date(ticket.eventDate).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }),
+        eventTime:     ticket.eventTime || "See event page",
+        eventVenue:    ticket.venue,
+        tierName:      ticket.tierName,
         amountPaid,
         ticketUrl,
-        ticketId:    ticket.id,
+        ticketId:      ticket.id,
+        eventImage:    eventImage || null,
+        themeColor:    themeColor || "#f5a623",
+        organizerName: organizerName || "StagePro",
       }),
     });
   } catch (err) {
@@ -571,7 +574,31 @@ export default function App() {
           const ref = await addDoc(collection(db, "tickets"), ticketData);
           const newTicket = { id: ref.id, ...ticketData };
           newTickets.push(newTicket);
-          sendTicketEmail({ toEmail: buyerEmail, toName: buyerName, ticket: newTicket });
+
+          // Fetch organiser name for personalised email
+          let organizerName = "StagePro";
+          try {
+            const orgSnap = await getDoc(doc(db, "users", event.organizer));
+            if (orgSnap.exists()) organizerName = orgSnap.data().name || "StagePro";
+          } catch { /* non-critical */ }
+
+          // Resolve theme colour for email banner
+          const themeColors = {
+            purple: "#6a11cb", fire: "#f83600", ocean: "#0575e6",
+            forest: "#134e5e", gold: "#f7971e", rose: "#f953c6",
+            midnight: "#232526", neon: "#00f260", sunset: "#f7971e",
+            teal: "#11998e", royal: "#141e30",
+          };
+          const themeColor = themeColors[event.theme] || "#f5a623";
+
+          sendTicketEmail({
+            toEmail: buyerEmail,
+            toName: buyerName,
+            ticket: newTicket,
+            eventImage: event.image || null,
+            themeColor,
+            organizerName,
+          });
           logToSheets({
             action: "purchase", ticketId: ref.id,
             eventTitle: event.title, tierName: tier.name,
