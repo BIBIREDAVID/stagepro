@@ -185,8 +185,9 @@ const fmtDate = (d) =>
 
 
 // ── Email ticket via EmailJS ───────────────────────────────────────────────
-// Setup: go to emailjs.com → create account → Email Templates → use template
-// variables: to_email, to_name, event_title, event_date, venue, tier, ticket_id, ticket_url
+// ── Send ticket confirmation email via EmailJS ─────────────────────────────
+// Template variables: to_email, to_name, event_title, event_date, event_time,
+// event_venue, tier_name, amount_paid, ticket_url
 const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
   try {
     const EMAILJS_SERVICE  = import.meta.env.VITE_EMAILJS_SERVICE  || "";
@@ -194,6 +195,7 @@ const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
     const EMAILJS_KEY      = import.meta.env.VITE_EMAILJS_KEY      || "";
     if (!EMAILJS_SERVICE || !EMAILJS_TEMPLATE || !EMAILJS_KEY) return; // not configured yet
     const ticketUrl = `${window.location.origin}/ticket/${ticket.id}`;
+    const amountPaid = ticket.price === 0 ? "FREE" : `₦${Number(ticket.price).toLocaleString()}`;
     await fetch("https://api.emailjs.com/api/v1.0/email/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -205,14 +207,16 @@ const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
           to_email:    toEmail,
           to_name:     toName,
           event_title: ticket.eventTitle,
-          event_date:  ticket.eventDate,
-          venue:       ticket.venue,
-          tier:        ticket.tierName,
-          ticket_id:   ticket.id,
+          event_date:  new Date(ticket.eventDate).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }),
+          event_time:  ticket.eventTime || "See event page",
+          event_venue: ticket.venue,
+          tier_name:   ticket.tierName,
+          amount_paid: amountPaid,
           ticket_url:  ticketUrl,
         },
       }),
     });
+    console.log("Ticket email sent to", toEmail);
   } catch (err) {
     console.warn("Email send failed (non-critical):", err);
   }
@@ -433,6 +437,7 @@ function Nav({ currentUser, logout, notification, events }) {
             </>
           ) : (
             <>
+              <Link to="/find-tickets" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Find My Tickets</Link>
               <Link to="/login" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Login</Link>
               <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:6, fontWeight:600, fontSize:14 }}>Get Started</Link>
             </>
@@ -824,6 +829,7 @@ export default function App() {
           <Route path="/event/:eventId/checkout" element={<CheckoutPage ctx={ctx} />} />
           <Route path="/tickets" element={currentUser ? <MyTicketsPage ctx={ctx} /> : <Navigate to="/login" />} />
           <Route path="/ticket/:ticketId" element={<TicketPage ctx={ctx} />} />
+          <Route path="/find-tickets" element={<GuestTicketLookupPage />} />
           <Route path="/dashboard" element={currentUser?.role === "organizer" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
@@ -910,6 +916,10 @@ function Footer() {
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >Help Centre</Link>
+            <Link to="/find-tickets" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+              onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
+              onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
+            >Find My Tickets</Link>
             <Link to="/contact" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
@@ -1568,7 +1578,7 @@ function EventPage({ ctx }) {
               </div>
             )}
             <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:16, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
-              {totalItems===0 ? "SELECT TICKETS" : totalPrice===0 ? "CLAIM FREE TICKETS →" : "PROCEED TO CHECKOUT →"}
+              {totalItems===0 ? "SELECT TICKETS" : totalPrice===0 ? "CONFIRM REGISTRATION →" : "PROCEED TO CHECKOUT →"}
             </button>
             {!currentUser && totalItems > 0 && (
               <div style={{ textAlign:"center", marginTop:10, fontSize:12, color:"var(--muted)" }}>
@@ -1820,7 +1830,7 @@ function CheckoutPage({ ctx }) {
           <i className="fa-solid fa-circle-exclamation" style={{ color:"var(--red)", fontSize:20 }} />
           <div>
             <div style={{ fontWeight:700, color:"var(--red)", fontSize:14 }}>Payment received but ticket creation failed</div>
-            <div style={{ color:"var(--muted)", fontSize:13 }}>Please contact support@stagepro.ng with your payment reference.</div>
+            <div style={{ color:"var(--muted)", fontSize:13 }}>Please contact davidbibiresanmi@gmail.com with your payment reference.</div>
           </div>
         </div>
       )}
@@ -1834,7 +1844,7 @@ function CheckoutPage({ ctx }) {
         {processing
           ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")
           : isFree
-            ? "CLAIM FREE TICKETS →"
+            ? "CONFIRM REGISTRATION →"
             : `PAY ${fmt(total)} WITH PAYSTACK →`
         }
       </button>
@@ -3606,7 +3616,7 @@ function TermsPage() {
       </LegalSection>
 
       <LegalSection title="12. Contact Us">
-        <p>If you have questions about these Terms of Service, please contact us at <span style={{ color:"var(--gold)" }}>legal@stagepro.ng</span> or write to us at StagePro HQ, Victoria Island, Lagos, Nigeria.</p>
+        <p>If you have questions about these Terms of Service, please contact us at <span style={{ color:"var(--gold)" }}>davidbibiresanmi@gmail.com</span> or write to us at StagePro HQ, Victoria Island, Lagos, Nigeria.</p>
       </LegalSection>
     </LegalPage>
   );
@@ -3810,7 +3820,7 @@ function HelpPage() {
         },
         {
           q: "Can I get a refund?",
-          a: "All ticket sales are final unless the event is cancelled or significantly changed by the organiser. If an event you have tickets for is cancelled, the organiser is required to issue a full refund within 14 days. Contact the event organiser directly or reach us at support@stagepro.ng if you need assistance."
+          a: "All ticket sales are final unless the event is cancelled or significantly changed by the organiser. If an event you have tickets for is cancelled, the organiser is required to issue a full refund within 14 days. Contact the event organiser directly or reach us at davidbibiresanmi@gmail.com if you need assistance."
         },
         {
           q: "How do I transfer a ticket to someone else?",
@@ -3835,7 +3845,7 @@ function HelpPage() {
         },
         {
           q: "Can I change my email address?",
-          a: "Email addresses cannot be changed once registered as they are tied to your account identity. If you need to change your email, please contact us at support@stagepro.ng and we will assist you."
+          a: "Email addresses cannot be changed once registered as they are tied to your account identity. If you need to change your email, please contact us at davidbibiresanmi@gmail.com and we will assist you."
         },
         {
           q: "How do I update my display name?",
@@ -4028,7 +4038,7 @@ function ContactPage() {
 
               {status === "error" && (
                 <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:8, padding:"10px 16px", marginBottom:16, fontSize:13, color:"var(--red)" }}>
-                  Something went wrong. Please try again or email us directly at <strong>support@stagepro.ng</strong>
+                  Something went wrong. Please try again or email us directly at <strong>davidbibiresanmi@gmail.com</strong>
                 </div>
               )}
 
@@ -4057,6 +4067,183 @@ function ContactPage() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Guest Ticket Lookup Page (/find-tickets) ───────────────────────────────
+function GuestTicketLookupPage() {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | searching | found | empty | error
+  const [tickets, setTickets] = useState([]);
+  const [selected, setSelected] = useState(null);
+
+  const handleSearch = async () => {
+    if (!email.trim() || !email.includes("@")) return;
+    setStatus("searching");
+    setTickets([]);
+    try {
+      const q = query(
+        collection(db, "tickets"),
+        where("userEmail", "==", email.trim().toLowerCase())
+      );
+      const snap = await getDocs(q);
+      const found = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Sort newest first
+      found.sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt));
+      if (found.length === 0) {
+        setStatus("empty");
+      } else {
+        setTickets(found);
+        setStatus("found");
+      }
+    } catch (err) {
+      console.error(err);
+      setStatus("error");
+    }
+  };
+
+  const iStyle = { width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:15, outline:"none", fontFamily:"DM Sans" };
+
+  return (
+    <div style={{ maxWidth:680, margin:"0 auto", padding:"48px 24px 80px", animation:"fadeUp 0.4s ease" }}>
+      <Link to="/" style={{ color:"var(--muted)", fontSize:14, display:"inline-block", marginBottom:32 }}>← Back</Link>
+
+      {/* Header */}
+      <div style={{ marginBottom:40 }}>
+        <div style={{ fontSize:12, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:12, fontWeight:500 }}>Guest Tickets</div>
+        <h1 style={{ fontSize:"clamp(36px,7vw,64px)", lineHeight:0.95, marginBottom:16 }}>FIND MY TICKETS</h1>
+        <p style={{ color:"var(--muted)", fontSize:15, lineHeight:1.7 }}>
+          Bought tickets without creating an account? Enter the email address you used at checkout and we'll show all your tickets.
+        </p>
+      </div>
+
+      {/* Search box */}
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:24 }}>
+        <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>EMAIL ADDRESS USED AT CHECKOUT</label>
+        <div style={{ display:"flex", gap:10 }}>
+          <div style={{ position:"relative", flex:1 }}>
+            <i className="fa-solid fa-envelope" style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:"var(--muted)", fontSize:14, pointerEvents:"none" }} />
+            <input
+              type="email"
+              value={email}
+              onChange={e => { setEmail(e.target.value); setStatus("idle"); }}
+              onKeyDown={e => e.key === "Enter" && handleSearch()}
+              placeholder="your@email.com"
+              style={{ ...iStyle, paddingLeft:42 }}
+            />
+          </div>
+          <button
+            onClick={handleSearch}
+            disabled={!email.includes("@") || status === "searching"}
+            style={{ background: email.includes("@") ? "var(--gold)" : "var(--bg3)", color: email.includes("@") ? "#000" : "var(--muted)", border:"none", padding:"0 24px", borderRadius:10, cursor: email.includes("@") ? "pointer" : "not-allowed", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, flexShrink:0, transition:"background 0.2s" }}
+          >
+            {status === "searching" ? <i className="fa-solid fa-circle-notch fa-spin" /> : "SEARCH"}
+          </button>
+        </div>
+        <p style={{ fontSize:11, color:"var(--muted)", marginTop:10 }}>
+          <i className="fa-solid fa-lock" style={{ marginRight:4 }} />
+          We only show tickets purchased with this exact email address.
+        </p>
+      </div>
+
+      {/* Empty state */}
+      {status === "empty" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:"40px 28px", textAlign:"center", animation:"fadeUp 0.3s ease" }}>
+          <div style={{ fontSize:48, marginBottom:16, color:"var(--muted)" }}><i className="fa-solid fa-ticket-slash" /></div>
+          <h3 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:8 }}>NO TICKETS FOUND</h3>
+          <p style={{ color:"var(--muted)", fontSize:14, marginBottom:20, lineHeight:1.7 }}>
+            We couldn't find any tickets for <strong style={{ color:"var(--text)" }}>{email}</strong>.<br />
+            Make sure you're using the exact email you entered at checkout.
+          </p>
+          <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:320, margin:"0 auto" }}>
+            <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, textAlign:"center" }}>CREATE AN ACCOUNT</Link>
+            <Link to="/contact" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"12px 24px", borderRadius:10, fontSize:13, textAlign:"center" }}>Contact Support</Link>
+          </div>
+        </div>
+      )}
+
+      {/* Error state */}
+      {status === "error" && (
+        <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:12, padding:"16px 20px", fontSize:13, color:"var(--red)" }}>
+          <i className="fa-solid fa-triangle-exclamation" style={{ marginRight:8 }} />
+          Something went wrong. Please try again or contact <a href="mailto:davidbibiresanmi@gmail.com" style={{ color:"var(--red)" }}>davidbibiresanmi@gmail.com</a>.
+        </div>
+      )}
+
+      {/* Results */}
+      {status === "found" && (
+        <div style={{ animation:"fadeUp 0.3s ease" }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
+            <h2 style={{ fontFamily:"Bebas Neue", fontSize:26, letterSpacing:2 }}>
+              {tickets.length} TICKET{tickets.length !== 1 ? "S" : ""} FOUND
+            </h2>
+            <span style={{ fontSize:13, color:"var(--muted)" }}>{email}</span>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {tickets.map(ticket => {
+              const isOpen = selected === ticket.id;
+              const isUsed = ticket.used;
+              return (
+                <div key={ticket.id}
+                  style={{ background:"var(--bg2)", border:`1px solid ${isOpen ? "var(--gold)" : "var(--border)"}`, borderRadius:14, overflow:"hidden", transition:"border-color 0.2s", cursor:"pointer" }}
+                  onClick={() => setSelected(isOpen ? null : ticket.id)}
+                >
+                  {/* Ticket row */}
+                  <div style={{ padding:"16px 20px", display:"flex", alignItems:"center", gap:16 }}>
+                    <div style={{ width:44, height:44, borderRadius:10, background: isUsed ? "var(--bg3)" : "rgba(245,166,35,0.12)", border:`1px solid ${isUsed ? "var(--border)" : "var(--gold-dim)"}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                      <i className={`fa-solid fa-ticket`} style={{ color: isUsed ? "var(--muted)" : "var(--gold)", fontSize:18 }} />
+                    </div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontWeight:700, fontSize:15, color:"var(--text)", marginBottom:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{ticket.eventTitle}</div>
+                      <div style={{ fontSize:12, color:"var(--muted)" }}>
+                        {ticket.tierName} · {new Date(ticket.eventDate).toLocaleDateString("en-NG", { day:"numeric", month:"short", year:"numeric" })}
+                        {ticket.venue && ` · ${ticket.venue}`}
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4, flexShrink:0 }}>
+                      <span style={{ background: isUsed ? "var(--bg3)" : "rgba(61,220,132,0.1)", color: isUsed ? "var(--muted)" : "var(--green)", border:`1px solid ${isUsed ? "var(--border)" : "rgba(61,220,132,0.3)"}`, borderRadius:100, padding:"2px 10px", fontSize:11, fontWeight:600, letterSpacing:1 }}>
+                        {isUsed ? "USED" : "VALID"}
+                      </span>
+                      <i className={`fa-solid fa-chevron-${isOpen ? "up" : "down"}`} style={{ color:"var(--muted)", fontSize:11 }} />
+                    </div>
+                  </div>
+
+                  {/* Expanded QR */}
+                  {isOpen && (
+                    <div style={{ borderTop:"1px solid var(--border)", padding:24, display:"flex", flexDirection:"column", alignItems:"center", gap:16, background:"var(--bg3)", animation:"fadeUp 0.2s ease" }}>
+                      <QRCode ticketId={ticket.id} size={200} />
+                      <p style={{ fontSize:12, color:"var(--muted)", textAlign:"center" }}>
+                        {isUsed
+                          ? "This ticket has already been scanned and used for entry."
+                          : "Present this QR code at the entrance for entry."}
+                      </p>
+                      <Link
+                        to={`/ticket/${ticket.id}`}
+                        onClick={e => e.stopPropagation()}
+                        style={{ background:"var(--gold)", color:"#000", padding:"10px 28px", borderRadius:8, fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2 }}
+                      >
+                        VIEW FULL TICKET
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Create account nudge */}
+          <div style={{ marginTop:32, background:"linear-gradient(135deg,rgba(245,166,35,0.08),rgba(245,166,35,0.03))", border:"1px solid var(--gold-dim)", borderRadius:14, padding:"20px 24px", display:"flex", alignItems:"center", gap:16 }}>
+            <i className="fa-solid fa-star" style={{ color:"var(--gold)", fontSize:24, flexShrink:0 }} />
+            <div style={{ flex:1 }}>
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>Create a free account</div>
+              <div style={{ color:"var(--muted)", fontSize:13 }}>Save your tickets in one place, transfer tickets, and get notified about your upcoming events.</div>
+            </div>
+            <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"10px 20px", borderRadius:8, fontFamily:"Bebas Neue", fontSize:16, letterSpacing:1, flexShrink:0 }}>JOIN FREE</Link>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
