@@ -546,13 +546,19 @@ export default function App() {
 
   const logout = async () => { await signOut(auth); setCurrentUser(null); };
 
-  const purchaseTickets = async (eventId, cartSelections, paystackRef = null) => {
+  const purchaseTickets = async (eventId, cartSelections, paystackRef = null, buyer = null) => {
     const event = events.find(e => e.id === eventId);
     const newTickets = [];
     const SERVICE_FEE = 100;
     const orderSubtotal = event.tiers.reduce((s,t) => s + (cartSelections[t.id]||0) * Number(t.price), 0);
     const isFreeOrder = orderSubtotal === 0;
-    // Step 1 — create ticket documents (requires only tickets.create rule)
+    // Use buyer (guest or logged-in user), fall back to currentUser
+    const buyerName = buyer?.name || currentUser?.name || "Guest";
+    const buyerEmail = buyer?.email || currentUser?.email || "";
+    const buyerUid = buyer?.uid || currentUser?.uid || `guest_${Date.now()}`;
+    const isGuest = !buyer?.uid && !currentUser?.uid;
+
+    // Step 1 — create ticket documents
     try {
       for (const tier of event.tiers) {
         const qty = cartSelections[tier.id] || 0;
@@ -562,22 +568,25 @@ export default function App() {
             eventId, eventTitle: event.title, eventDate: event.date,
             eventTime: event.time || "", venue: event.venue,
             tierName: tier.name, price: Number(tier.price),
-            userId: currentUser.uid, userName: currentUser.name,
+            userId: buyerUid, userName: buyerName,
+            userEmail: buyerEmail,
+            isGuest: isGuest || false,
             used: false, purchasedAt: new Date().toISOString(),
             ...(paystackRef ? { paystackRef, paymentStatus: "paid" } : { paymentStatus: "free" }),
           };
           const ref = await addDoc(collection(db, "tickets"), ticketData);
           const newTicket = { id: ref.id, ...ticketData };
           newTickets.push(newTicket);
-          sendTicketEmail({ toEmail: currentUser.email, toName: currentUser.name, ticket: newTicket });
+          sendTicketEmail({ toEmail: buyerEmail, toName: buyerName, ticket: newTicket });
           logToSheets({
             action: "purchase", ticketId: ref.id,
             eventTitle: event.title, tierName: tier.name,
-            userName: currentUser.name, email: currentUser.email,
+            userName: buyerName, email: buyerEmail,
             price: Number(tier.price),
             serviceFee: isFreeOrder ? 0 : SERVICE_FEE,
             purchasedAt: new Date().toLocaleString("en-NG"),
             paystackRef: paystackRef || "free",
+            buyerType: isGuest ? "guest" : "registered",
           });
         }
       }
@@ -611,7 +620,11 @@ export default function App() {
       }));
     }
     notify(`${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
-    return true;
+    // Store guest tickets in session so they can view them
+    if (isGuest && newTickets.length > 0) {
+      sessionStorage.setItem("guestTickets", JSON.stringify(newTickets.map(t => t.id)));
+    }
+    return newTickets.length > 0 ? newTickets : true;
   };
 
   // ── Core validate logic — reused by both ValidatePage and TicketPage ────
@@ -1435,9 +1448,20 @@ function EventPage({ ctx }) {
     });
   };
 
+  const [guestModal, setGuestModal] = useState(false);
+
   const handleCheckout = () => {
-    if (!currentUser) { navigate("/login"); return; }
     sessionStorage.setItem("cart", JSON.stringify(cart));
+    if (!currentUser) {
+      setGuestModal(true); // collect guest details instead of forcing login
+    } else {
+      navigate(`/event/${eventId}/checkout`);
+    }
+  };
+
+  const handleGuestProceed = (guestInfo) => {
+    sessionStorage.setItem("guestInfo", JSON.stringify(guestInfo));
+    setGuestModal(false);
     navigate(`/event/${eventId}/checkout`);
   };
 
@@ -1544,8 +1568,62 @@ function EventPage({ ctx }) {
               </div>
             )}
             <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:16, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
-              {!currentUser?"SIGN IN TO REGISTER":totalItems===0?"SELECT TICKETS": totalPrice===0 ? "CLAIM FREE TICKETS →" : "PROCEED TO CHECKOUT →"}
+              {totalItems===0 ? "SELECT TICKETS" : totalPrice===0 ? "CLAIM FREE TICKETS →" : "PROCEED TO CHECKOUT →"}
             </button>
+            {!currentUser && totalItems > 0 && (
+              <div style={{ textAlign:"center", marginTop:10, fontSize:12, color:"var(--muted)" }}>
+                No account needed · or <Link to="/login" style={{ color:"var(--gold)" }}>sign in</Link> for faster checkout
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Guest details modal */}
+      {guestModal && (
+        <GuestModal onProceed={handleGuestProceed} onClose={() => setGuestModal(false)} />
+      )}
+    </div>
+  );
+}
+
+// ── Guest Checkout Modal ───────────────────────────────────────────────────
+function GuestModal({ onProceed, onClose }) {
+  const [form, setForm] = useState({ name:"", email:"" });
+  const F = k => e => setForm(p=>({...p,[k]:e.target.value}));
+  const valid = form.name.trim() && form.email.includes("@");
+  const iStyle = { width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"DM Sans" };
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:20, padding:32, width:"100%", maxWidth:420, animation:"fadeUp 0.3s ease" }}>
+        <div style={{ marginBottom:24 }}>
+          <h2 style={{ fontFamily:"Bebas Neue", fontSize:32, marginBottom:6 }}>YOUR DETAILS</h2>
+          <p style={{ color:"var(--muted)", fontSize:13 }}>We need these to send your tickets. No account required.</p>
+        </div>
+
+        <div style={{ display:"flex", flexDirection:"column", gap:14, marginBottom:24 }}>
+          <div>
+            <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>FULL NAME *</label>
+            <input value={form.name} onChange={F("name")} placeholder="e.g. Amara Okafor" style={iStyle} />
+          </div>
+          <div>
+            <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>EMAIL ADDRESS *</label>
+            <input type="email" value={form.email} onChange={F("email")} placeholder="your@email.com" style={iStyle} />
+            <div style={{ fontSize:11, color:"var(--muted)", marginTop:5 }}>
+              <i className="fa-solid fa-lock" style={{ marginRight:4 }} />Your ticket QR code will be sent here
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          <button onClick={() => valid && onProceed(form)} disabled={!valid}
+            style={{ width:"100%", padding:14, background:valid?"var(--gold)":"var(--bg3)", color:valid?"#000":"var(--muted)", border:"none", borderRadius:10, fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2, cursor:valid?"pointer":"not-allowed" }}>
+            CONTINUE TO CHECKOUT →
+          </button>
+          <div style={{ textAlign:"center", fontSize:12, color:"var(--muted)" }}>
+            Already have an account?{" "}
+            <Link to="/login" style={{ color:"var(--gold)" }} onClick={onClose}>Sign in instead</Link>
           </div>
         </div>
       </div>
@@ -1560,12 +1638,15 @@ function CheckoutPage({ ctx }) {
   const navigate = useNavigate();
   const [agreed, setAgreed] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [payStatus, setPayStatus] = useState(null); // null | "verifying" | "failed"
+  const [payStatus, setPayStatus] = useState(null);
 
   const cart = JSON.parse(sessionStorage.getItem("cart") || "{}");
+  const guestInfo = JSON.parse(sessionStorage.getItem("guestInfo") || "null");
+  const buyer = currentUser || guestInfo; // use logged-in user or guest
+
   const event = events.find(e => e.id === eventId);
 
-  if (!currentUser) return <Navigate to="/login" />;
+  if (!buyer) return <Navigate to={`/event/${eventId}`} />;
   if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
@@ -1586,8 +1667,16 @@ function CheckoutPage({ ctx }) {
   // ── Free tickets — confirm directly ───────────────────────────────────
   const handleFree = async () => {
     setProcessing(true);
-    const ok = await purchaseTickets(eventId, cart);
-    if (ok) { sessionStorage.removeItem("cart"); navigate("/tickets"); }
+    const result = await purchaseTickets(eventId, cart, null, buyer);
+    if (result) {
+      sessionStorage.removeItem("cart");
+      sessionStorage.removeItem("guestInfo");
+      if (!currentUser && Array.isArray(result)) {
+        navigate(`/ticket/${result[0].id}`); // guest → first ticket
+      } else {
+        navigate("/tickets");
+      }
+    }
     setProcessing(false);
   };
 
@@ -1605,23 +1694,27 @@ function CheckoutPage({ ctx }) {
 
     const handler = window.PaystackPop.setup({
       key: paystackKey,
-      email: currentUser.email,
+      email: buyer.email,
       amount: total * 100, // Paystack uses kobo
       currency: "NGN",
       ref: `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`,
       metadata: {
         custom_fields: [
-          { display_name:"Customer", variable_name:"customer", value: currentUser.name },
+          { display_name:"Customer", variable_name:"customer", value: buyer.name },
           { display_name:"Event", variable_name:"event", value: event.title },
         ]
       },
       onSuccess: async (response) => {
-        // Payment verified by Paystack — now create tickets in Firestore
         setPayStatus("verifying");
-        const ok = await purchaseTickets(eventId, cart, response.reference);
-        if (ok) {
+        const result = await purchaseTickets(eventId, cart, response.reference, buyer);
+        if (result) {
           sessionStorage.removeItem("cart");
-          navigate("/tickets");
+          sessionStorage.removeItem("guestInfo");
+          if (!currentUser && Array.isArray(result)) {
+            navigate(`/ticket/${result[0].id}`); // guest → first ticket
+          } else {
+            navigate("/tickets");
+          }
         } else {
           setPayStatus("failed");
           setProcessing(false);
@@ -1687,8 +1780,8 @@ function CheckoutPage({ ctx }) {
       {/* Attendee */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ATTENDEE</div>
-        <div style={{ fontWeight:600 }}>{currentUser.name}</div>
-        <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.email}</div>
+        <div style={{ fontWeight:600 }}>{buyer.name}</div>
+        <div style={{ color:"var(--muted)", fontSize:13 }}>{buyer.email}{!currentUser && <span style={{ marginLeft:8, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:100, padding:"1px 8px", fontSize:10, color:"var(--muted)", letterSpacing:1 }}>GUEST</span>}</div>
       </div>
 
       {/* Free banner — no payment needed */}
@@ -2107,7 +2200,17 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
     }
   };
 
-  const isValid = form.title && form.date && form.venue && form.tiers.every(t=>t.name&&t.price!==""&&t.total);
+  const isValid = form.title && form.date && form.venue && form.tiers.every(t => t.name && t.price !== "" && t.total);
+
+  const missingFields = [];
+  if (!form.title) missingFields.push("Event title");
+  if (!form.date) missingFields.push("Date");
+  if (!form.venue) missingFields.push("Venue");
+  form.tiers.forEach((t, i) => {
+    if (!t.name) missingFields.push(`Tier ${i+1} name`);
+    if (t.price === "") missingFields.push(`Tier ${i+1} price (use 0 for free)`);
+    if (!t.total) missingFields.push(`Tier ${i+1} capacity`);
+  });
 
   const fieldErr = (k) => touched[k] && !form[k]
     ? <div style={{ color:"var(--red)", fontSize:11, marginTop:4 }}>This field is required</div>
@@ -2293,6 +2396,15 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
             ))}
           </div>
         </div>
+
+        {/* Missing fields hint */}
+        {missingFields.length > 0 && (
+          <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid var(--gold-dim)", borderRadius:10, padding:"12px 16px", fontSize:12, color:"var(--muted)" }}>
+            <i className="fa-solid fa-circle-exclamation" style={{ color:"var(--gold)", marginRight:6 }} />
+            <strong style={{ color:"var(--text)" }}>Required to publish:</strong>{" "}
+            {missingFields.join(" · ")}
+          </div>
+        )}
 
         <button onClick={()=>onSubmit(form)} disabled={!isValid||saving} style={{ width:"100%", padding:16, background:isValid?"var(--gold)":"var(--bg3)", color:isValid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor:isValid?"pointer":"not-allowed", opacity:saving?0.7:1, marginTop:8 }}>
           {saving ? "PLEASE WAIT..." : submitLabel}
