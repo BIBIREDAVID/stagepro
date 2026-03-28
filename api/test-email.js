@@ -1,60 +1,36 @@
-// api/test-email.js
-// Visit /api/test-email?to=your@email.com to test Resend is working
-// DELETE this file after testing
+// api/test-email.js — visit /api/test-email?to=your@email.com to test
+// DELETE this file after confirming emails work
+
+import nodemailer from "nodemailer";
 
 export default async function handler(req, res) {
-  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  const GMAIL_USER = process.env.GMAIL_USER;
+  const GMAIL_PASS = process.env.GMAIL_PASS;
 
-  if (!RESEND_API_KEY) {
+  if (!GMAIL_USER || !GMAIL_PASS) {
     return res.status(500).json({
-      error: "RESEND_API_KEY is not set",
-      fix: "Add RESEND_API_KEY to Vercel environment variables and redeploy"
+      error: "Gmail credentials not set",
+      fix: "Add GMAIL_USER and GMAIL_PASS to Vercel environment variables"
     });
   }
 
-  const toEmail = req.query.to;
-  if (!toEmail) {
-    return res.status(400).json({
-      error: "No recipient",
-      fix: "Add ?to=your@email.com to the URL"
-    });
-  }
+  const toEmail = req.query.to || GMAIL_USER;
 
   try {
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "StagePro <onboarding@resend.dev>",
-        to: [toEmail],
-        subject: "StagePro Email Test",
-        html: "<h1 style='color:#f5a623;font-family:Arial'>StagePro email is working!</h1><p>If you can read this, your Resend integration is set up correctly.</p>",
-      }),
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: GMAIL_USER, pass: GMAIL_PASS },
     });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(500).json({
-        error: "Resend rejected the request",
-        details: data,
-        keyPrefix: RESEND_API_KEY.slice(0, 8) + "...",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: `Test email sent to ${toEmail}`,
-      resendId: data.id,
+    await transporter.sendMail({
+      from: `"StagePro" <${GMAIL_USER}>`,
+      to: toEmail,
+      subject: "StagePro Email Test",
+      html: `<div style="background:#111;color:#e8e0d0;padding:40px;font-family:Arial;border-radius:12px;max-width:500px;margin:0 auto;"><h1 style="color:#f5a623;">StagePro</h1><p>Email is working! Sent to: <strong>${toEmail}</strong></p></div>`,
     });
 
+    return res.status(200).json({ success: true, sentTo: toEmail });
   } catch (err) {
-    return res.status(500).json({
-      error: "Network or server error",
-      details: err.message,
-    });
+    return res.status(500).json({ error: err.message });
   }
 }
