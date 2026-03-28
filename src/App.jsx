@@ -185,40 +185,29 @@ const fmtDate = (d) =>
 
 
 // ── Email ticket via EmailJS ───────────────────────────────────────────────
-// ── Send ticket confirmation email via EmailJS ─────────────────────────────
-// Template variables: to_email, to_name, event_title, event_date, event_time,
-// event_venue, tier_name, amount_paid, ticket_url
+// ── Send ticket confirmation email via Resend (Vercel serverless function) ──
 const sendTicketEmail = async ({ toEmail, toName, ticket }) => {
   try {
-    const EMAILJS_SERVICE  = import.meta.env.VITE_EMAILJS_SERVICE  || "";
-    const EMAILJS_TEMPLATE = import.meta.env.VITE_EMAILJS_TEMPLATE || "";
-    const EMAILJS_KEY      = import.meta.env.VITE_EMAILJS_KEY      || "";
-    if (!EMAILJS_SERVICE || !EMAILJS_TEMPLATE || !EMAILJS_KEY) return; // not configured yet
     const ticketUrl = `${window.location.origin}/ticket/${ticket.id}`;
     const amountPaid = ticket.price === 0 ? "FREE" : `₦${Number(ticket.price).toLocaleString()}`;
-    await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+    await fetch("/api/send-ticket-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        service_id:  EMAILJS_SERVICE,
-        template_id: EMAILJS_TEMPLATE,
-        user_id:     EMAILJS_KEY,
-        template_params: {
-          to_email:    toEmail,
-          to_name:     toName,
-          event_title: ticket.eventTitle,
-          event_date:  new Date(ticket.eventDate).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }),
-          event_time:  ticket.eventTime || "See event page",
-          event_venue: ticket.venue,
-          tier_name:   ticket.tierName,
-          amount_paid: amountPaid,
-          ticket_url:  ticketUrl,
-        },
+        toEmail,
+        toName,
+        eventTitle:  ticket.eventTitle,
+        eventDate:   new Date(ticket.eventDate).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }),
+        eventTime:   ticket.eventTime || "See event page",
+        eventVenue:  ticket.venue,
+        tierName:    ticket.tierName,
+        amountPaid,
+        ticketUrl,
+        ticketId:    ticket.id,
       }),
     });
-    console.log("Ticket email sent to", toEmail);
   } catch (err) {
-    console.warn("Email send failed (non-critical):", err);
+    console.warn("Ticket email failed (non-critical):", err);
   }
 };
 
