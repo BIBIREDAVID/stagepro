@@ -1740,6 +1740,15 @@ function CheckoutPage({ ctx }) {
   const isFree = subtotal === 0;
   const total = isFree ? 0 : subtotal + SERVICE_FEE;
 
+  // Pre-load Paystack script as soon as checkout page mounts
+  useEffect(() => {
+    if (!isFree && !window.PaystackPop) {
+      const s = document.createElement("script");
+      s.src = "https://js.paystack.co/v1/inline.js";
+      document.head.appendChild(s);
+    }
+  }, []);
+
   // ── Load Paystack script once ──────────────────────────────────────────
   const loadPaystack = () => new Promise(resolve => {
     if (window.PaystackPop) return resolve();
@@ -1797,9 +1806,12 @@ function CheckoutPage({ ctx }) {
       },
       onSuccess: async (response) => {
         // Payment confirmed by Paystack — create tickets
+        console.log("Paystack onSuccess fired", response);
         setPayStatus("verifying");
         try {
+          console.log("Calling purchaseTickets with:", eventId, cartSnapshot, response.reference, buyerSnapshot);
           const result = await purchaseTickets(eventId, cartSnapshot, response.reference, buyerSnapshot);
+          console.log("purchaseTickets result:", result);
           if (result) {
             sessionStorage.removeItem("cart");
             sessionStorage.removeItem("guestInfo");
@@ -1809,6 +1821,7 @@ function CheckoutPage({ ctx }) {
               navigate("/tickets");
             }
           } else {
+            console.error("purchaseTickets returned falsy");
             setPayStatus("failed");
             setProcessing(false);
           }
