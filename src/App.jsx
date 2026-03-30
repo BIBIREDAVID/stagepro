@@ -1726,12 +1726,13 @@ function CheckoutPage({ ctx }) {
 
   const cart = JSON.parse(sessionStorage.getItem("cart") || "{}");
   const guestInfo = JSON.parse(sessionStorage.getItem("guestInfo") || "null");
-  const buyer = currentUser || guestInfo; // use logged-in user or guest
+  const buyer = currentUser || guestInfo;
 
   const event = events.find(e => e.id === eventId);
 
   if (!buyer) return <Navigate to={`/event/${eventId}`} />;
-  if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
+  // Only redirect if cart is empty AND we're not in the middle of payment
+  if (!event || (Object.keys(cart).length === 0 && !processing && payStatus !== "verifying")) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
   const subtotal = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
@@ -1777,30 +1778,42 @@ function CheckoutPage({ ctx }) {
     setProcessing(true);
     await loadPaystack();
 
+    // Snapshot cart and buyer NOW before popup opens
+    // so they're available inside the async callback
+    const cartSnapshot = JSON.parse(sessionStorage.getItem("cart") || "{}");
+    const buyerSnapshot = currentUser || JSON.parse(sessionStorage.getItem("guestInfo") || "null");
+
     const handler = window.PaystackPop.setup({
       key: paystackKey,
-      email: buyer.email,
+      email: buyerSnapshot.email,
       amount: total * 100, // Paystack uses kobo
       currency: "NGN",
       ref: `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`,
       metadata: {
         custom_fields: [
-          { display_name:"Customer", variable_name:"customer", value: buyer.name },
+          { display_name:"Customer", variable_name:"customer", value: buyerSnapshot.name },
           { display_name:"Event", variable_name:"event", value: event.title },
         ]
       },
       onSuccess: async (response) => {
+        // Payment confirmed by Paystack — create tickets
         setPayStatus("verifying");
-        const result = await purchaseTickets(eventId, cart, response.reference, buyer);
-        if (result) {
-          sessionStorage.removeItem("cart");
-          sessionStorage.removeItem("guestInfo");
-          if (!currentUser && Array.isArray(result)) {
-            navigate(`/ticket/${result[0].id}`); // guest → first ticket
+        try {
+          const result = await purchaseTickets(eventId, cartSnapshot, response.reference, buyerSnapshot);
+          if (result) {
+            sessionStorage.removeItem("cart");
+            sessionStorage.removeItem("guestInfo");
+            if (!currentUser && Array.isArray(result)) {
+              navigate(`/ticket/${result[0].id}`);
+            } else {
+              navigate("/tickets");
+            }
           } else {
-            navigate("/tickets");
+            setPayStatus("failed");
+            setProcessing(false);
           }
-        } else {
+        } catch (err) {
+          console.error("Post-payment error:", err);
           setPayStatus("failed");
           setProcessing(false);
         }
@@ -1812,6 +1825,10 @@ function CheckoutPage({ ctx }) {
     });
 
     handler.openIframe();
+    // Reset processing if popup was blocked or failed to open
+    setTimeout(() => {
+      if (!window.PaystackPop) setProcessing(false);
+    }, 5000);
   };
 
   const handleConfirm = isFree ? handleFree : handlePay;
