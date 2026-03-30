@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="20" fill="#0a0a0a"/>
+  <text x="50" y="38" font-family="Arial Black, Arial" font-weight="900" font-size="32" fill="#f5a623" text-anchor="middle" dominant-baseline="middle">S</text>
+  <text x="50" y="72" font-family="Arial Black, Arial" font-weight="900" font-size="18" fill="#e8e0d0" text-anchor="middle" dominant-baseline="middle" letter-spacing="3">PRO</text>
+</svg>

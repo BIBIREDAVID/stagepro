@@ -16,6 +16,8 @@ import {
   signOut,
   onAuthStateChanged,
   sendPasswordResetEmail,
+  GoogleAuthProvider,
+  signInWithPopup,
 } from "firebase/auth";
 import {
   getFirestore,
@@ -530,6 +532,34 @@ export default function App() {
     } catch { return { ok: false }; }
   };
 
+  const loginWithGoogle = async (role = "customer") => {
+    try {
+      const provider = new GoogleAuthProvider();
+      const res = await signInWithPopup(auth, provider);
+      const userRef = doc(db, "users", res.user.uid);
+      const snap = await getDoc(userRef);
+      let userData;
+      if (snap.exists()) {
+        userData = { uid: res.user.uid, ...snap.data() };
+      } else {
+        // First time — create user doc
+        const newUser = {
+          name: res.user.displayName || "User",
+          email: res.user.email,
+          role,
+        };
+        await setDoc(userRef, newUser);
+        userData = { uid: res.user.uid, ...newUser };
+      }
+      setCurrentUser(userData);
+      notify(`Welcome, ${userData.name.split(" ")[0]}!`);
+      return { ok: true, role: userData.role };
+    } catch (err) {
+      console.error(err);
+      return { ok: false };
+    }
+  };
+
   const register = async (name, email, password, role) => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
@@ -832,7 +862,7 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
+  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
 
   return (
     <BrowserRouter>
@@ -1327,7 +1357,7 @@ function EventCard({ event, index }) {
 
 // ── Auth Page ──────────────────────────────────────────────────────────────
 function AuthPage({ mode, ctx }) {
-  const { login, register, currentUser } = ctx;
+  const { login, loginWithGoogle, register, currentUser } = ctx;
   const navigate = useNavigate();
   const [form, setForm] = useState({ name:"", email:"", password:"", role:"customer" });
   const [error, setError] = useState("");
@@ -1423,6 +1453,34 @@ function AuthPage({ mode, ctx }) {
           <button onClick={submit} disabled={loading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Bebas Neue", letterSpacing:2, marginTop:8 }}>
             {loading?"PLEASE WAIT...":mode==="login"?"SIGN IN":"CREATE ACCOUNT"}
           </button>
+
+          {/* Divider */}
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <div style={{ flex:1, height:1, background:"var(--border)" }} />
+            <span style={{ fontSize:12, color:"var(--muted)" }}>OR</span>
+            <div style={{ flex:1, height:1, background:"var(--border)" }} />
+          </div>
+
+          {/* Google Sign-In */}
+          <button
+            onClick={async () => {
+              setLoading(true);
+              const res = await loginWithGoogle(form.role || "customer");
+              if (res.ok) navigate(res.role === "organizer" ? "/dashboard" : "/");
+              else { setError("Google sign-in failed. Please try again."); setLoading(false); }
+            }}
+            disabled={loading}
+            style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:14, borderRadius:10, cursor:"pointer", fontWeight:600, fontSize:14, display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}
+          >
+            <svg width="18" height="18" viewBox="0 0 48 48">
+              <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
+              <path fill="#FF3D00" d="m6.306 14.691 6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/>
+              <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/>
+              <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/>
+            </svg>
+            Continue with Google
+          </button>
+
           {mode === "login" && (
             <button onClick={() => { setResetEmail(form.email); setShowReset(true); }} style={{ background:"none", border:"none", color:"var(--gold)", cursor:"pointer", fontSize:13, textAlign:"center", textDecoration:"underline" }}>
               Forgot your password?
@@ -1711,7 +1769,8 @@ function CheckoutPage({ ctx }) {
     const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
 
     if (!paystackKey) {
-      alert("Paystack key not found. Check VITE_PAYSTACK_PUBLIC_KEY in Vercel environment variables and redeploy.");
+      setPayStatus("failed");
+      setProcessing(false);
       return;
     }
 
@@ -1947,6 +2006,24 @@ function MyTicketsPage({ ctx }) {
                       style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"4px 12px", borderRadius:100, fontSize:12, cursor:"pointer", fontWeight:600 }}
                     ><i className="fa-solid fa-arrow-up-right-from-square" style={{marginRight:5}} />Transfer</button>
                   )}
+                  <button
+                    onClick={async e => {
+                      e.stopPropagation();
+                      const btn = e.currentTarget;
+                      btn.disabled = true;
+                      btn.textContent = "Sending...";
+                      try {
+                        const r = await fetch("/api/resend-ticket-email", {
+                          method:"POST", headers:{"Content-Type":"application/json"},
+                          body: JSON.stringify({ ticketId: ticket.id }),
+                        });
+                        const d = await r.json();
+                        btn.textContent = d.success ? "✓ Sent!" : "Failed";
+                      } catch { btn.textContent = "Failed"; }
+                      setTimeout(() => { btn.disabled = false; btn.textContent = "Resend Email"; }, 3000);
+                    }}
+                    style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"4px 12px", borderRadius:100, fontSize:12, cursor:"pointer", fontWeight:600 }}
+                  ><i className="fa-solid fa-envelope" style={{marginRight:5}} />Resend Email</button>
                 </div>
               </div>
               <div style={{ textAlign:"right" }}>
@@ -1977,7 +2054,7 @@ function MyTicketsPage({ ctx }) {
 function DashboardPage({ ctx }) {
   const { events, tickets, currentUser, deleteEvent, refreshEvents } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
-  const [view, setView] = useState("list"); // list | calendar
+  const [view, setView] = useState("list"); // list | calendar | payouts
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const myEvents = events.filter(e => e.organizer === currentUser.uid);
   const myEventIds = new Set(myEvents.map(e => e.id));
@@ -1987,6 +2064,35 @@ function DashboardPage({ ctx }) {
   const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
   const revenue   = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id) * (t.price||0), 0), 0);
   const totalCheckedIn = myTickets.filter(t => t.used).length;
+
+  // Payout calculations
+  const STAGEPRO_FEE = 100; // ₦100 per paid order
+  const PAYSTACK_RATE = 0.015; // 1.5%
+  const PAYSTACK_FLAT = 100;   // ₦100
+  const PAYSTACK_CAP  = 2000;  // ₦2,000 cap
+
+  // Group tickets by paystackRef to get orders (one fee per order)
+  const paidTickets = myTickets.filter(t => t.paymentStatus === "paid" && t.paystackRef);
+  const orderRefs = [...new Set(paidTickets.map(t => t.paystackRef))];
+  const totalOrders = orderRefs.length;
+
+  // Per-event payout data
+  const payoutByEvent = myEvents.map(e => {
+    const eTickets = myTickets.filter(t => t.eventId === e.id);
+    const eGross = eTickets.reduce((s,t) => s + (t.price||0), 0);
+    const ePaidOrders = [...new Set(eTickets.filter(t=>t.paystackRef).map(t=>t.paystackRef))].length;
+    const eStagePro = ePaidOrders * STAGEPRO_FEE;
+    const ePaystack = eTickets.filter(t=>t.paymentStatus==="paid").reduce((s,t) => {
+      const fee = Math.min((t.price * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP);
+      return s + fee;
+    }, 0);
+    const eNet = eGross - eStagePro - ePaystack;
+    return { event:e, gross:eGross, stagepro:eStagePro, paystack:Math.round(ePaystack), net:Math.round(eNet), orders:ePaidOrders };
+  }).filter(p => p.gross > 0);
+
+  const totalStagePro = totalOrders * STAGEPRO_FEE;
+  const totalPaystack = Math.round(paidTickets.reduce((s,t) => s + Math.min((t.price * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP), 0));
+  const netPayout = revenue - totalStagePro - totalPaystack;
 
   const handleDelete = async (event) => { await deleteEvent(event.id); setConfirmDelete(null); };
 
@@ -2032,7 +2138,7 @@ function DashboardPage({ ctx }) {
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
           {/* View toggle */}
           <div style={{ display:"flex", background:"var(--bg3)", borderRadius:10, padding:4, border:"1px solid var(--border)" }}>
-            {[["list",<><i className="fa-solid fa-list" style={{marginRight:6}} />List</>],["calendar",<><i className="fa-regular fa-calendar" style={{marginRight:6}} />Calendar</>]].map(([id,label]) => (
+            {[["list",<><i className="fa-solid fa-list" style={{marginRight:6}} />List</>],["calendar",<><i className="fa-regular fa-calendar" style={{marginRight:6}} />Calendar</>],["payouts",<><i className="fa-solid fa-naira-sign" style={{marginRight:6}} />Payouts</>]].map(([id,label]) => (
               <button key={id} onClick={() => setView(id)} style={{ padding:"7px 14px", borderRadius:7, border:"none", cursor:"pointer", fontSize:13, fontWeight:600, background: view===id?"var(--bg2)":"transparent", color: view===id?"var(--text)":"var(--muted)", transition:"all 0.2s" }}>{label}</button>
             ))}
           </div>
@@ -2106,6 +2212,75 @@ function DashboardPage({ ctx }) {
               {myEvents.filter(e => { const d=new Date(e.date); return d.getFullYear()===year&&d.getMonth()===month; }).length===0 && (
                 <span style={{ fontSize:12, color:"var(--muted)" }}>No events this month</span>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Payouts View */}
+      {view === "payouts" && (
+        <div style={{ animation:"fadeUp 0.3s ease" }}>
+          {/* Summary cards */}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:16, marginBottom:32 }}>
+            {[
+              { label:"Gross Revenue", value:fmt(revenue), icon:"fa-solid fa-naira-sign", color:"var(--gold)", sub:"Total ticket sales" },
+              { label:"StagePro Fees", value:fmt(totalStagePro), icon:"fa-solid fa-receipt", color:"var(--muted)", sub:`₦100 × ${totalOrders} orders` },
+              { label:"Paystack Fees", value:fmt(totalPaystack), icon:"fa-solid fa-credit-card", color:"var(--muted)", sub:"1.5% + ₦100 per ticket" },
+              { label:"Your Net Payout", value:fmt(Math.max(0, netPayout)), icon:"fa-solid fa-wallet", color:"var(--green)", sub:"After all fees" },
+            ].map(s => (
+              <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:24 }}>
+                <div style={{ fontSize:24, marginBottom:8, color:s.color }}><i className={s.icon} /></div>
+                <div style={{ fontFamily:"Bebas Neue", fontSize:28, color:s.color }}>{s.value}</div>
+                <div style={{ fontSize:13, color:"var(--text)", fontWeight:600, marginTop:2 }}>{s.label}</div>
+                <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>{s.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Fee explanation */}
+          <div style={{ background:"rgba(245,166,35,0.06)", border:"1px solid var(--gold-dim)", borderRadius:12, padding:"16px 20px", marginBottom:24, fontSize:13, color:"var(--muted)", lineHeight:1.8 }}>
+            <i className="fa-solid fa-circle-info" style={{ color:"var(--gold)", marginRight:8 }} />
+            <strong style={{ color:"var(--text)" }}>How fees work:</strong> StagePro charges ₦100 per paid order. Paystack charges 1.5% + ₦100 per ticket (capped at ₦2,000). Free events have no fees.
+          </div>
+
+          {/* Per-event breakdown */}
+          {payoutByEvent.length === 0 ? (
+            <div style={{ textAlign:"center", padding:"48px 0", color:"var(--muted)" }}>No paid ticket sales yet.</div>
+          ) : (
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+              <div style={{ padding:"16px 24px", borderBottom:"1px solid var(--border)" }}>
+                <h3 style={{ fontSize:20 }}>PAYOUT BREAKDOWN BY EVENT</h3>
+              </div>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                  <thead>
+                    <tr style={{ background:"var(--bg3)" }}>
+                      {["Event","Gross","StagePro Fee","Paystack Fee","Net Payout"].map(h => (
+                        <th key={h} style={{ padding:"10px 16px", textAlign:"left", color:"var(--muted)", fontWeight:600, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{h.toUpperCase()}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payoutByEvent.map((p, i) => (
+                      <tr key={p.event.id} style={{ borderTop:"1px solid var(--border)", background: i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
+                        <td style={{ padding:"12px 16px", fontWeight:600 }}>{p.event.title}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--gold)" }}>{fmt(p.gross)}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.stagepro)}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.paystack)}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, p.net))}</td>
+                      </tr>
+                    ))}
+                    {/* Totals row */}
+                    <tr style={{ borderTop:"2px solid var(--gold-dim)", background:"rgba(245,166,35,0.05)" }}>
+                      <td style={{ padding:"12px 16px", fontWeight:700, fontSize:13 }}>TOTAL</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--gold)", fontWeight:700 }}>{fmt(revenue)}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalStagePro)}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalPaystack)}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, netPayout))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
