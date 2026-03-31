@@ -449,6 +449,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [events, setEvents] = useState([]);
+  const [organizerEvents, setOrganizerEvents] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [notification, setNotification] = useState(null);
@@ -493,13 +494,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const loadOrganizerEvents = async () => {
+      if (currentUser?.role !== "organizer") {
+        setOrganizerEvents([]);
+        return;
+      }
+      try {
+        const q = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
+        const snapshot = await getDocs(q);
+        setOrganizerEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      } catch (err) {
+        console.error("Organizer events fetch failed:", err);
+        setOrganizerEvents([]);
+      }
+    };
+    loadOrganizerEvents();
+  }, [currentUser]);
+
+  useEffect(() => {
     if (!currentUser) { setTickets([]); return; }
     const load = async () => {
       try {
         if (currentUser.role === "organizer") {
           // Organizer: fetch tickets for each of their events by eventId
           // (full collection scan is blocked by Firestore rules)
-          const myEventIds = events.filter(e => e.organizer === currentUser.uid).map(e => e.id);
+          const myEventIds = organizerEvents.map(e => e.id);
           if (myEventIds.length === 0) { setTickets([]); return; }
           // Firestore "in" query supports up to 30 values; chunk if needed
           const chunks = [];
@@ -519,7 +538,7 @@ export default function App() {
       } catch (err) { console.error("Tickets fetch error:", err); }
     };
     load();
-  }, [currentUser, events]);
+  }, [currentUser, organizerEvents]);
 
   const login = async (email, password) => {
     try {
@@ -699,6 +718,12 @@ export default function App() {
       const snap = await getDoc(ref);
       if (!snap.exists()) return { ok: false, msg: "Ticket not found" };
       const ticket = { id: snap.id, ...snap.data() };
+      if (currentUser?.role === "organizer") {
+        const ownsEvent = organizerEvents.some(e => e.id === ticket.eventId);
+        if (!ownsEvent) {
+          return { ok: false, msg: "You can't validate tickets for another organizer's event" };
+        }
+      }
       if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
       await updateDoc(ref, { used: true });
       setTickets(prev => prev.map(t => t.id === id.trim() ? { ...t, used: true } : t));
@@ -816,6 +841,11 @@ export default function App() {
     try {
       const snapshot = await getDocs(collection(db, "events"));
       setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (currentUser?.role === "organizer") {
+        const q = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
+        const organizerSnapshot = await getDocs(q);
+        setOrganizerEvents(organizerSnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
     } catch (err) { console.error(err); }
   };
 
@@ -875,7 +905,7 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, tickets, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
+  const ctx = { currentUser, events, organizerEvents, tickets, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
 
   return (
     <BrowserRouter>
@@ -1811,10 +1841,31 @@ function CheckoutPage({ ctx }) {
           { display_name:"Event", variable_name:"event", value: event.title },
         ]
       },
-      onSuccess: async (response) => {
-        console.log("Paystack onSuccess fired", response);
+      callback: async (response) => {
+        console.log("Paystack callback fired", response);
         setPayStatus("verifying");
         try {
+          const verifyRes = await fetch("/api/verify-paystack", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reference: response.reference,
+              expectedAmount: total * 100,
+              expectedCurrency: "NGN",
+              eventId,
+              email: buyer.email,
+            }),
+          });
+
+          const verifyData = await verifyRes.json().catch(() => ({}));
+          if (!verifyRes.ok || !verifyData?.ok) {
+            console.error("Paystack verification failed:", verifyData);
+            setPayStatus("failed");
+            setProcessing(false);
+            notify(verifyData?.msg || "Payment verification failed. Please contact support with your reference.", "error");
+            return;
+          }
+
           const result = await purchaseTickets(eventId, cart, response.reference, buyer);
           console.log("purchaseTickets result:", result);
           if (result) {
@@ -1835,7 +1886,7 @@ function CheckoutPage({ ctx }) {
           setProcessing(false);
         }
       },
-      onCancel: () => {
+      onClose: () => {
         setProcessing(false);
         setPayStatus(null);
       },
@@ -2086,11 +2137,11 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { events, tickets, currentUser, deleteEvent, refreshEvents } = ctx;
+  const { organizerEvents, tickets, currentUser, deleteEvent, refreshEvents } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [view, setView] = useState("list"); // list | calendar | payouts
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
-  const myEvents = events.filter(e => e.organizer === currentUser.uid);
+  const myEvents = organizerEvents;
   const myEventIds = new Set(myEvents.map(e => e.id));
   const myTickets = tickets.filter(t => myEventIds.has(t.eventId));
 
@@ -2666,10 +2717,10 @@ function CreateEventPage({ ctx }) {
 
 // ── Edit Event Page ────────────────────────────────────────────────────────
 function EditEventPage({ ctx }) {
-  const { events, updateEvent } = ctx;
+  const { organizerEvents, updateEvent } = ctx;
   const { eventId } = useParams();
   const navigate = useNavigate();
-  const event = events.find(e => e.id === eventId);
+  const event = organizerEvents.find(e => e.id === eventId);
   const [saving, setSaving] = useState(false);
 
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
@@ -2957,9 +3008,9 @@ function ValidatePage({ ctx }) {
 // ── Analytics Page (/dashboard/analytics/:eventId) ────────────────────────
 function AnalyticsPage({ ctx }) {
   const { eventId } = useParams();
-  const { events, tickets, currentUser } = ctx;
+  const { organizerEvents, tickets, currentUser } = ctx;
   const navigate = useNavigate();
-  const event = events.find(e => e.id === eventId);
+  const event = organizerEvents.find(e => e.id === eventId);
   const [notifStatus, setNotifStatus] = useState("idle"); // idle | sending | sent | error
 
   if (!event || event.organizer !== currentUser.uid) return <Navigate to="/dashboard" />;
