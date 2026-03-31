@@ -575,12 +575,25 @@ export default function App() {
   const logout = async () => { await signOut(auth); setCurrentUser(null); };
 
   const purchaseTickets = async (eventId, cartSelections, paystackRef = null, buyer = null) => {
-    const event = events.find(e => e.id === eventId);
+    // Always fetch event fresh from Firestore — avoids stale closure issues
+    let event;
+    try {
+      const eventSnap = await getDoc(doc(db, "events", eventId));
+      if (!eventSnap.exists()) {
+        notify("Event not found. Please try again.", "error");
+        return false;
+      }
+      event = { id: eventSnap.id, ...eventSnap.data() };
+    } catch (err) {
+      console.error("Failed to fetch event:", err);
+      notify("Could not load event. Please try again.", "error");
+      return false;
+    }
+
     const newTickets = [];
     const SERVICE_FEE = 100;
     const orderSubtotal = event.tiers.reduce((s,t) => s + (cartSelections[t.id]||0) * Number(t.price), 0);
     const isFreeOrder = orderSubtotal === 0;
-    // Use buyer (guest or logged-in user), fall back to currentUser
     const buyerName = buyer?.name || currentUser?.name || "Guest";
     const buyerEmail = buyer?.email || currentUser?.email || "";
     const buyerUid = buyer?.uid || currentUser?.uid || `guest_${Date.now()}`;
