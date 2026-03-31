@@ -917,6 +917,7 @@ export default function App() {
           <Route path="/register" element={<AuthPage mode="register" ctx={ctx} />} />
           <Route path="/event/:eventId" element={<EventPage ctx={ctx} />} />
           <Route path="/event/:eventId/checkout" element={<CheckoutPage ctx={ctx} />} />
+          <Route path="/payment/verify" element={<PaymentVerificationPage ctx={ctx} />} />
           <Route path="/tickets" element={currentUser ? <MyTicketsPage ctx={ctx} /> : <Navigate to="/login" />} />
           <Route path="/ticket/:ticketId" element={<TicketPage ctx={ctx} />} />
           <Route path="/find-tickets" element={<GuestTicketLookupPage />} />
@@ -1759,6 +1760,121 @@ function GuestModal({ onProceed, onClose }) {
 }
 
 // ── Checkout Page ──────────────────────────────────────────────────────────
+function PaymentVerificationPage({ ctx }) {
+  const { purchaseTickets, notify } = ctx;
+  const navigate = useNavigate();
+  const handledRef = useRef(false);
+  const [status, setStatus] = useState("verifying");
+  const [message, setMessage] = useState("Confirming your payment and preparing your ticket...");
+
+  useEffect(() => {
+    if (handledRef.current) return;
+    handledRef.current = true;
+
+    const run = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const reference = params.get("reference");
+      const pendingRaw = sessionStorage.getItem("pendingPaystackCheckout");
+
+      if (!reference || !pendingRaw) {
+        setStatus("failed");
+        setMessage("We couldn't find the payment details needed to complete your ticket.");
+        return;
+      }
+
+      let pending;
+      try {
+        pending = JSON.parse(pendingRaw);
+      } catch {
+        setStatus("failed");
+        setMessage("Your pending checkout details are invalid. Please contact support with your payment reference.");
+        return;
+      }
+
+      try {
+        const verifyRes = await fetch("/api/verify-paystack", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reference,
+            expectedAmount: pending.total * 100,
+            expectedCurrency: "NGN",
+            eventId: pending.eventId,
+            email: pending.buyer?.email,
+          }),
+        });
+
+        const verifyData = await verifyRes.json().catch(() => ({}));
+        if (!verifyRes.ok || !verifyData?.ok) {
+          setStatus("failed");
+          setMessage(verifyData?.msg || "Payment verification failed.");
+          notify(verifyData?.msg || "Payment verification failed.", "error");
+          return;
+        }
+
+        setMessage("Payment confirmed. Fetching your ticket...");
+        const existingSnap = await getDocs(query(collection(db, "tickets"), where("paystackRef", "==", reference)));
+        const existingTickets = existingSnap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(t => t.eventId === pending.eventId && t.userEmail === pending.buyer?.email);
+
+        if (existingTickets.length > 0) {
+          sessionStorage.removeItem("cart");
+          sessionStorage.removeItem("guestInfo");
+          sessionStorage.removeItem("pendingPaystackCheckout");
+          navigate(`/ticket/${existingTickets[0].id}`, { replace: true });
+          return;
+        }
+
+        setMessage("Creating your ticket...");
+        const created = await purchaseTickets(pending.eventId, pending.cart, reference, pending.buyer);
+        if (Array.isArray(created) && created.length > 0) {
+          sessionStorage.removeItem("cart");
+          sessionStorage.removeItem("guestInfo");
+          sessionStorage.removeItem("pendingPaystackCheckout");
+          navigate(`/ticket/${created[0].id}`, { replace: true });
+          return;
+        }
+
+        setStatus("failed");
+        setMessage("Payment was verified, but we couldn't create your ticket automatically.");
+      } catch (err) {
+        console.error("Payment verification page error:", err);
+        setStatus("failed");
+        setMessage("Something went wrong while completing your ticket.");
+      }
+    };
+
+    run();
+  }, [navigate, notify, purchaseTickets]);
+
+  return (
+    <div style={{ maxWidth:560, margin:"0 auto", padding:"64px 24px 80px", animation:"fadeUp 0.4s ease" }}>
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:20, padding:"40px 32px", textAlign:"center" }}>
+        {status === "failed"
+          ? <i className="fa-solid fa-circle-exclamation" style={{ fontSize:48, color:"var(--red)", marginBottom:16 }} />
+          : <i className="fa-solid fa-circle-notch fa-spin" style={{ fontSize:48, color:"var(--gold)", marginBottom:16 }} />
+        }
+        <h1 style={{ fontSize:40, marginBottom:12 }}>
+          {status === "failed" ? "PAYMENT NEEDS ATTENTION" : "FINALIZING PAYMENT"}
+        </h1>
+        <p style={{ color:"var(--muted)", fontSize:15, lineHeight:1.7, marginBottom:24 }}>{message}</p>
+        {status === "failed" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <button
+              onClick={() => window.location.reload()}
+              style={{ background:"var(--gold)", color:"#000", border:"none", padding:"14px 20px", borderRadius:10, cursor:"pointer", fontWeight:700 }}
+            >
+              TRY AGAIN
+            </button>
+            <Link to="/find-tickets" style={{ color:"var(--muted)", fontSize:14 }}>Find My Tickets</Link>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CheckoutPage({ ctx }) {
   const { eventId } = useParams();
   const { events, currentUser, purchaseTickets } = ctx;
@@ -1853,6 +1969,7 @@ function CheckoutPage({ ctx }) {
   // ── Paid tickets — launch Paystack popup ──────────────────────────────
   const handlePay = async () => {
     const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
+    const reference = `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`;
     setPayError("");
 
     if (!paystackKey) {
@@ -1871,64 +1988,27 @@ function CheckoutPage({ ctx }) {
       return;
     }
 
+    sessionStorage.setItem("pendingPaystackCheckout", JSON.stringify({
+      eventId,
+      cart,
+      buyer,
+      total,
+    }));
+
     const handler = window.PaystackPop.setup({
       key: paystackKey,
       email: buyer.email,
       amount: total * 100,
       currency: "NGN",
-      ref: `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`,
+      ref: reference,
       metadata: {
         custom_fields: [
           { display_name:"Customer", variable_name:"customer", value: buyer.name },
           { display_name:"Event", variable_name:"event", value: event.title },
         ]
       },
-      callback: async (response) => {
-        console.log("Paystack callback fired", response);
-        setPayStatus("verifying");
-        try {
-          const verifyRes = await fetch("/api/verify-paystack", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              reference: response.reference,
-              expectedAmount: total * 100,
-              expectedCurrency: "NGN",
-              eventId,
-              email: buyer.email,
-            }),
-          });
-
-          const verifyData = await verifyRes.json().catch(() => ({}));
-          if (!verifyRes.ok || !verifyData?.ok) {
-            console.error("Paystack verification failed:", verifyData);
-            setPayError(verifyData?.msg || "Payment verification failed.");
-            setPayStatus("failed");
-            setProcessing(false);
-            notify(verifyData?.msg || "Payment verification failed. Please contact support with your reference.", "error");
-            return;
-          }
-
-          const result = await purchaseTickets(eventId, cart, response.reference, buyer);
-          console.log("purchaseTickets result:", result);
-          if (result) {
-            sessionStorage.removeItem("cart");
-            sessionStorage.removeItem("guestInfo");
-            if (!currentUser && Array.isArray(result)) {
-              navigate(`/ticket/${result[0].id}`);
-            } else {
-              navigate("/tickets");
-            }
-          } else {
-            setPayStatus("failed");
-            setProcessing(false);
-          }
-        } catch (err) {
-          console.error("Post-payment error:", err);
-          setPayError("We couldn't complete the payment confirmation.");
-          setPayStatus("failed");
-          setProcessing(false);
-        }
+      callback: (response) => {
+        navigate(`/payment/verify?reference=${encodeURIComponent(response.reference)}`, { replace: true });
       },
       onClose: () => {
         setProcessing(false);
