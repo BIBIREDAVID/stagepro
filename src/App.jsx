@@ -1877,11 +1877,10 @@ function PaymentVerificationPage({ ctx }) {
 
 function CheckoutPage({ ctx }) {
   const { eventId } = useParams();
-  const { events, currentUser, purchaseTickets } = ctx;
+  const { events, currentUser, purchaseTickets, notify } = ctx;
   const navigate = useNavigate();
   const [agreed, setAgreed] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [payStatus, setPayStatus] = useState(null);
   const [payError, setPayError] = useState("");
   const [paystackReady, setPaystackReady] = useState(() => Boolean(window.PaystackPop));
 
@@ -1899,17 +1898,6 @@ function CheckoutPage({ ctx }) {
   const SERVICE_FEE = 100; // ₦100 flat per order
   const isFree = subtotal === 0;
   const total = isFree ? 0 : subtotal + SERVICE_FEE;
-
-  useEffect(() => {
-    if (isFree) return;
-    loadPaystack().then((ok) => {
-      if (!ok) {
-        setPayError("Could not load Paystack. Check your connection or disable blockers, then try again.");
-      }
-    });
-  }, [isFree]);
-
-  // ── Load Paystack script once ──────────────────────────────────────────
   const loadPaystack = () => new Promise(resolve => {
     if (window.PaystackPop) {
       setPaystackReady(true);
@@ -1950,6 +1938,13 @@ function CheckoutPage({ ctx }) {
     window.__paystackLoader.then(resolve);
   });
 
+  useEffect(() => {
+    if (isFree) return;
+    loadPaystack().then((ok) => {
+      if (!ok) setPayError("Could not load Paystack. Check your connection and try again.");
+    });
+  }, [isFree]);
+
   // ── Free tickets — confirm directly ───────────────────────────────────
   const handleFree = async () => {
     setProcessing(true);
@@ -1966,24 +1961,20 @@ function CheckoutPage({ ctx }) {
     setProcessing(false);
   };
 
-  // ── Paid tickets — launch Paystack popup ──────────────────────────────
   const handlePay = async () => {
     const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
     const reference = `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`;
     setPayError("");
 
     if (!paystackKey) {
-      setPayError("Missing Paystack public key.");
-      setPayStatus("failed");
-      setProcessing(false);
+      notify("Missing Paystack public key.", "error");
       return;
     }
 
     setProcessing(true);
     const loaded = await loadPaystack();
     if (!loaded || !window.PaystackPop) {
-      setPayError("Paystack could not open. Disable popup/ad blockers and try again.");
-      setPayStatus("failed");
+      setPayError("Paystack could not open. Disable blockers and try again.");
       setProcessing(false);
       return;
     }
@@ -2012,19 +2003,10 @@ function CheckoutPage({ ctx }) {
       },
       onClose: () => {
         setProcessing(false);
-        setPayStatus(null);
       },
     });
 
     handler.openIframe();
-    setTimeout(() => {
-      const paystackFrame = document.querySelector('iframe[src*="paystack"], iframe[name*="paystack"]');
-      if (!paystackFrame && payStatus !== "verifying") {
-        setPayError("Payment window did not open. Please allow popups and try again.");
-        setPayStatus("failed");
-        setProcessing(false);
-      }
-    }, 3000);
   };
 
   const handleConfirm = isFree ? handleFree : handlePay;
@@ -2103,23 +2085,10 @@ function CheckoutPage({ ctx }) {
         </span>
       </div>
 
-      {/* Paystack verifying overlay */}
-      {payStatus === "verifying" && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", zIndex:9999, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16 }}>
-          <i className="fa-solid fa-circle-notch fa-spin" style={{ fontSize:48, color:"var(--gold)" }} />
-          <div style={{ fontFamily:"Bebas Neue", fontSize:28, letterSpacing:2 }}>CONFIRMING PAYMENT...</div>
-          <div style={{ color:"var(--muted)", fontSize:14 }}>Please wait while we create your tickets</div>
-        </div>
-      )}
-
-      {/* Payment failed notice */}
-      {payStatus === "failed" && (
+      {!isFree && payError && (
         <div style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", borderRadius:12, padding:"14px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:12 }}>
           <i className="fa-solid fa-circle-exclamation" style={{ color:"var(--red)", fontSize:20 }} />
-          <div>
-            <div style={{ fontWeight:700, color:"var(--red)", fontSize:14 }}>Payment received but ticket creation failed</div>
-            <div style={{ color:"var(--muted)", fontSize:13 }}>{payError || "Please contact davidbibiresanmi@gmail.com with your payment reference."}</div>
-          </div>
+          <div style={{ color:"var(--muted)", fontSize:13 }}>{payError}</div>
         </div>
       )}
 
@@ -2131,17 +2100,19 @@ function CheckoutPage({ ctx }) {
       >
         {processing
           ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")
+          : (!isFree && !paystackReady)
+            ? "LOADING PAYSTACK..."
           : isFree
             ? "CONFIRM REGISTRATION →"
-            : `PAY ${fmt(total)} WITH PAYSTACK →`
+            : `PAY ${fmt(total)} WITH PAYSTACK â†’`
         }
       </button>
 
-      {/* Paystack trust badge */}
+      {/* Payment trust badge */}
       {!isFree && (
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginTop:14, color:"var(--muted)", fontSize:12 }}>
           <i className="fa-solid fa-lock" style={{ fontSize:11 }} />
-          <span>Secured by Paystack · Cards, Bank Transfer & USSD accepted</span>
+          <span>Secured by Paystack Â· Cards, Bank Transfer & USSD accepted</span>
         </div>
       )}
     </div>
