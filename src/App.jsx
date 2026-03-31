@@ -1724,15 +1724,14 @@ function CheckoutPage({ ctx }) {
   const [processing, setProcessing] = useState(false);
   const [payStatus, setPayStatus] = useState(null);
 
-  const cart = JSON.parse(sessionStorage.getItem("cart") || "{}");
-  const guestInfo = JSON.parse(sessionStorage.getItem("guestInfo") || "null");
+  const [cart] = useState(() => JSON.parse(sessionStorage.getItem("cart") || "{}"));
+  const [guestInfo] = useState(() => JSON.parse(sessionStorage.getItem("guestInfo") || "null"));
   const buyer = currentUser || guestInfo;
 
   const event = events.find(e => e.id === eventId);
 
   if (!buyer) return <Navigate to={`/event/${eventId}`} />;
-  // Only redirect if cart is empty AND we're not in the middle of payment
-  if (!event || (Object.keys(cart).length === 0 && !processing && payStatus !== "verifying")) return <Navigate to={`/event/${eventId}`} />;
+  if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
   const subtotal = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
@@ -1787,30 +1786,23 @@ function CheckoutPage({ ctx }) {
     setProcessing(true);
     await loadPaystack();
 
-    // Snapshot cart and buyer NOW before popup opens
-    // so they're available inside the async callback
-    const cartSnapshot = JSON.parse(sessionStorage.getItem("cart") || "{}");
-    const buyerSnapshot = currentUser || JSON.parse(sessionStorage.getItem("guestInfo") || "null");
-
     const handler = window.PaystackPop.setup({
       key: paystackKey,
-      email: buyerSnapshot.email,
-      amount: total * 100, // Paystack uses kobo
+      email: buyer.email,
+      amount: total * 100,
       currency: "NGN",
       ref: `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`,
       metadata: {
         custom_fields: [
-          { display_name:"Customer", variable_name:"customer", value: buyerSnapshot.name },
+          { display_name:"Customer", variable_name:"customer", value: buyer.name },
           { display_name:"Event", variable_name:"event", value: event.title },
         ]
       },
       onSuccess: async (response) => {
-        // Payment confirmed by Paystack — create tickets
         console.log("Paystack onSuccess fired", response);
         setPayStatus("verifying");
         try {
-          console.log("Calling purchaseTickets with:", eventId, cartSnapshot, response.reference, buyerSnapshot);
-          const result = await purchaseTickets(eventId, cartSnapshot, response.reference, buyerSnapshot);
+          const result = await purchaseTickets(eventId, cart, response.reference, buyer);
           console.log("purchaseTickets result:", result);
           if (result) {
             sessionStorage.removeItem("cart");
@@ -1821,7 +1813,6 @@ function CheckoutPage({ ctx }) {
               navigate("/tickets");
             }
           } else {
-            console.error("purchaseTickets returned falsy");
             setPayStatus("failed");
             setProcessing(false);
           }
@@ -2989,9 +2980,9 @@ function AnalyticsPage({ ctx }) {
   const sendNotification = async (title, body) => {
     setNotifStatus("sending");
     try {
-      // Get unique userIds from ticket holders
       const userIds = [...new Set(eventTickets.map(t => t.userId))];
-      // Save notification to Firestore — clients poll for new ones
+
+      // 1 — Save in-app notification to Firestore
       await addDoc(collection(db, "notifications"), {
         eventId, eventTitle: event.title,
         title, body,
@@ -3000,6 +2991,34 @@ function AnalyticsPage({ ctx }) {
         targetUsers: userIds,
         readBy: [],
       });
+
+      // 2 — Build recipient list with emails from tickets
+      const recipientMap = {};
+      eventTickets.forEach(t => {
+        if (t.userEmail && !recipientMap[t.userEmail]) {
+          recipientMap[t.userEmail] = { email: t.userEmail, name: t.userName };
+        }
+      });
+      const recipients = Object.values(recipientMap);
+
+      // 3 — Send email to all ticket holders
+      if (recipients.length > 0) {
+        await fetch("/api/send-notification-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipients,
+            eventTitle: event.title,
+            eventDate: event.date ? new Date(event.date).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }) : "",
+            eventVenue: event.venue,
+            notifTitle: title,
+            notifBody: body,
+            eventImage: event.image || null,
+            themeColor: { purple:"#6a11cb", fire:"#f83600", ocean:"#0575e6", forest:"#134e5e", gold:"#f7971e", rose:"#f953c6", midnight:"#232526", neon:"#00f260", sunset:"#f857a4", teal:"#11998e", royal:"#141e30" }[event.theme] || "#f5a623",
+          }),
+        });
+      }
+
       setNotifStatus("sent");
       setTimeout(() => setNotifStatus("idle"), 3000);
     } catch (err) {
