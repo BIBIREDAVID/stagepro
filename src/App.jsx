@@ -79,7 +79,7 @@ const logToSheets = async (payload) => {
 };
 
 // ── CSV Download ───────────────────────────────────────────────────────────
-function downloadCSV(event, tickets) {
+function downloadCSVWithEmail(event, tickets) {
   const eventTickets = tickets.filter(t => t.eventId === event.id);
   if (eventTickets.length === 0) { alert("No tickets sold for this event yet."); return; }
   const headers = ["Ticket ID", "Event", "Tier", "Buyer Name", "Price (₦)", "Date Purchased", "Used"];
@@ -99,6 +99,99 @@ function downloadCSV(event, tickets) {
 }
 
 // ── QR Code — client-side, no external API dependency ─────────────────────
+function downloadCSV(event, tickets) {
+  const eventTickets = tickets.filter(t => t.eventId === event.id);
+  if (eventTickets.length === 0) { alert("No tickets sold for this event yet."); return; }
+  const headers = ["Ticket ID", "Event", "Tier", "Buyer Name", "Buyer Email", "Price (NGN)", "Date Purchased", "Used"];
+  const rows = eventTickets.map(t => [
+    t.id,
+    t.eventTitle,
+    t.tierName,
+    t.userName,
+    t.userEmail || "",
+    t.price,
+    new Date(t.purchasedAt).toLocaleString("en-NG"),
+    t.used ? "Yes" : "No",
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${event.title.replace(/\s+/g, "_")}_tickets.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadTicketFile(ticket) {
+  const ticketUrl = `${window.location.origin}/ticket/${ticket.id}`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(ticketUrl)}&margin=8`;
+  const fileName = `${(ticket.eventTitle || "stagepro-ticket").replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_${ticket.id}.svg`;
+  const purchasedAt = ticket.purchasedAt ? new Date(ticket.purchasedAt).toLocaleString("en-NG") : "";
+  const amount = ticket.price === 0 ? "FREE" : fmt(ticket.price);
+
+  const esc = (value) => String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0a0a"/>
+      <stop offset="100%" stop-color="#171717"/>
+    </linearGradient>
+  </defs>
+  <rect width="1080" height="1920" fill="url(#bg)"/>
+  <rect x="60" y="60" width="960" height="1800" rx="36" fill="#111111" stroke="#2a2a2a" stroke-width="4"/>
+  <text x="100" y="160" fill="#f5a623" font-size="48" font-family="Arial, sans-serif" font-weight="700" letter-spacing="8">STAGEPRO</text>
+  <text x="100" y="245" fill="#777777" font-size="28" font-family="Arial, sans-serif" letter-spacing="5">MOBILE TICKET</text>
+
+  <text x="100" y="360" fill="#777777" font-size="24" font-family="Arial, sans-serif" letter-spacing="4">EVENT</text>
+  <text x="100" y="425" fill="#f5f5f5" font-size="64" font-family="Arial, sans-serif" font-weight="700">${esc(ticket.eventTitle)}</text>
+
+  <text x="100" y="540" fill="#777777" font-size="24" font-family="Arial, sans-serif" letter-spacing="4">DETAILS</text>
+  <text x="100" y="610" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif">Tier</text>
+  <text x="430" y="610" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif" text-anchor="end">${esc(ticket.tierName)}</text>
+  <text x="100" y="680" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif">Date</text>
+  <text x="980" y="680" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif" text-anchor="end">${esc(fmtDate(ticket.eventDate))}</text>
+  <text x="100" y="750" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif">Time</text>
+  <text x="980" y="750" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif" text-anchor="end">${esc(ticket.eventTime || "See event page")}</text>
+  <text x="100" y="820" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif">Venue</text>
+  <text x="980" y="820" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif" text-anchor="end">${esc(ticket.venue || "")}</text>
+  <text x="100" y="890" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif">Holder</text>
+  <text x="980" y="890" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif" text-anchor="end">${esc(ticket.userName || "")}</text>
+  <text x="100" y="960" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif">Price</text>
+  <text x="980" y="960" fill="#f5f5f5" font-size="34" font-family="Arial, sans-serif" text-anchor="end">${esc(amount)}</text>
+
+  <rect x="100" y="1030" width="880" height="4" fill="#2a2a2a"/>
+  <image href="${qrUrl}" x="320" y="1090" width="440" height="440"/>
+  <text x="540" y="1575" fill="#777777" font-size="24" font-family="Arial, sans-serif" text-anchor="middle">Scan this QR code at the entrance</text>
+
+  <text x="100" y="1670" fill="#777777" font-size="24" font-family="Arial, sans-serif" letter-spacing="4">TICKET ID</text>
+  <text x="100" y="1730" fill="#f5a623" font-size="30" font-family="Courier New, monospace">${esc(ticket.id)}</text>
+  <text x="100" y="1790" fill="#777777" font-size="22" font-family="Arial, sans-serif">Purchased: ${esc(purchasedAt)}</text>
+  <text x="100" y="1845" fill="#777777" font-size="22" font-family="Arial, sans-serif">${esc(ticketUrl)}</text>
+</svg>`.trim();
+
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const file = new File([blob], fileName, { type: "image/svg+xml" });
+
+  if (navigator.share && navigator.canShare?.({ files: [file] })) {
+    navigator.share({ files: [file], title: `${ticket.eventTitle} Ticket` }).catch(() => {});
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function QRCode({ ticketId, size = 160 }) {
   const canvasRef = useRef(null);
   const [loaded, setLoaded] = useState(false);
@@ -1133,6 +1226,21 @@ function TicketPage({ ctx }) {
           <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all" }}>{ticket.id}</div>
         </div>
       </div>
+
+      {!isOrganizer && (
+        <div style={{ display:"flex", gap:10, marginBottom:12 }}>
+          <button
+            onClick={() => downloadTicketFile(ticket)}
+            style={{ flex:1, padding:"14px 18px", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor:"pointer" }}
+          >
+            <i className="fa-solid fa-download" style={{ marginRight:8 }} />
+            DOWNLOAD TICKET
+          </button>
+          <div style={{ flexShrink:0 }}>
+            <ShareButton url={`${window.location.origin}/ticket/${ticket.id}`} label="Share" />
+          </div>
+        </div>
+      )}
 
       {/* Organizer: validate button */}
       {isOrganizer && !alreadyUsed && !result && (
@@ -2524,7 +2632,7 @@ function DashboardPage({ ctx }) {
                   <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>
                   <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>
                   <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
-                  <button onClick={() => downloadCSV(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+<button onClick={() => downloadCSVWithEmail(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
                     <i className="fa-solid fa-download" style={{marginRight:5}} />{eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
                   </button>
                   <button onClick={() => setConfirmDelete(event)} style={{ background:"rgba(232,64,64,0.1)", border:"1px solid rgba(232,64,64,0.3)", color:"var(--red)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-trash" /></button>
