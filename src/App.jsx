@@ -1766,6 +1766,8 @@ function CheckoutPage({ ctx }) {
   const [agreed, setAgreed] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [payStatus, setPayStatus] = useState(null);
+  const [payError, setPayError] = useState("");
+  const [paystackReady, setPaystackReady] = useState(() => Boolean(window.PaystackPop));
 
   const [cart] = useState(() => JSON.parse(sessionStorage.getItem("cart") || "{}"));
   const [guestInfo] = useState(() => JSON.parse(sessionStorage.getItem("guestInfo") || "null"));
@@ -1782,22 +1784,54 @@ function CheckoutPage({ ctx }) {
   const isFree = subtotal === 0;
   const total = isFree ? 0 : subtotal + SERVICE_FEE;
 
-  // Pre-load Paystack script as soon as checkout page mounts
   useEffect(() => {
-    if (!isFree && !window.PaystackPop) {
-      const s = document.createElement("script");
-      s.src = "https://js.paystack.co/v1/inline.js";
-      document.head.appendChild(s);
-    }
-  }, []);
+    if (isFree) return;
+    loadPaystack().then((ok) => {
+      if (!ok) {
+        setPayError("Could not load Paystack. Check your connection or disable blockers, then try again.");
+      }
+    });
+  }, [isFree]);
 
   // ── Load Paystack script once ──────────────────────────────────────────
   const loadPaystack = () => new Promise(resolve => {
-    if (window.PaystackPop) return resolve();
-    const s = document.createElement("script");
-    s.src = "https://js.paystack.co/v1/inline.js";
-    s.onload = resolve;
-    document.head.appendChild(s);
+    if (window.PaystackPop) {
+      setPaystackReady(true);
+      return resolve(true);
+    }
+
+    if (window.__paystackLoader) {
+      window.__paystackLoader.then(resolve);
+      return;
+    }
+
+    window.__paystackLoader = new Promise((loaderResolve) => {
+      const existing = document.querySelector('script[src="https://js.paystack.co/v1/inline.js"]');
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        if (ok) setPaystackReady(true);
+        loaderResolve(ok);
+      };
+
+      if (existing) {
+        existing.addEventListener("load", () => finish(Boolean(window.PaystackPop)), { once: true });
+        existing.addEventListener("error", () => finish(false), { once: true });
+        setTimeout(() => finish(Boolean(window.PaystackPop)), 5000);
+        return;
+      }
+
+      const s = document.createElement("script");
+      s.src = "https://js.paystack.co/v1/inline.js";
+      s.async = true;
+      s.onload = () => finish(Boolean(window.PaystackPop));
+      s.onerror = () => finish(false);
+      document.head.appendChild(s);
+      setTimeout(() => finish(Boolean(window.PaystackPop)), 5000);
+    });
+
+    window.__paystackLoader.then(resolve);
   });
 
   // ── Free tickets — confirm directly ───────────────────────────────────
@@ -1819,15 +1853,23 @@ function CheckoutPage({ ctx }) {
   // ── Paid tickets — launch Paystack popup ──────────────────────────────
   const handlePay = async () => {
     const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
+    setPayError("");
 
     if (!paystackKey) {
+      setPayError("Missing Paystack public key.");
       setPayStatus("failed");
       setProcessing(false);
       return;
     }
 
     setProcessing(true);
-    await loadPaystack();
+    const loaded = await loadPaystack();
+    if (!loaded || !window.PaystackPop) {
+      setPayError("Paystack could not open. Disable popup/ad blockers and try again.");
+      setPayStatus("failed");
+      setProcessing(false);
+      return;
+    }
 
     const handler = window.PaystackPop.setup({
       key: paystackKey,
@@ -1860,6 +1902,7 @@ function CheckoutPage({ ctx }) {
           const verifyData = await verifyRes.json().catch(() => ({}));
           if (!verifyRes.ok || !verifyData?.ok) {
             console.error("Paystack verification failed:", verifyData);
+            setPayError(verifyData?.msg || "Payment verification failed.");
             setPayStatus("failed");
             setProcessing(false);
             notify(verifyData?.msg || "Payment verification failed. Please contact support with your reference.", "error");
@@ -1882,6 +1925,7 @@ function CheckoutPage({ ctx }) {
           }
         } catch (err) {
           console.error("Post-payment error:", err);
+          setPayError("We couldn't complete the payment confirmation.");
           setPayStatus("failed");
           setProcessing(false);
         }
@@ -1893,10 +1937,14 @@ function CheckoutPage({ ctx }) {
     });
 
     handler.openIframe();
-    // Reset processing if popup was blocked or failed to open
     setTimeout(() => {
-      if (!window.PaystackPop) setProcessing(false);
-    }, 5000);
+      const paystackFrame = document.querySelector('iframe[src*="paystack"], iframe[name*="paystack"]');
+      if (!paystackFrame && payStatus !== "verifying") {
+        setPayError("Payment window did not open. Please allow popups and try again.");
+        setPayStatus("failed");
+        setProcessing(false);
+      }
+    }, 3000);
   };
 
   const handleConfirm = isFree ? handleFree : handlePay;
@@ -1990,16 +2038,16 @@ function CheckoutPage({ ctx }) {
           <i className="fa-solid fa-circle-exclamation" style={{ color:"var(--red)", fontSize:20 }} />
           <div>
             <div style={{ fontWeight:700, color:"var(--red)", fontSize:14 }}>Payment received but ticket creation failed</div>
-            <div style={{ color:"var(--muted)", fontSize:13 }}>Please contact davidbibiresanmi@gmail.com with your payment reference.</div>
+            <div style={{ color:"var(--muted)", fontSize:13 }}>{payError || "Please contact davidbibiresanmi@gmail.com with your payment reference."}</div>
           </div>
         </div>
       )}
 
       {/* Confirm button */}
       <button
-        disabled={!agreed || processing}
+        disabled={!agreed || processing || (!isFree && !paystackReady)}
         onClick={handleConfirm}
-        style={{ width:"100%", padding:16, background: agreed?(isFree?"var(--green)":"var(--gold)"):"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}
+        style={{ width:"100%", padding:16, background: agreed?(isFree?"var(--green)":"var(--gold)"):"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: (agreed && (isFree || paystackReady))?"pointer":"not-allowed", opacity: processing || (!isFree && !paystackReady)?0.7:1 }}
       >
         {processing
           ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")
