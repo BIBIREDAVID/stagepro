@@ -1898,6 +1898,10 @@ function CheckoutPage({ ctx }) {
   const SERVICE_FEE = 100; // ₦100 flat per order
   const isFree = subtotal === 0;
   const total = isFree ? 0 : subtotal + SERVICE_FEE;
+  const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "";
+  const paystackKeyDebug = paystackKey
+    ? `${paystackKey.slice(0, 7)}... (${paystackKey.length} chars)`
+    : "missing";
   const loadPaystack = () => new Promise(resolve => {
     if (window.PaystackPop) {
       setPaystackReady(true);
@@ -1962,7 +1966,6 @@ function CheckoutPage({ ctx }) {
   };
 
   const handlePay = async () => {
-    const paystackKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
     const reference = `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`;
     setPayError("");
 
@@ -2107,6 +2110,12 @@ function CheckoutPage({ ctx }) {
             : `PAY ${fmt(total)} WITH PAYSTACK â†’`
         }
       </button>
+
+      {!isFree && (
+        <div style={{ marginTop:10, textAlign:"center", fontSize:11, color:"var(--muted)", fontFamily:"DM Mono" }}>
+          {`Paystack key: ${paystackKeyDebug}`}
+        </div>
+      )}
 
       {/* Payment trust badge */}
       {!isFree && (
