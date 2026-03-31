@@ -546,7 +546,7 @@ function Nav({ currentUser, logout, notification, events }) {
                 </>
               )}
               {currentUser.role === "admin" && (
-                <Link to="/admin/payouts" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Payout Admin</Link>
+                <Link to="/admin" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Admin</Link>
               )}
               <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13, cursor:"pointer" }} onClick={() => window.location.href="/profile"}>
                 {currentUser.name?.[0] ?? "U"}
@@ -1043,6 +1043,7 @@ export default function App() {
           <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/admin" element={currentUser?.role === "admin" ? <AdminHomePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin/payouts" element={currentUser?.role === "admin" ? <AdminPayoutsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/profile" element={currentUser ? <ProfilePage ctx={ctx} /> : <Navigate to="/login" />} />
           <Route path="/event/:eventId/reviews" element={<ReviewsPage ctx={ctx} />} />
@@ -3693,6 +3694,211 @@ function NotificationBell({ currentUser, events }) {
 }
 
 // ── Profile Page (/profile) ───────────────────────────────────────────────
+async function fetchAdminDashboardData() {
+  const [usersSnap, eventsSnap, ticketsSnap, payoutsSnap] = await Promise.all([
+    getDocs(query(collection(db, "users"), where("role", "==", "organizer"))),
+    getDocs(collection(db, "events")),
+    getDocs(collection(db, "tickets")),
+    getDocs(collection(db, "payouts")),
+  ]);
+
+  return {
+    organizers: usersSnap.docs.map(d => ({ uid: d.id, ...d.data() })),
+    events: eventsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+    tickets: ticketsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+    payoutRecords: payoutsSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => new Date(b.paidAt || b.createdAt || 0) - new Date(a.paidAt || a.createdAt || 0)),
+  };
+}
+
+function buildOrganizerPayoutCards(organizers, events, tickets, payoutRecords) {
+  return organizers.map(organizer => {
+    const ownedEvents = events.filter(event => event.organizer === organizer.uid);
+    const ownedEventIds = new Set(ownedEvents.map(event => event.id));
+    const organizerTickets = tickets.filter(ticket => ownedEventIds.has(ticket.eventId));
+    const summary = calculatePayoutSummary(organizerTickets);
+    const organizerPayouts = payoutRecords.filter(record => record.organizerId === organizer.uid);
+    const paidOut = organizerPayouts
+      .filter(record => record.status === "paid")
+      .reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+    const outstanding = Math.max(0, summary.net - paidOut);
+    return { organizer, ownedEvents, organizerTickets, summary, organizerPayouts, paidOut, outstanding };
+  }).sort((a, b) => b.outstanding - a.outstanding);
+}
+
+function AdminHomePage({ ctx }) {
+  const { notify } = ctx;
+  const [loading, setLoading] = useState(true);
+  const [adminData, setAdminData] = useState({ organizers: [], events: [], tickets: [], payoutRecords: [] });
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      try {
+        setAdminData(await fetchAdminDashboardData());
+      } catch (err) {
+        console.error("Admin overview fetch failed:", err);
+        notify("Could not load admin dashboard.", "error");
+      }
+      setLoading(false);
+    };
+    load();
+  }, [notify]);
+
+  if (loading) return <Spinner />;
+
+  const { organizers, events, tickets, payoutRecords } = adminData;
+  const organizerCards = buildOrganizerPayoutCards(organizers, events, tickets, payoutRecords);
+  const totalOutstanding = organizerCards.reduce((sum, card) => sum + card.outstanding, 0);
+  const grossRevenue = organizerCards.reduce((sum, card) => sum + card.summary.gross, 0);
+  const paidOut = payoutRecords
+    .filter(record => record.status === "paid")
+    .reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+  const missingBankDetails = organizerCards.filter(card => {
+    const payoutDetails = card.organizer.payoutDetails || {};
+    return !(
+      payoutDetails.bankName?.trim() &&
+      payoutDetails.accountName?.trim() &&
+      payoutDetails.accountNumber?.trim()
+    );
+  }).length;
+  const recentPayouts = payoutRecords.slice(0, 5);
+  const topOutstanding = organizerCards.slice(0, 4);
+
+  return (
+    <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", gap:20, flexWrap:"wrap", marginBottom:28 }}>
+        <div>
+          <div style={{ fontSize:12, color:"var(--gold)", letterSpacing:2, marginBottom:10 }}>ADMIN CONTROL</div>
+          <h1 style={{ fontSize:"clamp(38px,6vw,58px)", lineHeight:0.95, marginBottom:10 }}>Run StagePro from one place.</h1>
+          <div style={{ color:"var(--muted)", maxWidth:620, lineHeight:1.8, fontSize:14 }}>
+            Monitor organizer balances, keep payouts current, and stay on top of event activity without jumping through separate screens.
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          <Link to="/admin/payouts" style={{ background:"var(--gold)", color:"#000", padding:"12px 18px", borderRadius:10, fontWeight:700, fontSize:13 }}>
+            Open Payouts
+          </Link>
+          <Link to="/dashboard" style={{ border:"1px solid var(--border)", color:"var(--text)", padding:"12px 18px", borderRadius:10, fontWeight:600, fontSize:13 }}>
+            Organizer View
+          </Link>
+        </div>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:14, marginBottom:24 }}>
+        {[
+          { label:"Organizers", value:String(organizers.length), tone:"var(--gold)", icon:"fa-solid fa-users" },
+          { label:"Live Events", value:String(events.length), tone:"var(--text)", icon:"fa-solid fa-calendar-days" },
+          { label:"Gross Sales", value:fmt(grossRevenue), tone:"var(--green)", icon:"fa-solid fa-naira-sign" },
+          { label:"Outstanding Payouts", value:fmt(totalOutstanding), tone:"var(--gold)", icon:"fa-solid fa-wallet" },
+          { label:"Paid Out", value:fmt(paidOut), tone:"var(--muted)", icon:"fa-solid fa-building-columns" },
+          { label:"Missing Bank Details", value:String(missingBankDetails), tone: missingBankDetails ? "var(--red)" : "var(--green)", icon:"fa-solid fa-circle-exclamation" },
+        ].map(item => (
+          <div key={item.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:18, padding:"18px 18px 16px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+              <div style={{ color:"var(--muted)", fontSize:11, letterSpacing:1 }}>{item.label.toUpperCase()}</div>
+              <i className={item.icon} style={{ color:item.tone, fontSize:16 }} />
+            </div>
+            <div style={{ fontFamily:"Oswald", fontSize:32, color:item.tone, lineHeight:1 }}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1.2fr) minmax(320px,0.8fr)", gap:18 }}>
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:18, padding:22 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
+            <div>
+              <div style={{ fontFamily:"Oswald", fontSize:28, lineHeight:1 }}>Highest Outstanding Balances</div>
+              <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>Start with the organizers who need settlement attention first.</div>
+            </div>
+            <Link to="/admin/payouts" style={{ color:"var(--gold)", fontWeight:700, fontSize:13 }}>Manage payouts</Link>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {topOutstanding.length === 0 ? (
+              <div style={{ color:"var(--muted)", fontSize:14 }}>No organizer payout data yet.</div>
+            ) : topOutstanding.map(card => {
+              const payoutDetails = card.organizer.payoutDetails || {};
+              const bankReady = Boolean(
+                payoutDetails.bankName?.trim() &&
+                payoutDetails.accountName?.trim() &&
+                payoutDetails.accountNumber?.trim()
+              );
+              return (
+                <div key={card.organizer.uid} style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:14, padding:"16px 18px", display:"flex", justifyContent:"space-between", gap:14, flexWrap:"wrap" }}>
+                  <div>
+                    <div style={{ fontWeight:700, fontSize:16, marginBottom:4 }}>{card.organizer.name}</div>
+                    <div style={{ color:"var(--muted)", fontSize:13 }}>{card.organizer.email}</div>
+                    <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:10 }}>
+                      <span style={{ background:"rgba(245,166,35,0.12)", color:"var(--gold)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                        {card.ownedEvents.length} event{card.ownedEvents.length !== 1 ? "s" : ""}
+                      </span>
+                      <span style={{ background: bankReady ? "rgba(61,220,132,0.14)" : "rgba(244,90,90,0.12)", color: bankReady ? "var(--green)" : "var(--red)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                        {bankReady ? "bank ready" : "needs bank details"}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ color:"var(--muted)", fontSize:11, letterSpacing:1, marginBottom:6 }}>OUTSTANDING</div>
+                    <div style={{ fontFamily:"Oswald", fontSize:30, color:"var(--green)", lineHeight:1 }}>{fmt(card.outstanding)}</div>
+                    <div style={{ color:"var(--muted)", fontSize:12, marginTop:8 }}>{card.summary.paidTickets.length} paid tickets</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:18, padding:22 }}>
+            <div style={{ fontFamily:"Oswald", fontSize:28, lineHeight:1, marginBottom:12 }}>Admin Sections</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {[
+                { to:"/admin/payouts", title:"Payout Management", body:"Review bank details, outstanding balances, and mark transfers as paid.", icon:"fa-solid fa-building-columns" },
+                { to:"/find-tickets", title:"Ticket Recovery", body:"Use the customer-safe recovery flow exactly as your attendees see it.", icon:"fa-solid fa-ticket" },
+                { to:"/profile", title:"Account Settings", body:"Check the current admin account profile and role context.", icon:"fa-solid fa-user-shield" },
+              ].map(section => (
+                <Link key={section.title} to={section.to} style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:14, padding:"16px 18px", display:"flex", gap:14, alignItems:"flex-start", color:"inherit" }}>
+                  <div style={{ width:40, height:40, borderRadius:12, background:"rgba(245,166,35,0.14)", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--gold)", flexShrink:0 }}>
+                    <i className={section.icon} />
+                  </div>
+                  <div>
+                    <div style={{ fontWeight:700, marginBottom:4 }}>{section.title}</div>
+                    <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7 }}>{section.body}</div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:18, padding:22 }}>
+            <div style={{ fontFamily:"Oswald", fontSize:28, lineHeight:1, marginBottom:12 }}>Recent Payout Activity</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {recentPayouts.length === 0 ? (
+                <div style={{ color:"var(--muted)", fontSize:14 }}>No payout activity has been recorded yet.</div>
+              ) : recentPayouts.map(record => (
+                <div key={record.id} style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:14, padding:"14px 16px", display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap" }}>
+                  <div>
+                    <div style={{ fontWeight:700 }}>{record.organizerName || "Organizer"}</div>
+                    <div style={{ color:"var(--muted)", fontSize:12 }}>
+                      {new Date(record.paidAt || record.createdAt || Date.now()).toLocaleDateString("en-NG", { month:"short", day:"numeric", year:"numeric" })}
+                    </div>
+                  </div>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ color:"var(--green)", fontFamily:"IBM Plex Mono", fontSize:15 }}>{fmt(Number(record.amount) || 0)}</div>
+                    <div style={{ color:"var(--muted)", fontSize:12 }}>{record.notes || "Manual payout"}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminPayoutsPage({ ctx }) {
   const { currentUser, notify } = ctx;
   const [loading, setLoading] = useState(true);
@@ -3707,20 +3913,11 @@ function AdminPayoutsPage({ ctx }) {
     const load = async () => {
       setLoading(true);
       try {
-        const [usersSnap, eventsSnap, ticketsSnap, payoutsSnap] = await Promise.all([
-          getDocs(query(collection(db, "users"), where("role", "==", "organizer"))),
-          getDocs(collection(db, "events")),
-          getDocs(collection(db, "tickets")),
-          getDocs(collection(db, "payouts")),
-        ]);
-        setOrganizers(usersSnap.docs.map(d => ({ uid: d.id, ...d.data() })));
-        setEvents(eventsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        setTickets(ticketsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        setPayoutRecords(
-          payoutsSnap.docs
-            .map(d => ({ id: d.id, ...d.data() }))
-            .sort((a, b) => new Date(b.paidAt || b.createdAt || 0) - new Date(a.paidAt || a.createdAt || 0))
-        );
+        const data = await fetchAdminDashboardData();
+        setOrganizers(data.organizers);
+        setEvents(data.events);
+        setTickets(data.tickets);
+        setPayoutRecords(data.payoutRecords);
       } catch (err) {
         console.error("Admin payout fetch failed:", err);
         notify("Could not load payout data.", "error");
@@ -3741,16 +3938,7 @@ function AdminPayoutsPage({ ctx }) {
     }));
   };
 
-  const organizerCards = organizers.map(organizer => {
-    const ownedEvents = events.filter(event => event.organizer === organizer.uid);
-    const ownedEventIds = new Set(ownedEvents.map(event => event.id));
-    const organizerTickets = tickets.filter(ticket => ownedEventIds.has(ticket.eventId));
-    const summary = calculatePayoutSummary(organizerTickets);
-    const organizerPayouts = payoutRecords.filter(record => record.organizerId === organizer.uid);
-    const paidOut = organizerPayouts.filter(record => record.status === "paid").reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
-    const outstanding = Math.max(0, summary.net - paidOut);
-    return { organizer, ownedEvents, summary, organizerPayouts, paidOut, outstanding };
-  }).sort((a, b) => b.outstanding - a.outstanding);
+  const organizerCards = buildOrganizerPayoutCards(organizers, events, tickets, payoutRecords);
 
   const markAsPaid = async (card) => {
     const draft = drafts[card.organizer.uid] || {};
@@ -3802,6 +3990,12 @@ function AdminPayoutsPage({ ctx }) {
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:16, flexWrap:"wrap", marginBottom:28 }}>
         <div>
+          <div style={{ marginBottom:12 }}>
+            <Link to="/admin" style={{ color:"var(--muted)", fontSize:13, fontWeight:600 }}>
+              <i className="fa-solid fa-arrow-left" style={{ marginRight:8 }} />
+              Back to admin
+            </Link>
+          </div>
           <h1 style={{ fontSize:"clamp(36px,6vw,52px)", lineHeight:1, marginBottom:6 }}>PAYOUT ADMIN</h1>
           <div style={{ color:"var(--muted)", fontSize:14 }}>Track organizer bank details, outstanding balances, and manual settlements.</div>
         </div>
