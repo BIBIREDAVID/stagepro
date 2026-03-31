@@ -4152,6 +4152,26 @@ function ProfilePage({ ctx }) {
     : [];
   const payoutSummary = currentUser.role === "organizer" ? calculatePayoutSummary(organizerTickets) : null;
   const hasPayoutDetails = Boolean(bankName.trim() && accountName.trim() && accountNumber.trim());
+  const roleMeta = currentUser.role === "admin"
+    ? {
+        label: "Administrator",
+        icon: "fa-solid fa-user-shield",
+        accountTitle: "Platform Administrator",
+        description: "You can access admin controls and oversee payouts.",
+      }
+    : currentUser.role === "organizer"
+      ? {
+          label: "Organizer",
+          icon: "fa-solid fa-star",
+          accountTitle: "Event Organizer",
+          description: "You can create and manage events.",
+        }
+      : {
+          label: "Attendee",
+          icon: "fa-solid fa-ticket",
+          accountTitle: "Event Attendee",
+          description: "You can purchase and manage tickets.",
+        };
 
   const handleSave = async () => {
     if (!name.trim()) return;
@@ -4186,7 +4206,7 @@ function ProfilePage({ ctx }) {
           <h1 style={{ fontSize:"clamp(28px,5vw,48px)", lineHeight:1, marginBottom:4 }}>{currentUser.name}</h1>
           <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.email}</div>
           <div style={{ display:"inline-block", marginTop:6, background:"rgba(245,166,35,0.15)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"2px 12px", borderRadius:100, fontSize:12, fontWeight:700 }}>
-            {currentUser.role === "organizer" ? <><i className="fa-solid fa-star" style={{marginRight:6}} />Organizer</> : <><i className="fa-solid fa-ticket" style={{marginRight:6}} />Attendee</>}
+            <><i className={roleMeta.icon} style={{marginRight:6}} />{roleMeta.label}</>
           </div>
         </div>
       </div>
@@ -4237,12 +4257,20 @@ function ProfilePage({ ctx }) {
           <div style={{ borderTop:"1px solid var(--border)", paddingTop:20 }}>
             <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:12, display:"block" }}>ACCOUNT TYPE</label>
             <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-              <span style={{ fontSize:28 }}>{currentUser.role==="organizer"?<i className="fa-solid fa-star" style={{color:"var(--gold)"}} />:<i className="fa-solid fa-ticket" style={{color:"var(--gold)"}} />}</span>
+              <span style={{ fontSize:28 }}><i className={roleMeta.icon} style={{color:"var(--gold)"}} /></span>
               <div>
-                <div style={{ fontWeight:600, fontSize:15 }}>{currentUser.role==="organizer"?"Event Organizer":"Event Attendee"}</div>
-                <div style={{ color:"var(--muted)", fontSize:13 }}>{currentUser.role==="organizer"?"You can create and manage events":"You can purchase and manage tickets"}</div>
+                <div style={{ fontWeight:600, fontSize:15 }}>{roleMeta.accountTitle}</div>
+                <div style={{ color:"var(--muted)", fontSize:13 }}>{roleMeta.description}</div>
               </div>
             </div>
+            {currentUser.role === "admin" && (
+              <div style={{ marginTop:16 }}>
+                <Link to="/admin" style={{ display:"inline-flex", alignItems:"center", gap:8, background:"var(--gold)", color:"#000", padding:"10px 14px", borderRadius:10, fontWeight:700, fontSize:13 }}>
+                  <i className="fa-solid fa-arrow-up-right-from-square" />
+                  Open Admin Dashboard
+                </Link>
+              </div>
+            )}
           </div>
         </div>
       )}
