@@ -7,6 +7,7 @@ import {
   useNavigate,
   useParams,
   Navigate,
+  useSearchParams,
 } from "react-router-dom";
 import { initializeApp } from "firebase/app";
 import {
@@ -279,6 +280,22 @@ const fmtDate = (d) =>
     weekday: "short", year: "numeric", month: "long", day: "numeric",
   });
 
+const calculatePayoutSummary = (tickets) => {
+  const STAGEPRO_FEE = 100;
+  const PAYSTACK_RATE = 0.015;
+  const PAYSTACK_FLAT = 100;
+  const PAYSTACK_CAP = 2000;
+  const paidTickets = tickets.filter(t => t.paymentStatus === "paid" && t.paystackRef);
+  const orderRefs = [...new Set(paidTickets.map(t => t.paystackRef))];
+  const gross = tickets.reduce((s, t) => s + (t.price || 0), 0);
+  const stagePro = orderRefs.length * STAGEPRO_FEE;
+  const paystack = Math.round(
+    paidTickets.reduce((s, t) => s + Math.min((t.price * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP), 0)
+  );
+  const net = Math.max(0, Math.round(gross - stagePro - paystack));
+  return { gross, stagePro, paystack, net, orderCount: orderRefs.length, paidTickets };
+};
+
 
 // ── Email ticket via EmailJS ───────────────────────────────────────────────
 // ── Send ticket confirmation email via Resend (Vercel serverless function) ──
@@ -314,7 +331,7 @@ const sendTicketEmail = async ({ toEmail, toName, ticket, eventImage, themeColor
 
 // ── Global styles ──────────────────────────────────────────────────────────
 const STYLE = `
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
   @import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -344,8 +361,8 @@ const STYLE = `
     }
   }
 
-  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; transition: background 0.25s, color 0.25s; }
-  h1, h2, h3 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.04em; }
+  body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; transition: background 0.25s, color 0.25s; }
+  h1, h2, h3 { font-family: 'Oswald', sans-serif; letter-spacing: 0.04em; }
   a { color: inherit; text-decoration: none; }
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: var(--bg2); }
@@ -356,14 +373,24 @@ const STYLE = `
   @media (max-width: 768px) {
     .footer-grid { grid-template-columns: 1fr 1fr !important; gap: 32px !important; }
     .footer-brand { grid-column: 1 / -1; }
+    .footer-section-title { margin-bottom: 14px !important; }
+    .footer-bottom { flex-direction: column !important; align-items: flex-start !important; }
     .event-layout { grid-template-columns: 1fr !important; gap: 20px !important; }
     .event-layout > div:last-child { position: static !important; }
   }
   @media (max-width: 480px) {
     .footer-grid { grid-template-columns: 1fr !important; }
+    .footer-bottom-links { width: 100% !important; justify-content: space-between !important; gap: 10px !important; flex-wrap: wrap !important; }
   }
   @media (max-width: 600px) {
-    nav { padding: 0 16px !important; }
+    nav { padding: 10px 16px !important; height: auto !important; min-height: 60px; }
+    .nav-shell { align-items: flex-start !important; gap: 12px !important; }
+    .nav-actions { gap: 6px !important; flex-wrap: wrap !important; justify-content: flex-end !important; max-width: 72%; }
+    .nav-actions a, .nav-actions button { font-size: 12px !important; padding: 6px 10px !important; }
+    .footer-grid { padding: 44px 20px 32px !important; gap: 24px !important; }
+    .footer-link { display: inline-block !important; padding: 6px 0 !important; min-height: 32px; }
+    .footer-social { gap: 8px !important; }
+    .footer-bottom { padding: 18px 20px !important; }
     nav a[href="/dashboard"], nav a[href="/validate"] { display: none; }
   }
 `;
@@ -430,7 +457,7 @@ function ShareButton({ url, label = "Copy Link", small, stopProp }) {
             onClick={e => e.stopPropagation()}
             style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, width:"100%", maxWidth:460, animation:"fadeUp 0.3s ease" }}
           >
-            <h3 style={{ fontFamily:"Bebas Neue", fontSize:26, marginBottom:8 }}>SHARE LINK</h3>
+            <h3 style={{ fontFamily:"Oswald", fontSize:26, marginBottom:8 }}>SHARE LINK</h3>
             <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>Tap the link to select it, then copy — or share directly to WhatsApp.</p>
             {/* URL input — tap to select all */}
             <div style={{ display:"flex", gap:8, marginBottom:16 }}>
@@ -438,7 +465,7 @@ function ShareButton({ url, label = "Copy Link", small, stopProp }) {
                 readOnly value={url}
                 onFocus={e => e.target.select()}
                 onClick={e => e.target.select()}
-                style={{ flex:1, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:12, fontFamily:"DM Mono", outline:"none", minWidth:0 }}
+                style={{ flex:1, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:12, fontFamily:"IBM Plex Mono", outline:"none", minWidth:0 }}
               />
               <button
                 onClick={() => {
@@ -487,7 +514,7 @@ function Input({ label, ...props }) {
   return (
     <div>
       {label && <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>{label.toUpperCase()}</label>}
-      <input {...props} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"DM Sans" }} />
+      <input {...props} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"Manrope" }} />
     </div>
   );
 }
@@ -498,12 +525,12 @@ function Nav({ currentUser, logout, notification, events }) {
     <>
       <style>{STYLE}</style>
       {notification && <Notification {...notification} />}
-      <nav style={{ position:"sticky", top:0, zIndex:100, background:"var(--nav-bg)", backdropFilter:"blur(12px)", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 32px", height:60 }}>
+      <nav className="nav-shell" style={{ position:"sticky", top:0, zIndex:100, background:"var(--nav-bg)", backdropFilter:"blur(12px)", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 32px", height:60 }}>
         <Link to="/" style={{ display:"flex", alignItems:"center", gap:4 }}>
-          <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--gold)", letterSpacing:2 }}>STAGE</span>
-          <span style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--text)", letterSpacing:2 }}>PRO</span>
+          <span style={{ fontFamily:"Oswald", fontSize:26, color:"var(--gold)", letterSpacing:1 }}>STAGE</span>
+          <span style={{ fontFamily:"Oswald", fontSize:26, color:"var(--text)", letterSpacing:1 }}>PRO</span>
         </Link>
-        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <div className="nav-actions" style={{ display:"flex", alignItems:"center", gap:8 }}>
           {currentUser ? (
             <>
               {currentUser.role === "organizer" && (
@@ -517,6 +544,9 @@ function Nav({ currentUser, logout, notification, events }) {
                   <Link to="/tickets" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>My Tickets</Link>
                   <NotificationBell currentUser={currentUser} events={events} />
                 </>
+              )}
+              {currentUser.role === "admin" && (
+                <Link to="/admin/payouts" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Payout Admin</Link>
               )}
               <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13, cursor:"pointer" }} onClick={() => window.location.href="/profile"}>
                 {currentUser.name?.[0] ?? "U"}
@@ -568,15 +598,6 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       setEventsLoading(true);
-      // Cleanup seed events separately — don't let failures block the fetch
-      try {
-        for (const id of ["evt-001", "evt-002", "evt-003"]) {
-          const ref = doc(db, "events", id);
-          const snap = await getDoc(ref);
-          if (snap.exists()) await deleteDoc(ref);
-        }
-      } catch (err) { console.warn("Seed cleanup skipped:", err.message); }
-      // Always fetch events regardless of cleanup result
       try {
         const snapshot = await getDocs(collection(db, "events"));
         setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -942,10 +963,13 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  const updateProfile = async ({ name }) => {
+  const updateProfile = async ({ name, payoutDetails }) => {
     try {
-      await updateDoc(doc(db, "users", currentUser.uid), { name: name.trim() });
-      setCurrentUser(prev => ({ ...prev, name: name.trim() }));
+      const updates = {};
+      if (typeof name === "string") updates.name = name.trim();
+      if (payoutDetails) updates.payoutDetails = payoutDetails;
+      await updateDoc(doc(db, "users", currentUser.uid), updates);
+      setCurrentUser(prev => ({ ...prev, ...updates }));
       notify("Profile updated!");
       return { ok: true };
     } catch (err) {
@@ -1019,6 +1043,7 @@ export default function App() {
           <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/admin/payouts" element={currentUser?.role === "admin" ? <AdminPayoutsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/profile" element={currentUser ? <ProfilePage ctx={ctx} /> : <Navigate to="/login" />} />
           <Route path="/event/:eventId/reviews" element={<ReviewsPage ctx={ctx} />} />
           <Route path="/terms" element={<TermsPage />} />
@@ -1045,14 +1070,14 @@ function Footer() {
         {/* Brand column */}
         <div className="footer-brand">
           <div style={{ display:"flex", alignItems:"center", gap:4, marginBottom:16 }}>
-            <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--gold)", letterSpacing:2 }}>STAGE</span>
-            <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--text)", letterSpacing:2 }}>PRO</span>
+            <span style={{ fontFamily:"Oswald", fontSize:28, color:"var(--gold)", letterSpacing:1 }}>STAGE</span>
+            <span style={{ fontFamily:"Oswald", fontSize:28, color:"var(--text)", letterSpacing:1 }}>PRO</span>
           </div>
           <p style={{ color:"var(--muted)", fontSize:14, lineHeight:1.8, maxWidth:280, marginBottom:24 }}>
             Nigeria's premier event ticketing platform. Discover, book, and manage tickets for concerts, festivals, and sporting events.
           </p>
           {/* Social icons */}
-          <div style={{ display:"flex", gap:10 }}>
+          <div className="footer-social" style={{ display:"flex", gap:10 }}>
             {[
               { label:"Twitter / X", icon:<i className="fa-brands fa-x-twitter" />, href:"#" },
               { label:"Instagram", icon:<i className="fa-brands fa-instagram" />, href:"#" },
@@ -1068,10 +1093,10 @@ function Footer() {
 
         {/* Discover column */}
         <div>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>DISCOVER</div>
+          <div className="footer-section-title" style={{ fontFamily:"Oswald", fontSize:16, letterSpacing:1, color:"var(--text)", marginBottom:20 }}>DISCOVER</div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
             {[["Browse Events","/"],["Concerts","/"],["Festivals","/"],["Sports","/"]].map(([label, href]) => (
-              <Link key={label} to={href} style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+              <Link key={label} to={href} className="footer-link" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
                 onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
                 onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
               >{label}</Link>
@@ -1081,10 +1106,10 @@ function Footer() {
 
         {/* Organizers column */}
         <div>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>ORGANIZERS</div>
+          <div className="footer-section-title" style={{ fontFamily:"Oswald", fontSize:16, letterSpacing:1, color:"var(--text)", marginBottom:20 }}>ORGANIZERS</div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
             {[["Create Event","/dashboard/create"],["Dashboard","/dashboard"],["Scan Tickets","/validate"],["Sign Up","/register"]].map(([label, href]) => (
-              <Link key={label} to={href} style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+              <Link key={label} to={href} className="footer-link" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
                 onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
                 onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
               >{label}</Link>
@@ -1094,25 +1119,25 @@ function Footer() {
 
         {/* Support column */}
         <div>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2, color:"var(--text)", marginBottom:20 }}>SUPPORT</div>
+          <div className="footer-section-title" style={{ fontFamily:"Oswald", fontSize:16, letterSpacing:1, color:"var(--text)", marginBottom:20 }}>SUPPORT</div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
-            <Link to="/help" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+            <Link to="/help" className="footer-link" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >Help Centre</Link>
-            <Link to="/find-tickets" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+            <Link to="/find-tickets" className="footer-link" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >Find My Tickets</Link>
-            <Link to="/contact" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+            <Link to="/contact" className="footer-link" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >Contact Us</Link>
-            <Link to="/terms" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+            <Link to="/terms" className="footer-link" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >Terms of Service</Link>
-            <Link to="/privacy" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
+            <Link to="/privacy" className="footer-link" style={{ color:"var(--muted)", fontSize:14, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >Privacy Policy</Link>
@@ -1124,13 +1149,13 @@ function Footer() {
       <div style={{ borderTop:"1px solid var(--border)" }} />
 
       {/* Bottom bar */}
-      <div style={{ maxWidth:1200, margin:"0 auto", padding:"20px 32px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
+      <div className="footer-bottom" style={{ maxWidth:1200, margin:"0 auto", padding:"20px 32px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
         <p style={{ color:"var(--muted)", fontSize:13 }}>
           © {year} StagePro. All rights reserved. Made in Nigeria
         </p>
-        <div style={{ display:"flex", gap:20 }}>
+        <div className="footer-bottom-links" style={{ display:"flex", gap:20 }}>
           {[["Terms","/terms"],["Privacy","/privacy"],["Cookies","/cookies"]].map(([label, href]) => (
-            <Link key={label} to={href} style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
+            <Link key={label} to={href} className="footer-link" style={{ color:"var(--muted)", fontSize:13, transition:"color 0.2s" }}
               onMouseEnter={e => e.currentTarget.style.color="var(--gold)"}
               onMouseLeave={e => e.currentTarget.style.color="var(--muted)"}
             >{label}</Link>
@@ -1174,7 +1199,7 @@ function TicketPage({ ctx }) {
   if (!ticket) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh", gap:16, padding:24, textAlign:"center" }}>
       <div style={{ fontSize:64 }}><i className="fa-solid fa-circle-xmark" style={{color:"var(--red)"}} /></div>
-      <h2 style={{ fontFamily:"Bebas Neue", fontSize:40, color:"var(--red)" }}>TICKET NOT FOUND</h2>
+      <h2 style={{ fontFamily:"Oswald", fontSize:40, color:"var(--red)" }}>TICKET NOT FOUND</h2>
       <p style={{ color:"var(--muted)" }}>This ticket ID does not exist in our system.</p>
     </div>
   );
@@ -1192,7 +1217,7 @@ function TicketPage({ ctx }) {
         border: `2px solid ${alreadyUsed ? "var(--red)" : "var(--green)"}`,
       }}>
         <div style={{ fontSize:48, marginBottom:8 }}>{alreadyUsed ? <i className="fa-solid fa-circle-xmark" style={{color:"var(--red)"}} /> : <i className="fa-solid fa-circle-check" style={{color:"var(--green)"}} />}</div>
-        <div style={{ fontFamily:"Bebas Neue", fontSize:36, color: alreadyUsed ? "var(--red)" : "var(--green)" }}>
+        <div style={{ fontFamily:"Oswald", fontSize:36, color: alreadyUsed ? "var(--red)" : "var(--green)" }}>
           {alreadyUsed ? "TICKET USED" : "VALID TICKET"}
         </div>
         <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>
@@ -1204,7 +1229,7 @@ function TicketPage({ ctx }) {
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", marginBottom:20 }}>
         <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)" }}>
           <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:6 }}>EVENT</div>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:32, lineHeight:1, marginBottom:4 }}>{ticket.eventTitle}</div>
+          <div style={{ fontFamily:"Oswald", fontSize:32, lineHeight:1, marginBottom:4 }}>{ticket.eventTitle}</div>
         </div>
         <div style={{ padding:"20px 24px", display:"grid", gap:16 }}>
           {[
@@ -1223,7 +1248,7 @@ function TicketPage({ ctx }) {
         </div>
         <div style={{ padding:"16px 24px", borderTop:"1px solid var(--border)", background:"var(--bg3)" }}>
           <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:4 }}>TICKET ID</div>
-          <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all" }}>{ticket.id}</div>
+          <div style={{ fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all" }}>{ticket.id}</div>
         </div>
       </div>
 
@@ -1231,7 +1256,7 @@ function TicketPage({ ctx }) {
         <div style={{ display:"flex", gap:10, marginBottom:12 }}>
           <button
             onClick={() => downloadTicketFile(ticket)}
-            style={{ flex:1, padding:"14px 18px", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor:"pointer" }}
+            style={{ flex:1, padding:"14px 18px", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:2, cursor:"pointer" }}
           >
             <i className="fa-solid fa-download" style={{ marginRight:8 }} />
             DOWNLOAD TICKET
@@ -1247,7 +1272,7 @@ function TicketPage({ ctx }) {
         <button
           onClick={handleValidate}
           disabled={validating}
-          style={{ width:"100%", padding:18, background:"var(--green)", color:"#000", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:24, letterSpacing:2, cursor: validating?"not-allowed":"pointer", opacity: validating?0.7:1, marginBottom:12 }}
+          style={{ width:"100%", padding:18, background:"var(--green)", color:"#000", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:24, letterSpacing:2, cursor: validating?"not-allowed":"pointer", opacity: validating?0.7:1, marginBottom:12 }}
         >
           {validating ? "VALIDATING..." : "MARK AS USED — GRANT ENTRY"}
         </button>
@@ -1256,7 +1281,7 @@ function TicketPage({ ctx }) {
       {/* Result after organizer validates */}
       {result && (
         <div style={{ background: result.ok?"rgba(61,220,132,0.1)":"rgba(232,64,64,0.1)", border:`1px solid ${result.ok?"var(--green)":"var(--red)"}`, borderRadius:12, padding:20, textAlign:"center", animation:"fadeUp 0.3s ease", marginBottom:12 }}>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:28, color: result.ok?"var(--green)":"var(--red)" }}>
+          <div style={{ fontFamily:"Oswald", fontSize:28, color: result.ok?"var(--green)":"var(--red)" }}>
             {result.ok ? <><i className="fa-solid fa-circle-check" style={{marginRight:8}} />ENTRY GRANTED</> : <><i className="fa-solid fa-circle-xmark" style={{marginRight:8}} />{result.msg}</>}
           </div>
         </div>
@@ -1265,7 +1290,7 @@ function TicketPage({ ctx }) {
       {/* Organizer: already used notice */}
       {isOrganizer && alreadyUsed && (
         <div style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", borderRadius:12, padding:20, textAlign:"center", marginBottom:12 }}>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
+          <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
           <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>This ticket was already used for entry</div>
         </div>
       )}
@@ -1348,7 +1373,7 @@ function HomePage({ ctx }) {
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"48px 24px" }}>
       <div style={{ textAlign:"center", marginBottom:64, animation:"fadeUp 0.6s ease" }}>
-        <div style={{ fontSize:13, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:16, fontWeight:500 }}>Nigeria's Premier Ticketing Platform</div>
+        <div style={{ fontSize:13, letterSpacing:2, color:"var(--gold)", textTransform:"uppercase", marginBottom:16, fontWeight:600 }}>Nigeria's Premier Ticketing Platform</div>
         <h1 style={{ fontSize:"clamp(56px,10vw,120px)", lineHeight:0.9, marginBottom:24 }}>
           YOUR NEXT<br />
           <span style={{ color:"var(--gold)", WebkitTextStroke:"2px var(--gold)", WebkitTextFillColor:"transparent" }}>EXPERIENCE</span>
@@ -1448,7 +1473,7 @@ function HomePage({ ctx }) {
       {filtered.length === 0 ? (
         <div style={{ textAlign:"center", padding:"80px 24px", color:"var(--muted)" }}>
           <div style={{ fontSize:48, marginBottom:16 }}><i className="fa-solid fa-magnifying-glass" style={{color:"var(--muted)"}} /></div>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--text)", marginBottom:8 }}>NO RESULTS FOUND</div>
+          <div style={{ fontFamily:"Oswald", fontSize:28, color:"var(--text)", marginBottom:8 }}>NO RESULTS FOUND</div>
           <p>Try adjusting your search or filters</p>
           <button onClick={clearAll} style={{ marginTop:16, background:"var(--gold)", color:"#000", border:"none", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontWeight:700 }}>Clear Filters</button>
         </div>
@@ -1483,7 +1508,7 @@ function EventCard({ event, index }) {
         <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.85) 0%, transparent 60%)" }} />
       </div>
       <div style={{ padding:"20px 24px 24px" }}>
-        <h3 style={{ fontFamily:"Bebas Neue", fontSize:28, lineHeight:1, marginBottom:4 }}>{event.title}</h3>
+        <h3 style={{ fontFamily:"Oswald", fontSize:28, lineHeight:1, marginBottom:4 }}>{event.title}</h3>
         <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>{event.subtitle}</p>
         <div style={{ fontSize:13, marginBottom:4 }}><i className="fa-regular fa-calendar" style={{marginRight:6,color:"var(--gold)"}} />{fmtDate(event.date)} · {event.time}</div>
         <div style={{ fontSize:13, color:"var(--muted)", marginBottom:16 }}><i className="fa-solid fa-location-dot" style={{marginRight:6,color:"var(--gold)"}} />{event.venue}</div>
@@ -1498,7 +1523,7 @@ function EventCard({ event, index }) {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
           <div>
             <span style={{ fontSize:11, color:"var(--muted)" }}>FROM </span>
-            <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{fmt(minPrice)}</span>
+            <span style={{ fontFamily:"Oswald", fontSize:24, color:"var(--gold)" }}>{fmt(minPrice)}</span>
           </div>
           <span style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:8, fontWeight:700, fontSize:13 }}>Get Tickets →</span>
         </div>
@@ -1567,7 +1592,7 @@ function AuthPage({ mode, ctx }) {
               {resetMsg}
             </div>
           )}
-          <button onClick={handleReset} disabled={resetLoading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: resetLoading?"not-allowed":"pointer", opacity: resetLoading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Bebas Neue", letterSpacing:2 }}>
+          <button onClick={handleReset} disabled={resetLoading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: resetLoading?"not-allowed":"pointer", opacity: resetLoading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Oswald", letterSpacing:1 }}>
             {resetLoading ? "SENDING..." : "SEND RESET LINK"}
           </button>
           <button onClick={() => { setShowReset(false); setResetMsg(""); setResetEmail(""); }} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:13, textAlign:"center" }}>
@@ -1602,7 +1627,7 @@ function AuthPage({ mode, ctx }) {
             </div>
           )}
           {error && <div style={{ color:"var(--red)", fontSize:13, textAlign:"center" }}>{error}</div>}
-          <button onClick={submit} disabled={loading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Bebas Neue", letterSpacing:2, marginTop:8 }}>
+          <button onClick={submit} disabled={loading} style={{ background:"var(--gold)", color:"#000", border:"none", padding:14, borderRadius:10, cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1, fontWeight:700, fontSize:16, fontFamily:"Oswald", letterSpacing:1, marginTop:8 }}>
             {loading?"PLEASE WAIT...":mode==="login"?"SIGN IN":"CREATE ACCOUNT"}
           </button>
 
@@ -1762,12 +1787,12 @@ function EventPage({ ctx }) {
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                       <div>
                         <div style={{ fontWeight:600, fontSize:14, marginBottom:2 }}>{tier.name}</div>
-                        <div style={{ fontFamily:"Bebas Neue", fontSize:22, color: available===0?"var(--muted)":"var(--gold)" }}>{Number(tier.price)===0 ? "FREE" : fmt(tier.price)}</div>
+                        <div style={{ fontFamily:"Oswald", fontSize:22, color: available===0?"var(--muted)":"var(--gold)" }}>{Number(tier.price)===0 ? "FREE" : fmt(tier.price)}</div>
                       </div>
                       {available > 0 ? (
                         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                           <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor: qty===0?"not-allowed":"pointer", fontSize:20, opacity: qty===0?0.4:1 }}>−</button>
-                          <span style={{ fontFamily:"DM Mono", fontSize:18, minWidth:22, textAlign:"center" }}>{qty}</span>
+                          <span style={{ fontFamily:"IBM Plex Mono", fontSize:18, minWidth:22, textAlign:"center" }}>{qty}</span>
                           <button onClick={() => adjust(tier.id,1)} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor:"pointer", fontSize:20 }}>+</button>
                         </div>
                       ) : (
@@ -1797,13 +1822,13 @@ function EventPage({ ctx }) {
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                   <span style={{ color:"var(--muted)", fontSize:14 }}>{totalItems} ticket{totalItems>1?"s":""}</span>
                   {totalPrice === 0
-                    ? <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--green)" }}>FREE</span>
-                    : <span style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{fmt(totalPrice)}</span>
+                    ? <span style={{ fontFamily:"Oswald", fontSize:24, color:"var(--green)" }}>FREE</span>
+                    : <span style={{ fontFamily:"Oswald", fontSize:24, color:"var(--gold)" }}>{fmt(totalPrice)}</span>
                   }
                 </div>
               </div>
             )}
-            <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:16, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+            <button disabled={totalItems===0} onClick={handleCheckout} style={{ width:"100%", padding:16, background: totalItems>0?"var(--gold)":"var(--bg3)", color: totalItems>0?"#000":"var(--muted)", border:"none", borderRadius:10, cursor: totalItems>0?"pointer":"not-allowed", fontFamily:"Oswald", fontSize:20, letterSpacing:1 }}>
               {totalItems===0 ? "SELECT TICKETS" : totalPrice===0 ? "CONFIRM REGISTRATION →" : "PROCEED TO CHECKOUT →"}
             </button>
             {!currentUser && totalItems > 0 && (
@@ -1828,13 +1853,13 @@ function GuestModal({ onProceed, onClose }) {
   const [form, setForm] = useState({ name:"", email:"" });
   const F = k => e => setForm(p=>({...p,[k]:e.target.value}));
   const valid = form.name.trim() && form.email.includes("@");
-  const iStyle = { width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"DM Sans" };
+  const iStyle = { width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"Manrope" };
 
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
       <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:20, padding:32, width:"100%", maxWidth:420, animation:"fadeUp 0.3s ease" }}>
         <div style={{ marginBottom:24 }}>
-          <h2 style={{ fontFamily:"Bebas Neue", fontSize:32, marginBottom:6 }}>YOUR DETAILS</h2>
+          <h2 style={{ fontFamily:"Oswald", fontSize:32, marginBottom:6 }}>YOUR DETAILS</h2>
           <p style={{ color:"var(--muted)", fontSize:13 }}>We need these to send your tickets. No account required.</p>
         </div>
 
@@ -1854,7 +1879,7 @@ function GuestModal({ onProceed, onClose }) {
 
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           <button onClick={() => valid && onProceed(form)} disabled={!valid}
-            style={{ width:"100%", padding:14, background:valid?"var(--gold)":"var(--bg3)", color:valid?"#000":"var(--muted)", border:"none", borderRadius:10, fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2, cursor:valid?"pointer":"not-allowed" }}>
+            style={{ width:"100%", padding:14, background:valid?"var(--gold)":"var(--bg3)", color:valid?"#000":"var(--muted)", border:"none", borderRadius:10, fontFamily:"Oswald", fontSize:20, letterSpacing:1, cursor:valid?"pointer":"not-allowed" }}>
             CONTINUE TO CHECKOUT →
           </button>
           <div style={{ textAlign:"center", fontSize:12, color:"var(--muted)" }}>
@@ -2127,7 +2152,7 @@ function CheckoutPage({ ctx }) {
       {/* Order summary */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ORDER SUMMARY</div>
-        <div style={{ fontFamily:"Bebas Neue", fontSize:24, marginBottom:4 }}>{event.title}</div>
+        <div style={{ fontFamily:"Oswald", fontSize:24, marginBottom:4 }}>{event.title}</div>
         <div style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{fmtDate(event.date)} · {event.venue}</div>
         {selections.map(t => {
           const lineTotal = cart[t.id] * Number(t.price);
@@ -2138,7 +2163,7 @@ function CheckoutPage({ ctx }) {
                 <span style={{ fontWeight:600 }}>{t.name}</span>
                 <span style={{ color:"var(--muted)", fontSize:13 }}> × {cart[t.id]}</span>
               </div>
-              <span style={{ fontFamily: tFree?"DM Sans":"DM Mono", fontWeight: tFree?700:400, color: tFree?"var(--green)":"var(--text)", fontSize: tFree?13:14 }}>
+              <span style={{ fontFamily: tFree?"Manrope":"IBM Plex Mono", fontWeight: tFree?700:400, color: tFree?"var(--green)":"var(--text)", fontSize: tFree?13:14 }}>
                 {tFree ? "FREE" : fmt(lineTotal)}
               </span>
             </div>
@@ -2152,15 +2177,15 @@ function CheckoutPage({ ctx }) {
               <span style={{ color:"var(--muted)", fontSize:13 }}>Service fee</span>
               <span style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:100, padding:"1px 8px", fontSize:10, color:"var(--muted)", letterSpacing:1 }}>STAGEPRO</span>
             </div>
-            <span style={{ fontFamily:"DM Mono", fontSize:14, color:"var(--muted)" }}>₦100</span>
+            <span style={{ fontFamily:"IBM Plex Mono", fontSize:14, color:"var(--muted)" }}>₦100</span>
           </div>
         )}
 
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", paddingTop:16 }}>
           <span style={{ fontWeight:600 }}>Total</span>
           {isFree
-            ? <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--green)" }}>FREE</span>
-            : <span style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--gold)" }}>{fmt(total)}</span>
+            ? <span style={{ fontFamily:"Oswald", fontSize:28, color:"var(--green)" }}>FREE</span>
+            : <span style={{ fontFamily:"Oswald", fontSize:28, color:"var(--gold)" }}>{fmt(total)}</span>
           }
         </div>
       </div>
@@ -2204,7 +2229,7 @@ function CheckoutPage({ ctx }) {
       <button
         disabled={!agreed || processing || (!isFree && !paystackReady)}
         onClick={handleConfirm}
-        style={{ width:"100%", padding:16, background: agreed?(isFree?"var(--green)":"var(--gold)"):"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor: (agreed && (isFree || paystackReady))?"pointer":"not-allowed", opacity: processing || (!isFree && !paystackReady)?0.7:1 }}
+        style={{ width:"100%", padding:16, background: agreed?(isFree?"var(--green)":"var(--gold)"):"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:2, cursor: (agreed && (isFree || paystackReady))?"pointer":"not-allowed", opacity: processing || (!isFree && !paystackReady)?0.7:1 }}
       >
         {processing
           ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")
@@ -2245,13 +2270,13 @@ function TransferModal({ ticket, onTransfer, onClose }) {
   return (
     <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
       <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, width:"100%", maxWidth:440, animation:"fadeUp 0.3s ease" }}>
-        <h2 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:4 }}>TRANSFER TICKET</h2>
+        <h2 style={{ fontFamily:"Oswald", fontSize:28, marginBottom:4 }}>TRANSFER TICKET</h2>
         <p style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>Enter the email address of the person you want to send <strong style={{ color:"var(--text)" }}>{ticket.eventTitle} — {ticket.tierName}</strong> to.</p>
         <Input label="Recipient Email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="friend@email.com" />
         {msg && <div style={{ marginTop:12, color:"var(--red)", fontSize:13 }}>{msg}</div>}
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:20 }}>
           <button onClick={onClose} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:12, borderRadius:10, cursor:"pointer", fontWeight:600 }}>Cancel</button>
-          <button onClick={handle} disabled={!email.trim()||loading} style={{ background: email.trim()?"var(--gold)":"var(--bg3)", color: email.trim()?"#000":"var(--muted)", border:"none", padding:12, borderRadius:10, cursor: email.trim()?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:1 }}>
+          <button onClick={handle} disabled={!email.trim()||loading} style={{ background: email.trim()?"var(--gold)":"var(--bg3)", color: email.trim()?"#000":"var(--muted)", border:"none", padding:12, borderRadius:10, cursor: email.trim()?"pointer":"not-allowed", fontFamily:"Oswald", fontSize:18, letterSpacing:1 }}>
             {loading ? "SENDING..." : "TRANSFER"}
           </button>
         </div>
@@ -2268,7 +2293,7 @@ function MyTicketsPage({ ctx }) {
   if (tickets.length===0) return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh", gap:16, color:"var(--muted)" }}>
       <div style={{ fontSize:64, color:"var(--gold)" }}><i className="fa-solid fa-ticket" /></div>
-      <h2 style={{ fontFamily:"Bebas Neue", fontSize:36, color:"var(--text)" }}>NO TICKETS YET</h2>
+      <h2 style={{ fontFamily:"Oswald", fontSize:36, color:"var(--text)" }}>NO TICKETS YET</h2>
       <p>Purchase tickets to events to see them here</p>
       <Link to="/" style={{ background:"var(--gold)", color:"#000", padding:"10px 24px", borderRadius:8, fontWeight:700 }}>Browse Events</Link>
     </div>
@@ -2285,7 +2310,7 @@ function MyTicketsPage({ ctx }) {
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"start", flexWrap:"wrap", gap:16 }}>
               <div style={{ flex:1 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
-                  <h3 style={{ fontFamily:"Bebas Neue", fontSize:28 }}>{ticket.eventTitle}</h3>
+                  <h3 style={{ fontFamily:"Oswald", fontSize:28 }}>{ticket.eventTitle}</h3>
                   {ticket.used && <span style={{ background:"var(--border)", color:"var(--muted)", fontSize:11, padding:"2px 8px", borderRadius:100, fontWeight:700 }}>USED</span>}
                 </div>
                 <div style={{ color:"var(--muted)", fontSize:13, marginBottom:4 }}>{fmtDate(ticket.eventDate)} · {ticket.eventTime}</div>
@@ -2319,8 +2344,8 @@ function MyTicketsPage({ ctx }) {
                 </div>
               </div>
               <div style={{ textAlign:"right" }}>
-                <div style={{ fontFamily:"Bebas Neue", fontSize:28, color:"var(--gold)" }}>{fmt(ticket.price)}</div>
-                <div style={{ fontFamily:"DM Mono", fontSize:11, color:"var(--muted)", marginTop:4, wordBreak:"break-all", maxWidth:180 }}>{ticket.id}</div>
+                <div style={{ fontFamily:"Oswald", fontSize:28, color:"var(--gold)" }}>{fmt(ticket.price)}</div>
+                <div style={{ fontFamily:"IBM Plex Mono", fontSize:11, color:"var(--muted)", marginTop:4, wordBreak:"break-all", maxWidth:180 }}>{ticket.id}</div>
               </div>
             </div>
             {selected?.id===ticket.id && (
@@ -2329,7 +2354,7 @@ function MyTicketsPage({ ctx }) {
                   <QRCode ticketId={ticket.id} size={200} />
                 </div>
                 <div style={{ textAlign:"center" }}>
-                  <div style={{ fontFamily:"DM Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all", marginBottom:4 }}>{ticket.id}</div>
+                  <div style={{ fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--gold)", wordBreak:"break-all", marginBottom:4 }}>{ticket.id}</div>
                   <div style={{ fontSize:12, color:"var(--muted)" }}>Scan QR code at entrance — or share your ticket link:</div>
                   <ShareButton url={`${window.location.origin}/ticket/${ticket.id}`} label="Copy ticket link" small />
                 </div>
@@ -2348,14 +2373,17 @@ function DashboardPage({ ctx }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [view, setView] = useState("list"); // list | calendar | payouts
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
+  const [payoutRecords, setPayoutRecords] = useState([]);
   const myEvents = organizerEvents;
   const myEventIds = new Set(myEvents.map(e => e.id));
   const myTickets = tickets.filter(t => myEventIds.has(t.eventId));
+  const payoutSummary = calculatePayoutSummary(myTickets);
 
   const totalSold = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id), 0), 0);
   const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
-  const revenue   = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id) * (t.price||0), 0), 0);
+  const revenue   = payoutSummary.gross;
   const totalCheckedIn = myTickets.filter(t => t.used).length;
+  const totalOrders = payoutSummary.orderCount;
 
   // Payout calculations
   const STAGEPRO_FEE = 100; // ₦100 per paid order
@@ -2365,8 +2393,6 @@ function DashboardPage({ ctx }) {
 
   // Group tickets by paystackRef to get orders (one fee per order)
   const paidTickets = myTickets.filter(t => t.paymentStatus === "paid" && t.paystackRef);
-  const orderRefs = [...new Set(paidTickets.map(t => t.paystackRef))];
-  const totalOrders = orderRefs.length;
 
   // Per-event payout data
   const payoutByEvent = myEvents.map(e => {
@@ -2385,6 +2411,28 @@ function DashboardPage({ ctx }) {
   const totalStagePro = totalOrders * STAGEPRO_FEE;
   const totalPaystack = Math.round(paidTickets.reduce((s,t) => s + Math.min((t.price * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP), 0));
   const netPayout = revenue - totalStagePro - totalPaystack;
+  const totalPaidOut = payoutRecords.filter(p => p.status === "paid").reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const outstandingPayout = Math.max(0, Math.round(netPayout) - totalPaidOut);
+  const payoutDetails = currentUser.payoutDetails || {};
+  const hasPayoutDetails = Boolean(
+    payoutDetails.bankName?.trim() &&
+    payoutDetails.accountName?.trim() &&
+    payoutDetails.accountNumber?.trim()
+  );
+
+  useEffect(() => {
+    const loadPayouts = async () => {
+      try {
+        const q = query(collection(db, "payouts"), where("organizerId", "==", currentUser.uid));
+        const snap = await getDocs(q);
+        setPayoutRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(b.createdAt || b.paidAt || 0) - new Date(a.createdAt || a.paidAt || 0)));
+      } catch (err) {
+        console.error("Payout records fetch failed:", err);
+        setPayoutRecords([]);
+      }
+    };
+    loadPayouts();
+  }, [currentUser.uid]);
 
   const handleDelete = async (event) => { await deleteEvent(event.id); setConfirmDelete(null); };
 
@@ -2415,11 +2463,11 @@ function DashboardPage({ ctx }) {
         <div onClick={() => setConfirmDelete(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, maxWidth:400, width:"100%", animation:"fadeUp 0.3s ease" }}>
             <div style={{ fontSize:40, marginBottom:16, color:"var(--red)" }}><i className="fa-solid fa-trash" /></div>
-            <h2 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:8 }}>DELETE EVENT?</h2>
+            <h2 style={{ fontFamily:"Oswald", fontSize:28, marginBottom:8 }}>DELETE EVENT?</h2>
             <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>This will permanently delete <strong style={{ color:"var(--text)" }}>{confirmDelete.title}</strong>. This action cannot be undone.</p>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               <button onClick={() => setConfirmDelete(null)} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:12, borderRadius:10, cursor:"pointer", fontWeight:600 }}>Cancel</button>
-              <button onClick={() => handleDelete(confirmDelete)} style={{ background:"var(--red)", border:"none", color:"#fff", padding:12, borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:1 }}>DELETE</button>
+              <button onClick={() => handleDelete(confirmDelete)} style={{ background:"var(--red)", border:"none", color:"#fff", padding:12, borderRadius:10, cursor:"pointer", fontFamily:"Oswald", fontSize:18, letterSpacing:1 }}>DELETE</button>
             </div>
           </div>
         </div>
@@ -2449,7 +2497,7 @@ function DashboardPage({ ctx }) {
         ].map(s => (
           <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:24 }}>
             <div style={{ fontSize:28, marginBottom:8, color:"var(--gold)" }}><i className={s.icon} /></div>
-            <div style={{ fontFamily:"Bebas Neue", fontSize:32, color:"var(--gold)" }}>{s.value}</div>
+            <div style={{ fontFamily:"Oswald", fontSize:32, color:"var(--gold)" }}>{s.value}</div>
             <div style={{ fontSize:12, color:"var(--muted)", marginTop:4 }}>{s.label}</div>
           </div>
         ))}
@@ -2461,7 +2509,7 @@ function DashboardPage({ ctx }) {
           {/* Calendar header */}
           <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
             <button onClick={prevMonth} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:16 }}>‹</button>
-            <h3 style={{ fontFamily:"Bebas Neue", fontSize:24, letterSpacing:1 }}>{MONTHS[month]} {year}</h3>
+            <h3 style={{ fontFamily:"Oswald", fontSize:24, letterSpacing:1 }}>{MONTHS[month]} {year}</h3>
             <button onClick={nextMonth} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", width:36, height:36, borderRadius:8, cursor:"pointer", fontSize:16 }}>›</button>
           </div>
           {/* Day headers */}
@@ -2518,11 +2566,12 @@ function DashboardPage({ ctx }) {
               { label:"Gross Revenue", value:fmt(revenue), icon:"fa-solid fa-naira-sign", color:"var(--gold)", sub:"Total ticket sales" },
               { label:"StagePro Fees", value:fmt(totalStagePro), icon:"fa-solid fa-receipt", color:"var(--muted)", sub:`₦100 × ${totalOrders} orders` },
               { label:"Paystack Fees", value:fmt(totalPaystack), icon:"fa-solid fa-credit-card", color:"var(--muted)", sub:"1.5% + ₦100 per ticket" },
-              { label:"Your Net Payout", value:fmt(Math.max(0, netPayout)), icon:"fa-solid fa-wallet", color:"var(--green)", sub:"After all fees" },
+              { label:"Available for Payout", value:fmt(outstandingPayout), icon:"fa-solid fa-wallet", color:"var(--green)", sub:"Net sales less recorded payouts" },
+              { label:"Already Paid Out", value:fmt(totalPaidOut), icon:"fa-solid fa-money-bill-transfer", color:"var(--muted)", sub:`${payoutRecords.filter(p => p.status === "paid").length} recorded payout${payoutRecords.filter(p => p.status === "paid").length !== 1 ? "s" : ""}` },
             ].map(s => (
               <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:24 }}>
                 <div style={{ fontSize:24, marginBottom:8, color:s.color }}><i className={s.icon} /></div>
-                <div style={{ fontFamily:"Bebas Neue", fontSize:28, color:s.color }}>{s.value}</div>
+                <div style={{ fontFamily:"Oswald", fontSize:28, color:s.color }}>{s.value}</div>
                 <div style={{ fontSize:13, color:"var(--text)", fontWeight:600, marginTop:2 }}>{s.label}</div>
                 <div style={{ fontSize:11, color:"var(--muted)", marginTop:2 }}>{s.sub}</div>
               </div>
@@ -2533,6 +2582,49 @@ function DashboardPage({ ctx }) {
           <div style={{ background:"rgba(245,166,35,0.06)", border:"1px solid var(--gold-dim)", borderRadius:12, padding:"16px 20px", marginBottom:24, fontSize:13, color:"var(--muted)", lineHeight:1.8 }}>
             <i className="fa-solid fa-circle-info" style={{ color:"var(--gold)", marginRight:8 }} />
             <strong style={{ color:"var(--text)" }}>How fees work:</strong> StagePro charges ₦100 per paid order. Paystack charges 1.5% + ₦100 per ticket (capped at ₦2,000). Free events have no fees.
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:16, marginBottom:24 }}>
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:20 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+                <i className="fa-solid fa-building-columns" style={{ color:"var(--gold)", fontSize:20 }} />
+                <div style={{ fontWeight:700 }}>Bank details</div>
+              </div>
+              {hasPayoutDetails ? (
+                <div style={{ display:"flex", flexDirection:"column", gap:6, fontSize:13, color:"var(--muted)" }}>
+                  <div><strong style={{ color:"var(--text)" }}>Bank:</strong> {payoutDetails.bankName}</div>
+                  <div><strong style={{ color:"var(--text)" }}>Account name:</strong> {payoutDetails.accountName}</div>
+                  <div><strong style={{ color:"var(--text)" }}>Account number:</strong> {payoutDetails.accountNumber}</div>
+                  {payoutDetails.notes && <div><strong style={{ color:"var(--text)" }}>Notes:</strong> {payoutDetails.notes}</div>}
+                  <Link to="/profile" style={{ color:"var(--gold)", fontSize:12, marginTop:6 }}>Update payout details â†’</Link>
+                </div>
+              ) : (
+                <div style={{ fontSize:13, color:"var(--muted)", lineHeight:1.7 }}>
+                  Add your bank details in your profile before requesting a payout.
+                  <div style={{ marginTop:10 }}>
+                    <Link to="/profile" style={{ color:"var(--gold)", fontSize:12 }}>Add payout details â†’</Link>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:20 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+                <i className="fa-solid fa-hand-holding-dollar" style={{ color:"var(--gold)", fontSize:20 }} />
+                <div style={{ fontWeight:700 }}>Manual payout status</div>
+              </div>
+              <div style={{ fontSize:13, color:"var(--muted)", lineHeight:1.8 }}>
+                StagePro settles organizers manually right now. Your available balance is <strong style={{ color:"var(--green)" }}>{fmt(outstandingPayout)}</strong>.
+              </div>
+              <div style={{ marginTop:12, display:"flex", gap:8, flexWrap:"wrap" }}>
+                <span style={{ background: hasPayoutDetails ? "rgba(61,220,132,0.14)" : "rgba(244,90,90,0.12)", color: hasPayoutDetails ? "var(--green)" : "var(--red)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                  {hasPayoutDetails ? "READY FOR PAYOUT" : "BANK DETAILS NEEDED"}
+                </span>
+                <span style={{ background:"rgba(245,166,35,0.12)", color:"var(--gold)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                  MANUAL SETTLEMENT
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* Per-event breakdown */}
@@ -2556,19 +2648,19 @@ function DashboardPage({ ctx }) {
                     {payoutByEvent.map((p, i) => (
                       <tr key={p.event.id} style={{ borderTop:"1px solid var(--border)", background: i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
                         <td style={{ padding:"12px 16px", fontWeight:600 }}>{p.event.title}</td>
-                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--gold)" }}>{fmt(p.gross)}</td>
-                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.stagepro)}</td>
-                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.paystack)}</td>
-                        <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:12, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, p.net))}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--gold)" }}>{fmt(p.gross)}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.stagepro)}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.paystack)}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, p.net))}</td>
                       </tr>
                     ))}
                     {/* Totals row */}
                     <tr style={{ borderTop:"2px solid var(--gold-dim)", background:"rgba(245,166,35,0.05)" }}>
                       <td style={{ padding:"12px 16px", fontWeight:700, fontSize:13 }}>TOTAL</td>
-                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--gold)", fontWeight:700 }}>{fmt(revenue)}</td>
-                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalStagePro)}</td>
-                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalPaystack)}</td>
-                      <td style={{ padding:"12px 16px", fontFamily:"DM Mono", fontSize:13, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, netPayout))}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--gold)", fontWeight:700 }}>{fmt(revenue)}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalStagePro)}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalPaystack)}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, netPayout))}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -2611,7 +2703,7 @@ function DashboardPage({ ctx }) {
                   <div style={{ height:4, background:"var(--border)", borderRadius:2, marginBottom:2 }}>
                     <div style={{ height:"100%", width:`${pct}%`, background: pct>80?"var(--red)":"var(--gold)", borderRadius:2, transition:"width 0.4s" }} />
                   </div>
-                  <div style={{ fontSize:12, fontFamily:"DM Mono", color:"var(--muted)" }}>{sold}/{cap}</div>
+                  <div style={{ fontSize:12, fontFamily:"IBM Plex Mono", color:"var(--muted)" }}>{sold}/{cap}</div>
                 </div>
                 {/* Check-in bar */}
                 <div style={{ minWidth:110 }}>
@@ -2621,10 +2713,10 @@ function DashboardPage({ ctx }) {
                   <div style={{ height:4, background:"var(--border)", borderRadius:2, marginBottom:2 }}>
                     <div style={{ height:"100%", width:`${checkInPct}%`, background:"var(--green)", borderRadius:2, transition:"width 0.4s" }} />
                   </div>
-                  <div style={{ fontSize:12, fontFamily:"DM Mono", color:"var(--muted)" }}>{checkedIn}/{sold}</div>
+                  <div style={{ fontSize:12, fontFamily:"IBM Plex Mono", color:"var(--muted)" }}>{checkedIn}/{sold}</div>
                 </div>
                 <div style={{ textAlign:"right", minWidth:90 }}>
-                  <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(rev)}</div>
+                  <div style={{ fontFamily:"Oswald", fontSize:22, color:"var(--gold)" }}>{fmt(rev)}</div>
                   <div style={{ fontSize:12, color:"var(--muted)" }}>revenue</div>
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
@@ -2842,7 +2934,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           </div>
           {form.theme && (
             <div style={{ marginTop:10, borderRadius:10, height:60, background: THEMES[form.theme]||"var(--bg3)", display:"flex", alignItems:"center", paddingLeft:16 }}>
-              <span style={{ fontFamily:"Bebas Neue", fontSize:20, color:"#fff", textShadow:"0 1px 4px rgba(0,0,0,0.5)" }}>Preview — {form.title||"Your Event Title"}</span>
+              <span style={{ fontFamily:"Oswald", fontSize:20, color:"#fff", textShadow:"0 1px 4px rgba(0,0,0,0.5)" }}>Preview — {form.title||"Your Event Title"}</span>
             </div>
           )}
         </div>
@@ -2850,7 +2942,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
         {/* Description */}
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>DESCRIPTION</label>
-          <textarea value={form.description} onChange={F("description")} rows={4} placeholder="Describe your event — lineup, dress code, what to expect..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans", outline:"none" }} />
+          <textarea value={form.description} onChange={F("description")} rows={4} placeholder="Describe your event — lineup, dress code, what to expect..." style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"Manrope", outline:"none" }} />
         </div>
 
         {/* Ticket Tiers */}
@@ -2899,7 +2991,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           </div>
         )}
 
-        <button onClick={()=>onSubmit(form)} disabled={!isValid||saving} style={{ width:"100%", padding:16, background:isValid?"var(--gold)":"var(--bg3)", color:isValid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2, cursor:isValid?"pointer":"not-allowed", opacity:saving?0.7:1, marginTop:8 }}>
+        <button onClick={()=>onSubmit(form)} disabled={!isValid||saving} style={{ width:"100%", padding:16, background:isValid?"var(--gold)":"var(--bg3)", color:isValid?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:1, cursor:isValid?"pointer":"not-allowed", opacity:saving?0.7:1, marginTop:8 }}>
           {saving ? "PLEASE WAIT..." : submitLabel}
         </button>
       </div>
@@ -3070,7 +3162,7 @@ function ValidatePage({ ctx }) {
             style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:16, padding:"28px 24px", cursor:"pointer", marginBottom:16, display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}
           >
             <i className="fa-solid fa-camera" style={{fontSize:52,color:"var(--gold)"}} />
-            <span style={{ fontFamily:"Bebas Neue", fontSize:28, letterSpacing:2 }}>SNAP QR CODE</span>
+            <span style={{ fontFamily:"Oswald", fontSize:28, letterSpacing:1 }}>SNAP QR CODE</span>
             <span style={{ fontSize:13, fontWeight:500, opacity:0.75 }}>Opens your camera — take a photo of the ticket</span>
           </button>
 
@@ -3087,15 +3179,15 @@ function ValidatePage({ ctx }) {
       {/* ── MANUAL entry ── */}
       {stage === "manual" && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28 }}>
-          <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:10, display:"block" }}>TICKET ID</label>
+          <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:10, display:"block" }}>TICKET ID</label>
           <input
             value={manualInput} onChange={e => setManualInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && handleManual()}
             placeholder="Paste ticket ID here..."
             autoFocus
-            style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"DM Mono", marginBottom:16, outline:"none" }}
+            style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:14, fontFamily:"IBM Plex Mono", marginBottom:16, outline:"none" }}
           />
-          <button onClick={handleManual} disabled={!manualInput.trim()} style={{ width:"100%", background: manualInput?"var(--gold)":"var(--bg3)", color: manualInput?"#000":"var(--muted)", border:"none", padding:14, borderRadius:10, cursor: manualInput?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2, marginBottom:10 }}>
+          <button onClick={handleManual} disabled={!manualInput.trim()} style={{ width:"100%", background: manualInput?"var(--gold)":"var(--bg3)", color: manualInput?"#000":"var(--muted)", border:"none", padding:14, borderRadius:10, cursor: manualInput?"pointer":"not-allowed", fontFamily:"Oswald", fontSize:20, letterSpacing:1, marginBottom:10 }}>
             LOOK UP TICKET
           </button>
           <button onClick={reset} style={{ width:"100%", background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:13 }}>← Back</button>
@@ -3118,7 +3210,7 @@ function ValidatePage({ ctx }) {
             <div style={{ background:"rgba(232,64,64,0.12)", border:"2px solid var(--red)", borderRadius:12, padding:"14px 20px", marginBottom:16, display:"flex", alignItems:"center", gap:10 }}>
               <i className="fa-solid fa-triangle-exclamation" style={{fontSize:24,color:"var(--gold)"}} />
               <div>
-                <div style={{ fontFamily:"Bebas Neue", fontSize:20, color:"var(--red)" }}>ALREADY USED</div>
+                <div style={{ fontFamily:"Oswald", fontSize:20, color:"var(--red)" }}>ALREADY USED</div>
                 <div style={{ fontSize:12, color:"var(--muted)" }}>This ticket was already scanned at entry</div>
               </div>
             </div>
@@ -3128,7 +3220,7 @@ function ValidatePage({ ctx }) {
           <div style={{ background:"var(--bg2)", border:`1px solid ${scannedTicket.used ? "var(--border)" : "var(--gold-dim)"}`, borderRadius:16, overflow:"hidden", marginBottom:16 }}>
             <div style={{ background: scannedTicket.used ? "var(--bg3)" : "rgba(245,166,35,0.08)", padding:"16px 24px", borderBottom:"1px solid var(--border)" }}>
               <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:4 }}>TICKET DETAILS</div>
-              <div style={{ fontFamily:"Bebas Neue", fontSize:30 }}>{scannedTicket.eventTitle}</div>
+              <div style={{ fontFamily:"Oswald", fontSize:30 }}>{scannedTicket.eventTitle}</div>
             </div>
             <div style={{ padding:"20px 24px", display:"grid", gap:12 }}>
               {[
@@ -3151,13 +3243,13 @@ function ValidatePage({ ctx }) {
           {!scannedTicket.used ? (
             <button
               onClick={handleMarkAttended}
-              style={{ width:"100%", background:"var(--green)", color:"#000", border:"none", borderRadius:12, padding:"18px 24px", cursor:"pointer", fontFamily:"Bebas Neue", fontSize:26, letterSpacing:2, marginBottom:10 }}
+              style={{ width:"100%", background:"var(--green)", color:"#000", border:"none", borderRadius:12, padding:"18px 24px", cursor:"pointer", fontFamily:"Oswald", fontSize:26, letterSpacing:1, marginBottom:10 }}
             >
               ✓ MARK AS ATTENDED
             </button>
           ) : (
             <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:12, padding:"16px 24px", textAlign:"center", marginBottom:10 }}>
-              <div style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
+              <div style={{ fontFamily:"Oswald", fontSize:22, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
               <div style={{ fontSize:13, color:"var(--muted)", marginTop:4 }}>Ticket already redeemed</div>
             </div>
           )}
@@ -3180,7 +3272,7 @@ function ValidatePage({ ctx }) {
         <div style={{ animation:"fadeUp 0.3s ease" }}>
           <div style={{ background: confirmResult.ok ? "rgba(61,220,132,0.1)" : "rgba(232,64,64,0.1)", border:`2px solid ${confirmResult.ok ? "var(--green)" : "var(--red)"}`, borderRadius:16, padding:32, textAlign:"center", marginBottom:16 }}>
             <div style={{ fontSize:64, marginBottom:12 }}>{confirmResult.ok ? <i className="fa-solid fa-circle-check" style={{color:"var(--green)"}} /> : <i className="fa-solid fa-circle-xmark" style={{color:"var(--red)"}} />}</div>
-            <div style={{ fontFamily:"Bebas Neue", fontSize:36, color: confirmResult.ok ? "var(--green)" : "var(--red)", marginBottom:8 }}>
+            <div style={{ fontFamily:"Oswald", fontSize:36, color: confirmResult.ok ? "var(--green)" : "var(--red)", marginBottom:8 }}>
               {confirmResult.ok ? "ENTRY GRANTED" : "ENTRY DENIED"}
             </div>
             {confirmResult.ticket && (
@@ -3188,7 +3280,7 @@ function ValidatePage({ ctx }) {
             )}
             <div style={{ fontSize:13, color:"var(--muted)" }}>{confirmResult.msg}</div>
           </div>
-          <button onClick={reset} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, padding:"16px 24px", cursor:"pointer", fontFamily:"Bebas Neue", fontSize:22, letterSpacing:2 }}>
+          <button onClick={reset} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, padding:"16px 24px", cursor:"pointer", fontFamily:"Oswald", fontSize:22, letterSpacing:1 }}>
             <i className="fa-solid fa-camera" style={{marginRight:8}} />SCAN NEXT TICKET
           </button>
         </div>
@@ -3198,9 +3290,9 @@ function ValidatePage({ ctx }) {
       {stage === "error" && (
         <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:16, padding:32, textAlign:"center", animation:"fadeUp 0.3s ease" }}>
           <div style={{ fontSize:48, marginBottom:12, color:"var(--red)" }}><i className="fa-solid fa-circle-xmark" /></div>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:26, color:"var(--red)", marginBottom:8 }}>SCAN FAILED</div>
+          <div style={{ fontFamily:"Oswald", fontSize:26, color:"var(--red)", marginBottom:8 }}>SCAN FAILED</div>
           <p style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{errorMsg}</p>
-          <button onClick={() => fileInputRef.current?.click()} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, marginBottom:10, width:"100%" }}>
+          <button onClick={() => fileInputRef.current?.click()} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Oswald", fontSize:18, letterSpacing:1, marginBottom:10, width:"100%" }}>
             <i className="fa-solid fa-camera" style={{marginRight:8}} />TRY AGAIN
           </button>
           <button onClick={reset} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>
@@ -3327,7 +3419,7 @@ function AnalyticsPage({ ctx }) {
         ].map(s => (
           <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"20px 16px" }}>
             <div style={{ fontSize:24, marginBottom:8, color:s.color }}><i className={s.icon} /></div>
-            <div style={{ fontFamily:"Bebas Neue", fontSize:26, color:s.color, lineHeight:1, marginBottom:4 }}>{s.value}</div>
+            <div style={{ fontFamily:"Oswald", fontSize:26, color:s.color, lineHeight:1, marginBottom:4 }}>{s.value}</div>
             <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{s.label.toUpperCase()}</div>
           </div>
         ))}
@@ -3361,7 +3453,7 @@ function AnalyticsPage({ ctx }) {
                   <span style={{ color:"var(--muted)", fontSize:13, marginLeft:10 }}>{t.sold} / {t.total} sold</span>
                 </div>
                 <div style={{ display:"flex", gap:16, alignItems:"center" }}>
-                  <span style={{ fontFamily:"Bebas Neue", fontSize:20, color:"var(--gold)" }}>{fmt(t.rev)}</span>
+                  <span style={{ fontFamily:"Oswald", fontSize:20, color:"var(--gold)" }}>{fmt(t.rev)}</span>
                   <span style={{ fontSize:12, color: t.pct>80?"var(--red)":"var(--muted)", minWidth:36, textAlign:"right" }}>{t.pct}%</span>
                 </div>
               </div>
@@ -3399,7 +3491,7 @@ function AnalyticsPage({ ctx }) {
                   <tr key={t.id} style={{ borderTop:"1px solid var(--border)", background: i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
                     <td style={{ padding:"10px 16px", fontWeight:600 }}>{t.userName}</td>
                     <td style={{ padding:"10px 16px", color:"var(--gold)" }}>{t.tierName}</td>
-                    <td style={{ padding:"10px 16px", fontFamily:"DM Mono", fontSize:12 }}>{fmt(t.price)}</td>
+                    <td style={{ padding:"10px 16px", fontFamily:"IBM Plex Mono", fontSize:12 }}>{fmt(t.price)}</td>
                     <td style={{ padding:"10px 16px", color:"var(--muted)", whiteSpace:"nowrap" }}>{new Date(t.purchasedAt).toLocaleDateString("en-NG")}</td>
                     <td style={{ padding:"10px 16px" }}>
                       <span style={{ background: t.used?"rgba(61,220,132,0.15)":"rgba(245,166,35,0.15)", color: t.used?"var(--green)":"var(--gold)", padding:"2px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
@@ -3436,7 +3528,7 @@ function NotificationSender({ event, eventTickets, onSend, status }) {
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           <i className="fa-solid fa-bell" style={{fontSize:22,color:"var(--gold)"}} />
           <div style={{ textAlign:"left" }}>
-            <div style={{ fontFamily:"Bebas Neue", fontSize:20, letterSpacing:1 }}>SEND NOTIFICATION</div>
+            <div style={{ fontFamily:"Oswald", fontSize:20, letterSpacing:1 }}>SEND NOTIFICATION</div>
             <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Message all {buyers} ticket holder{buyers!==1?"s":""} for this event</div>
           </div>
         </div>
@@ -3467,7 +3559,7 @@ function NotificationSender({ event, eventTickets, onSend, status }) {
             <div>
               <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>MESSAGE</label>
               <textarea value={body} onChange={e => setBody(e.target.value)} rows={3} placeholder="Write your message to ticket holders..." maxLength={300}
-                style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans", outline:"none" }} />
+                style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"Manrope", outline:"none" }} />
               <div style={{ textAlign:"right", fontSize:11, color:"var(--muted)", marginTop:4 }}>{body.length}/300</div>
             </div>
 
@@ -3488,7 +3580,7 @@ function NotificationSender({ event, eventTickets, onSend, status }) {
             <button
               onClick={() => onSend(title, body)}
               disabled={!title || !body || status === "sending" || buyers === 0}
-              style={{ background: title&&body&&buyers>0?"var(--gold)":"var(--bg3)", color: title&&body&&buyers>0?"#000":"var(--muted)", border:"none", padding:"13px 20px", borderRadius:10, cursor: title&&body&&buyers>0?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, transition:"all 0.2s" }}
+              style={{ background: title&&body&&buyers>0?"var(--gold)":"var(--bg3)", color: title&&body&&buyers>0?"#000":"var(--muted)", border:"none", padding:"13px 20px", borderRadius:10, cursor: title&&body&&buyers>0?"pointer":"not-allowed", fontFamily:"Oswald", fontSize:18, letterSpacing:2, transition:"all 0.2s" }}
             >
               {status === "sending" ? "SENDING..." : status === "sent" ? "SENT!" : status === "error" ? "FAILED" : `SEND TO ${buyers} ATTENDEE${buyers!==1?"S":""}`}
             </button>
@@ -3567,7 +3659,7 @@ function NotificationBell({ currentUser, events }) {
           <div onClick={() => setOpen(false)} style={{ position:"fixed", inset:0, zIndex:998 }} />
           <div style={{ position:"absolute", right:0, top:44, width:320, background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, zIndex:999, overflow:"hidden", boxShadow:"0 8px 32px rgba(0,0,0,0.4)", animation:"fadeUp 0.2s ease" }}>
             <div style={{ padding:"14px 16px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <span style={{ fontFamily:"Bebas Neue", fontSize:18, letterSpacing:1 }}>NOTIFICATIONS</span>
+              <span style={{ fontFamily:"Oswald", fontSize:18, letterSpacing:1 }}>NOTIFICATIONS</span>
               {notifs.length > 0 && <button onClick={markAllRead} style={{ background:"none", border:"none", color:"var(--gold)", fontSize:12, cursor:"pointer" }}>Mark all read</button>}
             </div>
             {notifs.length === 0 ? (
@@ -3601,16 +3693,271 @@ function NotificationBell({ currentUser, events }) {
 }
 
 // ── Profile Page (/profile) ───────────────────────────────────────────────
+function AdminPayoutsPage({ ctx }) {
+  const { currentUser, notify } = ctx;
+  const [loading, setLoading] = useState(true);
+  const [organizers, setOrganizers] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [tickets, setTickets] = useState([]);
+  const [payoutRecords, setPayoutRecords] = useState([]);
+  const [drafts, setDrafts] = useState({});
+  const [recordingId, setRecordingId] = useState(null);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      try {
+        const [usersSnap, eventsSnap, ticketsSnap, payoutsSnap] = await Promise.all([
+          getDocs(query(collection(db, "users"), where("role", "==", "organizer"))),
+          getDocs(collection(db, "events")),
+          getDocs(collection(db, "tickets")),
+          getDocs(collection(db, "payouts")),
+        ]);
+        setOrganizers(usersSnap.docs.map(d => ({ uid: d.id, ...d.data() })));
+        setEvents(eventsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setTickets(ticketsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setPayoutRecords(
+          payoutsSnap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .sort((a, b) => new Date(b.paidAt || b.createdAt || 0) - new Date(a.paidAt || a.createdAt || 0))
+        );
+      } catch (err) {
+        console.error("Admin payout fetch failed:", err);
+        notify("Could not load payout data.", "error");
+      }
+      setLoading(false);
+    };
+    load();
+  }, [notify]);
+
+  const updateDraft = (organizerId, patch) => {
+    setDrafts(prev => ({
+      ...prev,
+      [organizerId]: {
+        amount: prev[organizerId]?.amount || "",
+        notes: prev[organizerId]?.notes || "",
+        ...patch,
+      },
+    }));
+  };
+
+  const organizerCards = organizers.map(organizer => {
+    const ownedEvents = events.filter(event => event.organizer === organizer.uid);
+    const ownedEventIds = new Set(ownedEvents.map(event => event.id));
+    const organizerTickets = tickets.filter(ticket => ownedEventIds.has(ticket.eventId));
+    const summary = calculatePayoutSummary(organizerTickets);
+    const organizerPayouts = payoutRecords.filter(record => record.organizerId === organizer.uid);
+    const paidOut = organizerPayouts.filter(record => record.status === "paid").reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+    const outstanding = Math.max(0, summary.net - paidOut);
+    return { organizer, ownedEvents, summary, organizerPayouts, paidOut, outstanding };
+  }).sort((a, b) => b.outstanding - a.outstanding);
+
+  const markAsPaid = async (card) => {
+    const draft = drafts[card.organizer.uid] || {};
+    const amount = Number(draft.amount || card.outstanding);
+    if (!amount || amount <= 0) {
+      notify("Enter a payout amount first.", "error");
+      return;
+    }
+
+    setRecordingId(card.organizer.uid);
+    try {
+      const now = new Date().toISOString();
+      const ref = await addDoc(collection(db, "payouts"), {
+        organizerId: card.organizer.uid,
+        organizerName: card.organizer.name,
+        amount,
+        notes: draft.notes?.trim() || "",
+        status: "paid",
+        createdAt: now,
+        paidAt: now,
+        recordedBy: currentUser.uid,
+        bankSnapshot: card.organizer.payoutDetails || null,
+      });
+      setPayoutRecords(prev => [
+        {
+          id: ref.id,
+          organizerId: card.organizer.uid,
+          organizerName: card.organizer.name,
+          amount,
+          notes: draft.notes?.trim() || "",
+          status: "paid",
+          createdAt: now,
+          paidAt: now,
+          recordedBy: currentUser.uid,
+          bankSnapshot: card.organizer.payoutDetails || null,
+        },
+        ...prev,
+      ]);
+      setDrafts(prev => ({ ...prev, [card.organizer.uid]: { amount: "", notes: "" } }));
+      notify("Payout recorded.");
+    } catch (err) {
+      console.error("Payout record failed:", err);
+      notify("Could not record payout.", "error");
+    }
+    setRecordingId(null);
+  };
+
+  return (
+    <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:16, flexWrap:"wrap", marginBottom:28 }}>
+        <div>
+          <h1 style={{ fontSize:"clamp(36px,6vw,52px)", lineHeight:1, marginBottom:6 }}>PAYOUT ADMIN</h1>
+          <div style={{ color:"var(--muted)", fontSize:14 }}>Track organizer bank details, outstanding balances, and manual settlements.</div>
+        </div>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px" }}>
+            <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--gold)" }}>{organizerCards.length}</div>
+            <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>ORGANIZERS</div>
+          </div>
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px" }}>
+            <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--green)" }}>{fmt(organizerCards.reduce((sum, card) => sum + card.outstanding, 0))}</div>
+            <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>OUTSTANDING</div>
+          </div>
+        </div>
+      </div>
+
+      {loading ? <Spinner /> : (
+        <div style={{ display:"flex", flexDirection:"column", gap:18 }}>
+          {organizerCards.map(card => {
+            const payoutDetails = card.organizer.payoutDetails || {};
+            const hasPayoutDetails = Boolean(
+              payoutDetails.bankName?.trim() &&
+              payoutDetails.accountName?.trim() &&
+              payoutDetails.accountNumber?.trim()
+            );
+            const draft = drafts[card.organizer.uid] || {};
+            const recentPayouts = card.organizerPayouts.slice(0, 5);
+            return (
+              <div key={card.organizer.uid} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:18, padding:22 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"minmax(0,1.3fr) minmax(280px,1fr)", gap:20 }}>
+                  <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"flex-start" }}>
+                      <div>
+                        <div style={{ fontFamily:"Oswald", fontSize:28, lineHeight:1 }}>{card.organizer.name}</div>
+                        <div style={{ color:"var(--muted)", fontSize:13 }}>{card.organizer.email}</div>
+                      </div>
+                      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                        <span style={{ background: hasPayoutDetails ? "rgba(61,220,132,0.14)" : "rgba(244,90,90,0.12)", color: hasPayoutDetails ? "var(--green)" : "var(--red)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                          {hasPayoutDetails ? "BANK DETAILS READY" : "BANK DETAILS MISSING"}
+                        </span>
+                        <span style={{ background:"rgba(245,166,35,0.12)", color:"var(--gold)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                          {card.ownedEvents.length} EVENT{card.ownedEvents.length !== 1 ? "S" : ""}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:12 }}>
+                      {[
+                        { label:"Gross", value:fmt(card.summary.gross), color:"var(--gold)" },
+                        { label:"Net", value:fmt(card.summary.net), color:"var(--green)" },
+                        { label:"Paid Out", value:fmt(card.paidOut), color:"var(--muted)" },
+                        { label:"Outstanding", value:fmt(card.outstanding), color:"var(--green)" },
+                      ].map(item => (
+                        <div key={item.label} style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 16px" }}>
+                          <div style={{ fontFamily:"Oswald", fontSize:24, color:item.color }}>{item.value}</div>
+                          <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{item.label.toUpperCase()}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 16px" }}>
+                      <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:10 }}>BANK DETAILS</div>
+                      {hasPayoutDetails ? (
+                        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:10, fontSize:13, color:"var(--muted)" }}>
+                          <div><strong style={{ color:"var(--text)" }}>Bank:</strong> {payoutDetails.bankName}</div>
+                          <div><strong style={{ color:"var(--text)" }}>Account name:</strong> {payoutDetails.accountName}</div>
+                          <div><strong style={{ color:"var(--text)" }}>Account number:</strong> {payoutDetails.accountNumber}</div>
+                          {payoutDetails.notes && <div><strong style={{ color:"var(--text)" }}>Notes:</strong> {payoutDetails.notes}</div>}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize:13, color:"var(--muted)" }}>This organizer has not added payout details yet.</div>
+                      )}
+                    </div>
+
+                    <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 16px" }}>
+                      <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:10 }}>RECENT PAYOUTS</div>
+                      {recentPayouts.length === 0 ? (
+                        <div style={{ fontSize:13, color:"var(--muted)" }}>No payouts recorded yet.</div>
+                      ) : (
+                        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                          {recentPayouts.map(record => (
+                            <div key={record.id} style={{ display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap", fontSize:13 }}>
+                              <span style={{ color:"var(--muted)" }}>{new Date(record.paidAt || record.createdAt || Date.now()).toLocaleDateString("en-NG", { month:"short", day:"numeric", year:"numeric" })}</span>
+                              <span style={{ color:"var(--green)", fontFamily:"IBM Plex Mono" }}>{fmt(Number(record.amount) || 0)}</span>
+                              <span style={{ color:"var(--muted)" }}>{record.notes || "Manual payout"}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ background:"rgba(245,166,35,0.06)", border:"1px solid var(--gold-dim)", borderRadius:14, padding:18, display:"flex", flexDirection:"column", gap:14 }}>
+                    <div>
+                      <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:8 }}>RECORD MANUAL PAYOUT</div>
+                      <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7 }}>
+                        Record how much has been transferred to this organizer so their outstanding balance stays accurate.
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, display:"block", marginBottom:6 }}>AMOUNT</label>
+                      <input
+                        value={draft.amount ?? (card.outstanding > 0 ? String(card.outstanding) : "")}
+                        onChange={e => updateDraft(card.organizer.uid, { amount: e.target.value })}
+                        placeholder="0"
+                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, display:"block", marginBottom:6 }}>NOTES</label>
+                      <textarea
+                        value={draft.notes || ""}
+                        onChange={e => updateDraft(card.organizer.uid, { notes: e.target.value })}
+                        rows={3}
+                        placeholder="Bank transfer reference, date, or internal note"
+                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", resize:"vertical", fontFamily:"Manrope" }}
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => markAsPaid(card)}
+                      disabled={recordingId === card.organizer.uid}
+                      style={{ background:"var(--gold)", color:"#000", border:"none", borderRadius:10, padding:"13px 18px", cursor:"pointer", fontFamily:"Oswald", fontSize:20, letterSpacing:1 }}
+                    >
+                      {recordingId === card.organizer.uid ? "RECORDING..." : "MARK AS PAID"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProfilePage({ ctx }) {
   const { currentUser, tickets, events, updateProfile, notify } = ctx;
   const [name, setName] = useState(currentUser.name);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState("info"); // info | history
+  const [tab, setTab] = useState("info"); // info | history | payouts
+  const [bankName, setBankName] = useState(currentUser.payoutDetails?.bankName || "");
+  const [accountName, setAccountName] = useState(currentUser.payoutDetails?.accountName || "");
+  const [accountNumber, setAccountNumber] = useState(currentUser.payoutDetails?.accountNumber || "");
+  const [payoutNotes, setPayoutNotes] = useState(currentUser.payoutDetails?.notes || "");
 
   const myTickets = tickets.filter(t => t.userId === currentUser.uid || currentUser.role === "customer");
   const totalSpent = myTickets.reduce((s,t) => s + (t.price||0), 0);
   const eventsAttended = [...new Set(myTickets.map(t => t.eventId))].length;
-  const checkedIn = myTickets.filter(t => t.used).length;
+  const organizerTickets = currentUser.role === "organizer"
+    ? tickets.filter(t => events.some(e => e.organizer === currentUser.uid && e.id === t.eventId))
+    : [];
+  const payoutSummary = currentUser.role === "organizer" ? calculatePayoutSummary(organizerTickets) : null;
+  const hasPayoutDetails = Boolean(bankName.trim() && accountName.trim() && accountNumber.trim());
 
   const handleSave = async () => {
     if (!name.trim()) return;
@@ -3619,11 +3966,26 @@ function ProfilePage({ ctx }) {
     setSaving(false);
   };
 
+  const handlePayoutSave = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    await updateProfile({
+      name,
+      payoutDetails: {
+        bankName: bankName.trim(),
+        accountName: accountName.trim(),
+        accountNumber: accountNumber.trim(),
+        notes: payoutNotes.trim(),
+      },
+    });
+    setSaving(false);
+  };
+
   return (
     <div style={{ maxWidth:700, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       {/* Header */}
       <div style={{ display:"flex", alignItems:"center", gap:20, marginBottom:40, flexWrap:"wrap" }}>
-        <div style={{ width:80, height:80, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"Bebas Neue", fontSize:40, color:"#000", flexShrink:0 }}>
+        <div style={{ width:80, height:80, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"Oswald", fontSize:40, color:"#000", flexShrink:0 }}>
           {currentUser.name?.[0]?.toUpperCase()}
         </div>
         <div>
@@ -3645,7 +4007,7 @@ function ProfilePage({ ctx }) {
           ].map(s => (
             <div key={s.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"16px 12px", textAlign:"center" }}>
               <div style={{ fontSize:24, marginBottom:6, color:"var(--gold)" }}><i className={s.icon} /></div>
-              <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--gold)" }}>{s.value}</div>
+              <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--gold)" }}>{s.value}</div>
               <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{s.label.toUpperCase()}</div>
             </div>
           ))}
@@ -3654,7 +4016,7 @@ function ProfilePage({ ctx }) {
 
       {/* Tabs */}
       <div style={{ display:"flex", gap:4, marginBottom:24, background:"var(--bg3)", borderRadius:10, padding:4 }}>
-        {[["info",<><i className="fa-solid fa-user" style={{marginRight:6}} />Account</>],["history",<><i className="fa-solid fa-clock-rotate-left" style={{marginRight:6}} />Purchase History</>]].map(([id,label]) => (
+        {[["info",<><i className="fa-solid fa-user" style={{marginRight:6}} />Account</>],["history",<><i className="fa-solid fa-clock-rotate-left" style={{marginRight:6}} />Purchase History</>], ...(currentUser.role === "organizer" ? [["payouts",<><i className="fa-solid fa-building-columns" style={{marginRight:6}} />Payouts</>]] : [])].map(([id,label]) => (
           <button key={id} onClick={() => setTab(id)} style={{ flex:1, padding:"10px 16px", borderRadius:8, border:"none", cursor:"pointer", fontWeight:600, fontSize:13, background: tab===id?"var(--bg2)":"transparent", color: tab===id?"var(--text)":"var(--muted)", transition:"all 0.2s" }}>{label}</button>
         ))}
       </div>
@@ -3697,7 +4059,7 @@ function ProfilePage({ ctx }) {
           {myTickets.length === 0 ? (
             <div style={{ textAlign:"center", padding:"48px 24px", color:"var(--muted)" }}>
               <div style={{ fontSize:48, marginBottom:12, color:"var(--gold)" }}><i className="fa-solid fa-ticket" /></div>
-              <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO TICKETS YET</div>
+              <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO TICKETS YET</div>
               <Link to="/" style={{ color:"var(--gold)", fontSize:14 }}>Browse events →</Link>
             </div>
           ) : [...myTickets].sort((a,b) => new Date(b.purchasedAt)-new Date(a.purchasedAt)).map(t => (
@@ -3708,12 +4070,73 @@ function ProfilePage({ ctx }) {
                 <div style={{ color:"var(--muted)", fontSize:11, marginTop:2 }}>Purchased {new Date(t.purchasedAt).toLocaleDateString("en-NG")}</div>
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                <span style={{ fontFamily:"Bebas Neue", fontSize:22, color:"var(--gold)" }}>{fmt(t.price)}</span>
+                <span style={{ fontFamily:"Oswald", fontSize:22, color:"var(--gold)" }}>{fmt(t.price)}</span>
                 <span style={{ background: t.used?"rgba(61,220,132,0.15)":"rgba(245,166,35,0.15)", color: t.used?"var(--green)":"var(--gold)", padding:"2px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>{t.used?"✓ Used":"Valid"}</span>
                 <Link to={`/ticket/${t.id}`} style={{ color:"var(--muted)", fontSize:12, textDecoration:"underline" }}>View</Link>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {tab === "payouts" && currentUser.role === "organizer" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:12 }}>
+            {[
+              { label:"Gross Sales", value:fmt(payoutSummary?.gross || 0), color:"var(--gold)" },
+              { label:"Net Payout", value:fmt(payoutSummary?.net || 0), color:"var(--green)" },
+              { label:"Paid Orders", value:(payoutSummary?.orderCount || 0).toLocaleString(), color:"var(--text)" },
+            ].map(item => (
+              <div key={item.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"18px 16px" }}>
+                <div style={{ fontFamily:"Oswald", fontSize:28, color:item.color }}>{item.value}</div>
+                <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>{item.label.toUpperCase()}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, display:"flex", flexDirection:"column", gap:18 }}>
+            <div>
+              <div style={{ fontFamily:"Oswald", fontSize:24, marginBottom:6 }}>BANK DETAILS FOR MANUAL PAYOUTS</div>
+              <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7 }}>
+                StagePro settles organizers manually for now. Add the bank account details the admin team should use when paying out your balance.
+              </div>
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:14 }}>
+              <div>
+                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>BANK NAME</label>
+                <input value={bankName} onChange={e => setBankName(e.target.value)}
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>ACCOUNT NAME</label>
+                <input value={accountName} onChange={e => setAccountName(e.target.value)}
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>ACCOUNT NUMBER</label>
+                <input value={accountNumber} onChange={e => setAccountNumber(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>NOTES</label>
+              <textarea value={payoutNotes} onChange={e => setPayoutNotes(e.target.value)} rows={3}
+                placeholder="Optional note for transfers, preferred bank branch, or other payout info"
+                style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", resize:"vertical", fontFamily:"Manrope" }} />
+            </div>
+
+            <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+              <span style={{ background: hasPayoutDetails ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasPayoutDetails ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                {hasPayoutDetails ? "PAYOUT DETAILS READY" : "ADD FULL BANK DETAILS"}
+              </span>
+              <button onClick={handlePayoutSave} disabled={saving}
+                style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 20px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
+                {saving ? "Saving..." : "Save payout details"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -3774,7 +4197,7 @@ function EventReviewsPreview({ eventId, currentUser, tickets, submitReview }) {
           {avgRating && (
             <div style={{ display:"flex", alignItems:"center", gap:6 }}>
               <span style={{ color:"var(--gold)", fontSize:16 }}>{"★".repeat(Math.round(Number(avgRating)))}</span>
-              <span style={{ fontFamily:"Bebas Neue", fontSize:20, color:"var(--gold)" }}>{avgRating}</span>
+              <span style={{ fontFamily:"Oswald", fontSize:20, color:"var(--gold)" }}>{avgRating}</span>
               <span style={{ color:"var(--muted)", fontSize:12 }}>({reviews.length})</span>
             </div>
           )}
@@ -3799,7 +4222,7 @@ function EventReviewsPreview({ eventId, currentUser, tickets, submitReview }) {
             </div>
           </div>
           <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Share your experience..." maxLength={400}
-            style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"DM Sans", outline:"none", marginBottom:12 }} />
+            style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:14, resize:"vertical", fontFamily:"Manrope", outline:"none", marginBottom:12 }} />
           <div style={{ display:"flex", gap:10 }}>
             <button onClick={() => { setShowForm(false); setRating(0); setComment(""); }} style={{ flex:1, background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:10, borderRadius:8, cursor:"pointer", fontSize:13 }}>Cancel</button>
             <button onClick={handleSubmit} disabled={!rating||!comment.trim()||submitting}
@@ -3878,7 +4301,7 @@ function ReviewsPage({ ctx }) {
       {reviews.length > 0 && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:28, display:"grid", gridTemplateColumns:"auto 1fr", gap:32, alignItems:"center" }}>
           <div style={{ textAlign:"center" }}>
-            <div style={{ fontFamily:"Bebas Neue", fontSize:72, color:"var(--gold)", lineHeight:1 }}>{avgRating}</div>
+            <div style={{ fontFamily:"Oswald", fontSize:72, color:"var(--gold)", lineHeight:1 }}>{avgRating}</div>
             <div style={{ color:"var(--gold)", fontSize:20, marginBottom:4 }}>{"★".repeat(Math.round(Number(avgRating)))}</div>
             <div style={{ color:"var(--muted)", fontSize:12 }}>{reviews.length} review{reviews.length!==1?"s":""}</div>
           </div>
@@ -3899,7 +4322,7 @@ function ReviewsPage({ ctx }) {
       {loading ? <Spinner /> : filtered.length === 0 ? (
         <div style={{ textAlign:"center", padding:"48px 0", color:"var(--muted)" }}>
           <div style={{ fontSize:48, marginBottom:12, color:"var(--gold)" }}><i className="fa-solid fa-star" /></div>
-          <div style={{ fontFamily:"Bebas Neue", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO REVIEWS YET</div>
+          <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--text)", marginBottom:8 }}>NO REVIEWS YET</div>
         </div>
       ) : (
         <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
@@ -3976,7 +4399,7 @@ function WaitlistPanel({ eventId, event }) {
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           <i className="fa-solid fa-clipboard-list" style={{fontSize:22,color:"var(--gold)"}} />
           <div style={{ textAlign:"left" }}>
-            <div style={{ fontFamily:"Bebas Neue", fontSize:20, letterSpacing:1 }}>WAITLIST</div>
+            <div style={{ fontFamily:"Oswald", fontSize:20, letterSpacing:1 }}>WAITLIST</div>
             <div style={{ fontSize:12, color:"var(--muted)", marginTop:2 }}>Attendees waiting for sold-out tiers</div>
           </div>
         </div>
@@ -3995,7 +4418,7 @@ function WaitlistPanel({ eventId, event }) {
                   <div key={e.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"var(--bg3)", borderRadius:10, padding:"12px 16px", flexWrap:"wrap", gap:10 }}>
                     <div>
                       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                        <span style={{ fontSize:11, color:"var(--muted)", fontFamily:"DM Mono" }}>#{i+1}</span>
+                        <span style={{ fontSize:11, color:"var(--muted)", fontFamily:"IBM Plex Mono" }}>#{i+1}</span>
                         <span style={{ fontWeight:600, fontSize:13 }}>{e.userName}</span>
                         {e.notified && <span style={{ fontSize:10, background:"rgba(61,220,132,0.15)", color:"var(--green)", padding:"1px 8px", borderRadius:100, fontWeight:700 }}>NOTIFIED</span>}
                       </div>
@@ -4040,7 +4463,7 @@ function LegalPage({ title, subtitle, children }) {
 function LegalSection({ title, children }) {
   return (
     <div style={{ borderLeft:"3px solid var(--gold)", paddingLeft:24 }}>
-      <h2 style={{ fontFamily:"Bebas Neue", fontSize:22, letterSpacing:1, marginBottom:12, color:"var(--text)" }}>{title}</h2>
+      <h2 style={{ fontFamily:"Oswald", fontSize:22, letterSpacing:1, marginBottom:12, color:"var(--text)" }}>{title}</h2>
       <div style={{ color:"var(--muted)", fontSize:15, lineHeight:1.85 }}>{children}</div>
     </div>
   );
@@ -4423,7 +4846,7 @@ function HelpPage() {
       {/* FAQ sections */}
       {faqs.map(section => (
         <div key={section.category} id={section.category.toLowerCase().replace(/\s+/g,"-")} style={{ marginBottom:48 }}>
-          <h2 style={{ fontFamily:"Bebas Neue", fontSize:26, letterSpacing:2, color:"var(--gold)", marginBottom:20, paddingBottom:12, borderBottom:"1px solid var(--border)" }}>{section.category}</h2>
+          <h2 style={{ fontFamily:"Oswald", fontSize:26, letterSpacing:2, color:"var(--gold)", marginBottom:20, paddingBottom:12, borderBottom:"1px solid var(--border)" }}>{section.category}</h2>
           <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
             {section.items.map((item, i) => {
               const key = `${section.category}-${i}`;
@@ -4454,7 +4877,7 @@ function HelpPage() {
       {/* Still need help? */}
       <div style={{ background:"linear-gradient(135deg,rgba(245,166,35,0.12),rgba(245,166,35,0.04))", border:"1px solid var(--gold-dim)", borderRadius:16, padding:"32px 40px", textAlign:"center" }}>
         <div style={{ fontSize:40, marginBottom:12, color:"var(--gold)" }}><i className="fa-solid fa-headset" /></div>
-        <h3 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:8 }}>STILL NEED HELP?</h3>
+        <h3 style={{ fontFamily:"Oswald", fontSize:28, marginBottom:8 }}>STILL NEED HELP?</h3>
         <p style={{ color:"var(--muted)", fontSize:14, marginBottom:20 }}>Can't find the answer you're looking for? Our support team is happy to help.</p>
         <Link to="/contact" style={{ background:"var(--gold)", color:"#000", padding:"12px 32px", borderRadius:10, fontWeight:700, fontSize:15, display:"inline-block" }}>Contact Support →</Link>
       </div>
@@ -4484,7 +4907,7 @@ function ContactPage() {
     }
   };
 
-  const iStyle = { width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"DM Sans" };
+  const iStyle = { width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"Manrope" };
 
   return (
     <div style={{ maxWidth:860, margin:"0 auto", padding:"48px 24px 80px", animation:"fadeUp 0.4s ease" }}>
@@ -4503,7 +4926,7 @@ function ContactPage() {
           {status === "sent" ? (
             <div style={{ background:"rgba(61,220,132,0.08)", border:"1px solid var(--green)", borderRadius:16, padding:"48px 32px", textAlign:"center", animation:"fadeUp 0.4s ease" }}>
               <div style={{ fontSize:56, marginBottom:16, color:"var(--green)" }}><i className="fa-solid fa-circle-check" /></div>
-              <h2 style={{ fontFamily:"Bebas Neue", fontSize:36, color:"var(--green)", marginBottom:8 }}>MESSAGE SENT!</h2>
+              <h2 style={{ fontFamily:"Oswald", fontSize:36, color:"var(--green)", marginBottom:8 }}>MESSAGE SENT!</h2>
               <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>Thanks for reaching out. We'll get back to you at <strong style={{ color:"var(--text)" }}>{form.email}</strong> within 24 hours.</p>
               <button onClick={() => { setForm({ name:"", email:"", subject:"", category:"general", message:"" }); setStatus("idle"); }}
                 style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:14 }}>Send Another Message</button>
@@ -4554,7 +4977,7 @@ function ContactPage() {
               )}
 
               <button onClick={handleSubmit} disabled={!form.name||!form.email||!form.message||status==="sending"}
-                style={{ width:"100%", background: form.name&&form.email&&form.message?"var(--gold)":"var(--bg3)", color: form.name&&form.email&&form.message?"#000":"var(--muted)", border:"none", padding:"15px 24px", borderRadius:10, cursor: form.name&&form.email&&form.message?"pointer":"not-allowed", fontFamily:"Bebas Neue", fontSize:20, letterSpacing:2 }}>
+                style={{ width:"100%", background: form.name&&form.email&&form.message?"var(--gold)":"var(--bg3)", color: form.name&&form.email&&form.message?"#000":"var(--muted)", border:"none", padding:"15px 24px", borderRadius:10, cursor: form.name&&form.email&&form.message?"pointer":"not-allowed", fontFamily:"Oswald", fontSize:20, letterSpacing:1 }}>
                 {status==="sending" ? "SENDING..." : "SEND MESSAGE →"}
               </button>
             </div>
@@ -4572,7 +4995,7 @@ function ContactPage() {
         ].map(c => (
           <div key={c.title} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"20px 24px" }}>
             <div style={{ fontSize:28, marginBottom:10 }}>{c.icon}</div>
-            <div style={{ fontFamily:"Bebas Neue", fontSize:17, letterSpacing:1, marginBottom:4 }}>{c.title}</div>
+            <div style={{ fontFamily:"Oswald", fontSize:17, letterSpacing:1, marginBottom:4 }}>{c.title}</div>
             <div style={{ fontSize:14, color:"var(--text)", fontWeight:600, marginBottom:2 }}>{c.detail}</div>
             <div style={{ fontSize:12, color:"var(--muted)" }}>{c.sub}</div>
           </div>
@@ -4585,36 +5008,83 @@ function ContactPage() {
 // ── Guest Ticket Lookup Page (/find-tickets) ───────────────────────────────
 function GuestTicketLookupPage() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | searching | found | empty | error
+  const [status, setStatus] = useState("idle"); // idle | sending | sent | verifying | found | empty | error
   const [tickets, setTickets] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [message, setMessage] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const accessToken = searchParams.get("access");
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let active = true;
+
+    const verifyAccess = async () => {
+      setStatus("verifying");
+      setMessage("Verifying your secure access link...");
+      try {
+        const res = await fetch("/api/find-tickets-access", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: accessToken }),
+        });
+        const data = await res.json();
+        if (!active) return;
+
+        if (!res.ok || !data.ok) {
+          setTickets([]);
+          setMessage(data.msg || "This ticket access link is invalid or has expired.");
+          setStatus("error");
+          return;
+        }
+
+        setEmail(data.email || "");
+        setTickets(data.tickets || []);
+        setStatus((data.tickets || []).length ? "found" : "empty");
+        setMessage((data.tickets || []).length ? "" : "No tickets were found for this email address.");
+      } catch (err) {
+        console.error(err);
+        if (!active) return;
+        setMessage("We could not verify this ticket access link. Please request a new one.");
+        setStatus("error");
+      }
+    };
+
+    verifyAccess();
+    return () => { active = false; };
+  }, [accessToken]);
 
   const handleSearch = async () => {
     if (!email.trim() || !email.includes("@")) return;
-    setStatus("searching");
+    setStatus("sending");
     setTickets([]);
+    setMessage("");
     try {
-      const q = query(
-        collection(db, "tickets"),
-        where("userEmail", "==", email.trim().toLowerCase())
-      );
-      const snap = await getDocs(q);
-      const found = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      // Sort newest first
-      found.sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt));
-      if (found.length === 0) {
-        setStatus("empty");
-      } else {
-        setTickets(found);
-        setStatus("found");
+      const res = await fetch("/api/send-ticket-access-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          origin: window.location.origin,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setMessage(data.msg || "We could not send the ticket access email.");
+        setStatus("error");
+        return;
       }
+      setSearchParams({});
+      setMessage(`We sent a secure ticket link to ${email.trim().toLowerCase()}. Open it from your inbox to view your tickets.`);
+      setStatus("sent");
     } catch (err) {
       console.error(err);
+      setMessage("We could not send the ticket access email. Please try again.");
       setStatus("error");
     }
   };
 
-  const iStyle = { width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:15, outline:"none", fontFamily:"DM Sans" };
+  const iStyle = { width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", color:"var(--text)", fontSize:15, outline:"none", fontFamily:"Manrope" };
 
   return (
     <div style={{ maxWidth:680, margin:"0 auto", padding:"48px 24px 80px", animation:"fadeUp 0.4s ease" }}>
@@ -4625,7 +5095,7 @@ function GuestTicketLookupPage() {
         <div style={{ fontSize:12, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:12, fontWeight:500 }}>Guest Tickets</div>
         <h1 style={{ fontSize:"clamp(36px,7vw,64px)", lineHeight:0.95, marginBottom:16 }}>FIND MY TICKETS</h1>
         <p style={{ color:"var(--muted)", fontSize:15, lineHeight:1.7 }}>
-          Bought tickets without creating an account? Enter the email address you used at checkout and we'll show all your tickets.
+          Bought tickets without creating an account? Enter the email address you used at checkout and we'll send a secure access link to your inbox.
         </p>
       </div>
 
@@ -4646,29 +5116,43 @@ function GuestTicketLookupPage() {
           </div>
           <button
             onClick={handleSearch}
-            disabled={!email.includes("@") || status === "searching"}
-            style={{ background: email.includes("@") ? "var(--gold)" : "var(--bg3)", color: email.includes("@") ? "#000" : "var(--muted)", border:"none", padding:"0 24px", borderRadius:10, cursor: email.includes("@") ? "pointer" : "not-allowed", fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, flexShrink:0, transition:"background 0.2s" }}
+            disabled={!email.includes("@") || status === "sending" || status === "verifying"}
+            style={{ background: email.includes("@") ? "var(--gold)" : "var(--bg3)", color: email.includes("@") ? "#000" : "var(--muted)", border:"none", padding:"0 24px", borderRadius:10, cursor: email.includes("@") ? "pointer" : "not-allowed", fontFamily:"Oswald", fontSize:18, letterSpacing:1, flexShrink:0, transition:"background 0.2s" }}
           >
-            {status === "searching" ? <i className="fa-solid fa-circle-notch fa-spin" /> : "SEARCH"}
+            {status === "sending" || status === "verifying" ? <i className="fa-solid fa-circle-notch fa-spin" /> : "SEND LINK"}
           </button>
         </div>
         <p style={{ fontSize:11, color:"var(--muted)", marginTop:10 }}>
           <i className="fa-solid fa-lock" style={{ marginRight:4 }} />
-          We only show tickets purchased with this exact email address.
+          We email a one-time secure link before showing any tickets.
         </p>
       </div>
+
+      {status === "sent" && (
+        <div style={{ background:"rgba(61,220,132,0.08)", border:"1px solid var(--green)", borderRadius:12, padding:"16px 20px", fontSize:13, color:"var(--green)", marginBottom:20 }}>
+          <i className="fa-solid fa-envelope-circle-check" style={{ marginRight:8 }} />
+          {message}
+        </div>
+      )}
+
+      {status === "verifying" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:"32px 28px", textAlign:"center", marginBottom:24 }}>
+          <div style={{ width:42, height:42, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
+          <div style={{ fontFamily:"Oswald", fontSize:24, marginBottom:8 }}>VERIFYING ACCESS</div>
+          <div style={{ fontSize:13, color:"var(--muted)" }}>{message}</div>
+        </div>
+      )}
 
       {/* Empty state */}
       {status === "empty" && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:"40px 28px", textAlign:"center", animation:"fadeUp 0.3s ease" }}>
           <div style={{ fontSize:48, marginBottom:16, color:"var(--muted)" }}><i className="fa-solid fa-ticket-slash" /></div>
-          <h3 style={{ fontFamily:"Bebas Neue", fontSize:28, marginBottom:8 }}>NO TICKETS FOUND</h3>
+          <h3 style={{ fontFamily:"Oswald", fontSize:28, marginBottom:8 }}>NO TICKETS FOUND</h3>
           <p style={{ color:"var(--muted)", fontSize:14, marginBottom:20, lineHeight:1.7 }}>
-            We couldn't find any tickets for <strong style={{ color:"var(--text)" }}>{email}</strong>.<br />
-            Make sure you're using the exact email you entered at checkout.
+            {message || <>We couldn't find any tickets for <strong style={{ color:"var(--text)" }}>{email}</strong>.<br />Make sure you're using the exact email you entered at checkout.</>}
           </p>
           <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:320, margin:"0 auto" }}>
-            <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontFamily:"Bebas Neue", fontSize:18, letterSpacing:2, textAlign:"center" }}>CREATE AN ACCOUNT</Link>
+            <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontFamily:"Oswald", fontSize:18, letterSpacing:1, textAlign:"center" }}>CREATE AN ACCOUNT</Link>
             <Link to="/contact" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"12px 24px", borderRadius:10, fontSize:13, textAlign:"center" }}>Contact Support</Link>
           </div>
         </div>
@@ -4678,7 +5162,7 @@ function GuestTicketLookupPage() {
       {status === "error" && (
         <div style={{ background:"rgba(232,64,64,0.08)", border:"1px solid var(--red)", borderRadius:12, padding:"16px 20px", fontSize:13, color:"var(--red)" }}>
           <i className="fa-solid fa-triangle-exclamation" style={{ marginRight:8 }} />
-          Something went wrong. Please try again or contact <a href="mailto:davidbibiresanmi@gmail.com" style={{ color:"var(--red)" }}>davidbibiresanmi@gmail.com</a>.
+          {message || <>Something went wrong. Please try again or contact <a href="mailto:davidbibiresanmi@gmail.com" style={{ color:"var(--red)" }}>davidbibiresanmi@gmail.com</a>.</>}
         </div>
       )}
 
@@ -4686,7 +5170,7 @@ function GuestTicketLookupPage() {
       {status === "found" && (
         <div style={{ animation:"fadeUp 0.3s ease" }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
-            <h2 style={{ fontFamily:"Bebas Neue", fontSize:26, letterSpacing:2 }}>
+            <h2 style={{ fontFamily:"Oswald", fontSize:26, letterSpacing:1 }}>
               {tickets.length} TICKET{tickets.length !== 1 ? "S" : ""} FOUND
             </h2>
             <span style={{ fontSize:13, color:"var(--muted)" }}>{email}</span>
@@ -4733,7 +5217,7 @@ function GuestTicketLookupPage() {
                       <Link
                         to={`/ticket/${ticket.id}`}
                         onClick={e => e.stopPropagation()}
-                        style={{ background:"var(--gold)", color:"#000", padding:"10px 28px", borderRadius:8, fontFamily:"Bebas Neue", fontSize:16, letterSpacing:2 }}
+                        style={{ background:"var(--gold)", color:"#000", padding:"10px 28px", borderRadius:8, fontFamily:"Oswald", fontSize:16, letterSpacing:1 }}
                       >
                         VIEW FULL TICKET
                       </Link>
@@ -4751,10 +5235,11 @@ function GuestTicketLookupPage() {
               <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>Create a free account</div>
               <div style={{ color:"var(--muted)", fontSize:13 }}>Save your tickets in one place, transfer tickets, and get notified about your upcoming events.</div>
             </div>
-            <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"10px 20px", borderRadius:8, fontFamily:"Bebas Neue", fontSize:16, letterSpacing:1, flexShrink:0 }}>JOIN FREE</Link>
+            <Link to="/register" style={{ background:"var(--gold)", color:"#000", padding:"10px 20px", borderRadius:8, fontFamily:"Oswald", fontSize:16, letterSpacing:1, flexShrink:0 }}>JOIN FREE</Link>
           </div>
         </div>
       )}
     </div>
   );
 }
+
