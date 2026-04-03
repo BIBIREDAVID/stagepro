@@ -280,6 +280,18 @@ const fmtDate = (d) =>
     weekday: "short", year: "numeric", month: "long", day: "numeric",
   });
 
+const MAX_TICKETS_PER_EVENT_PER_ACCOUNT = 5;
+const SHORT_TICKET_ID_LENGTH = 7;
+const SHORT_TICKET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function generateShortTicketId(length = SHORT_TICKET_ID_LENGTH) {
+  let value = "";
+  for (let i = 0; i < length; i++) {
+    value += SHORT_TICKET_ALPHABET[Math.floor(Math.random() * SHORT_TICKET_ALPHABET.length)];
+  }
+  return value;
+}
+
 const calculatePayoutSummary = (tickets) => {
   const STAGEPRO_FEE = 100;
   const PAYSTACK_RATE = 0.015;
@@ -728,9 +740,36 @@ export default function App() {
     const orderSubtotal = event.tiers.reduce((s,t) => s + (cartSelections[t.id]||0) * Number(t.price), 0);
     const isFreeOrder = orderSubtotal === 0;
     const buyerName = buyer?.name || currentUser?.name || "Guest";
-    const buyerEmail = buyer?.email || currentUser?.email || "";
+    const buyerEmail = (buyer?.email || currentUser?.email || "").trim().toLowerCase();
     const buyerUid = buyer?.uid || currentUser?.uid || `guest_${Date.now()}`;
     const isGuest = !buyer?.uid && !currentUser?.uid;
+    const requestedQty = Object.values(cartSelections).reduce((sum, qty) => sum + Number(qty || 0), 0);
+
+    let existingTicketCount = 0;
+    try {
+      if (buyer?.uid || currentUser?.uid) {
+        const existingSnap = await getDocs(query(collection(db, "tickets"), where("userId", "==", buyerUid)));
+        existingTicketCount = existingSnap.docs.filter(d => d.data().eventId === eventId).length;
+      } else if (buyerEmail) {
+        const existingSnap = await getDocs(query(collection(db, "tickets"), where("userEmail", "==", buyerEmail)));
+        existingTicketCount = existingSnap.docs.filter(d => d.data().eventId === eventId).length;
+      }
+    } catch (err) {
+      console.error("Failed to check ticket limit:", err);
+      notify("We couldn't confirm your ticket limit for this event. Please try again.", "error");
+      return false;
+    }
+
+    if (existingTicketCount + requestedQty > MAX_TICKETS_PER_EVENT_PER_ACCOUNT) {
+      const remaining = Math.max(0, MAX_TICKETS_PER_EVENT_PER_ACCOUNT - existingTicketCount);
+      notify(
+        remaining > 0
+          ? `You can only hold ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT} tickets per event. You have ${existingTicketCount} already, so you can add ${remaining} more.`
+          : `You have already reached the ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT}-ticket limit for this event.`,
+        "error"
+      );
+      return false;
+    }
 
     // Step 1 — create ticket documents
     try {
@@ -748,8 +787,19 @@ export default function App() {
             used: false, purchasedAt: new Date().toISOString(),
             ...(paystackRef ? { paystackRef, paymentStatus: "paid" } : { paymentStatus: "free" }),
           };
-          const ref = await addDoc(collection(db, "tickets"), ticketData);
-          const newTicket = { id: ref.id, ...ticketData };
+          let ticketRef = null;
+          for (let attempt = 0; attempt < 8; attempt++) {
+            const nextId = generateShortTicketId();
+            const candidateRef = doc(collection(db, "tickets"), nextId);
+            const existing = await getDoc(candidateRef);
+            if (!existing.exists()) {
+              ticketRef = candidateRef;
+              break;
+            }
+          }
+          if (!ticketRef) throw new Error("Could not generate a unique ticket ID");
+          await setDoc(ticketRef, ticketData);
+          const newTicket = { id: ticketRef.id, ...ticketData };
           newTickets.push(newTicket);
 
           // Fetch organiser name for personalised email
@@ -777,7 +827,7 @@ export default function App() {
             organizerName,
           });
           logToSheets({
-            action: "purchase", ticketId: ref.id,
+            action: "purchase", ticketId: ticketRef.id,
             eventTitle: event.title, tierName: tier.name,
             userName: buyerName, email: buyerEmail,
             price: Number(tier.price),
@@ -1679,7 +1729,7 @@ function AuthPage({ mode, ctx }) {
 // ── Event Page ──────────────────────────────────────────────────────────────
 function EventPage({ ctx }) {
   const { eventId } = useParams();
-  const { events, currentUser, joinWaitlist } = ctx;
+  const { events, currentUser, tickets, joinWaitlist } = ctx;
   const navigate = useNavigate();
   const [cart, setCart] = useState({});
   const [event, setEvent] = useState(null);
@@ -1703,12 +1753,24 @@ function EventPage({ ctx }) {
 
   const totalItems = Object.values(cart).reduce((s,q) => s+q, 0);
   const totalPrice = event.tiers.reduce((s,t) => s+(cart[t.id]||0)*t.price, 0);
+  const ownedTicketCount = currentUser
+    ? tickets.filter(t => t.eventId === eventId && t.userId === currentUser.uid).length
+    : 0;
+  const remainingAllowance = Math.max(0, MAX_TICKETS_PER_EVENT_PER_ACCOUNT - ownedTicketCount);
 
   const adjust = (tierId, delta) => {
     setCart(prev => {
       const tier = event.tiers.find(t => t.id===tierId);
-      const qty = Math.min(Math.max(0,(prev[tierId]||0)+delta), tier.total - getSold(event, tier.id));
-      return { ...prev, [tierId]: qty };
+      const draft = { ...prev };
+      draft[tierId] = Math.max(0, (draft[tierId] || 0) + delta);
+      const otherSelected = Object.entries(draft).reduce(
+        (sum, [key, value]) => sum + (key === tierId ? 0 : Number(value || 0)),
+        0
+      );
+      const inventoryCap = tier.total - getSold(event, tier.id);
+      const accountCap = currentUser ? Math.max(0, remainingAllowance - otherSelected) : inventoryCap;
+      draft[tierId] = Math.min(draft[tierId], inventoryCap, accountCap);
+      return draft;
     });
   };
 
@@ -1778,6 +1840,11 @@ function EventPage({ ctx }) {
         <div style={{ position:"sticky", top:80 }}>
           <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24 }}>
             <h3 style={{ fontSize:20, marginBottom:20 }}>SELECT TICKETS</h3>
+            <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid rgba(245,166,35,0.24)", borderRadius:12, padding:"12px 14px", color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:16 }}>
+              {currentUser
+                ? `Ticket limit: ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT} per account for this event. You already have ${ownedTicketCount}, so you can add ${remainingAllowance} more.`
+                : `Ticket limit: ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT} per account for this event.`}
+            </div>
             <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:20 }}>
               {event.tiers.map(tier => {
                 const available = tier.total - getSold(event, tier.id);
@@ -2011,7 +2078,7 @@ function PaymentVerificationPage({ ctx }) {
 
 function CheckoutPage({ ctx }) {
   const { eventId } = useParams();
-  const { events, currentUser, purchaseTickets, notify } = ctx;
+  const { events, currentUser, tickets, purchaseTickets, notify } = ctx;
   const navigate = useNavigate();
   const [agreed, setAgreed] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -2028,10 +2095,17 @@ function CheckoutPage({ ctx }) {
   if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
+  const selectedCount = selections.reduce((sum, tier) => sum + Number(cart[tier.id] || 0), 0);
   const subtotal = selections.reduce((s,t) => s + cart[t.id] * Number(t.price), 0);
   const SERVICE_FEE = 100; // ₦100 flat per order
   const isFree = subtotal === 0;
   const total = isFree ? 0 : subtotal + SERVICE_FEE;
+  const existingTicketCount = currentUser
+    ? tickets.filter(t => t.eventId === eventId && t.userId === currentUser.uid).length
+    : 0;
+  const wouldExceedBulkLimit = currentUser
+    ? existingTicketCount + selectedCount > MAX_TICKETS_PER_EVENT_PER_ACCOUNT
+    : selectedCount > MAX_TICKETS_PER_EVENT_PER_ACCOUNT;
   const paystackKey = (import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "").trim();
   const loadPaystack = () => new Promise(resolve => {
     if (window.PaystackPop) {
@@ -2082,6 +2156,10 @@ function CheckoutPage({ ctx }) {
 
   // ── Free tickets — confirm directly ───────────────────────────────────
   const handleFree = async () => {
+    if (wouldExceedBulkLimit) {
+      notify(`Ticket limit is ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT} per account for this event.`, "error");
+      return;
+    }
     setProcessing(true);
     const result = await purchaseTickets(eventId, cart, null, buyer);
     if (result) {
@@ -2097,6 +2175,10 @@ function CheckoutPage({ ctx }) {
   };
 
   const handlePay = async () => {
+    if (wouldExceedBulkLimit) {
+      notify(`Ticket limit is ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT} per account for this event.`, "error");
+      return;
+    }
     const reference = `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`;
     setPayError("");
 
@@ -2153,6 +2235,11 @@ function CheckoutPage({ ctx }) {
       {/* Order summary */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ORDER SUMMARY</div>
+        <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid rgba(245,166,35,0.24)", borderRadius:12, padding:"12px 14px", color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:18 }}>
+          {currentUser
+            ? `Ticket limit: ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT} per account for this event. You already have ${existingTicketCount}, and this checkout contains ${selectedCount}.`
+            : `Ticket limit: ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT} per account for this event. This checkout contains ${selectedCount}.`}
+        </div>
         <div style={{ fontFamily:"Oswald", fontSize:24, marginBottom:4 }}>{event.title}</div>
         <div style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{fmtDate(event.date)} · {event.venue}</div>
         {selections.map(t => {
@@ -2219,18 +2306,20 @@ function CheckoutPage({ ctx }) {
         </span>
       </div>
 
-      {!isFree && payError && (
+      {(payError || wouldExceedBulkLimit) && (
         <div style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", borderRadius:12, padding:"14px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:12 }}>
           <i className="fa-solid fa-circle-exclamation" style={{ color:"var(--red)", fontSize:20 }} />
-          <div style={{ color:"var(--muted)", fontSize:13 }}>{payError}</div>
+          <div style={{ color:"var(--muted)", fontSize:13 }}>
+            {payError || `This checkout exceeds the ${MAX_TICKETS_PER_EVENT_PER_ACCOUNT}-ticket limit for one account on this event.`}
+          </div>
         </div>
       )}
 
       {/* Confirm button */}
       <button
-        disabled={!agreed || processing || (!isFree && !paystackReady)}
+        disabled={!agreed || processing || (!isFree && !paystackReady) || wouldExceedBulkLimit}
         onClick={handleConfirm}
-        style={{ width:"100%", padding:16, background: agreed?(isFree?"var(--green)":"var(--gold)"):"var(--bg3)", color: agreed?"#000":"var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:2, cursor: (agreed && (isFree || paystackReady))?"pointer":"not-allowed", opacity: processing || (!isFree && !paystackReady)?0.7:1 }}
+        style={{ width:"100%", padding:16, background: agreed && !wouldExceedBulkLimit ? (isFree?"var(--green)":"var(--gold)") : "var(--bg3)", color: agreed && !wouldExceedBulkLimit ? "#000" : "var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:2, cursor: (agreed && (isFree || paystackReady) && !wouldExceedBulkLimit)?"pointer":"not-allowed", opacity: processing || (!isFree && !paystackReady)?0.7:1 }}
       >
         {processing
           ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")

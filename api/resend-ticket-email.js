@@ -2,6 +2,7 @@
 // POST { ticketId } — resends the confirmation email for a ticket
 
 import nodemailer from "nodemailer";
+import { getAdminDb } from "./_firebaseAdmin.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -13,24 +14,19 @@ export default async function handler(req, res) {
   const { ticketId } = req.body;
   if (!ticketId) return res.status(400).json({ error: "ticketId required" });
 
-  // Fetch ticket from Firestore via REST API
-  const projectId = process.env.FIREBASE_PROJECT_ID || "stagepro-327e8";
-  const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/tickets/${ticketId}`;
-
   try {
-    const ticketRes = await fetch(firestoreUrl);
-    if (!ticketRes.ok) return res.status(404).json({ error: "Ticket not found" });
-    const ticketDoc = await ticketRes.json();
-    const f = ticketDoc.fields;
+    const ticketDoc = await getAdminDb().collection("tickets").doc(ticketId).get();
+    if (!ticketDoc.exists) return res.status(404).json({ error: "Ticket not found" });
+    const f = ticketDoc.data() || {};
 
-    const toEmail = f.userEmail?.stringValue;
-    const toName = f.userName?.stringValue || "there";
-    const eventTitle = f.eventTitle?.stringValue || "";
-    const eventDate = f.eventDate?.stringValue || "";
-    const eventTime = f.eventTime?.stringValue || "";
-    const eventVenue = f.venue?.stringValue || "";
-    const tierName = f.tierName?.stringValue || "";
-    const price = Number(f.price?.integerValue || f.price?.doubleValue || 0);
+    const toEmail = f.userEmail;
+    const toName = f.userName || "there";
+    const eventTitle = f.eventTitle || "";
+    const eventDate = f.eventDate || "";
+    const eventTime = f.eventTime || "";
+    const eventVenue = f.venue || "";
+    const tierName = f.tierName || "";
+    const price = Number(f.price || 0);
     const amountPaid = price === 0 ? "FREE" : `₦${price.toLocaleString()}`;
     const ticketUrl = `https://stagepro-phi.vercel.app/ticket/${ticketId}`;
     const accent = "#f5a623";

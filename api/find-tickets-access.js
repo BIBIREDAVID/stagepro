@@ -1,6 +1,5 @@
 import crypto from "crypto";
-
-const DEFAULT_PROJECT_ID = "stagepro-327e8";
+import { getAdminDb } from "./_firebaseAdmin.js";
 
 function verifyToken(token, secret) {
   const [body, signature] = String(token || "").split(".");
@@ -13,62 +12,11 @@ function verifyToken(token, secret) {
   return payload;
 }
 
-function parseFirestoreValue(field = {}) {
-  if ("stringValue" in field) return field.stringValue;
-  if ("integerValue" in field) return Number(field.integerValue);
-  if ("doubleValue" in field) return Number(field.doubleValue);
-  if ("booleanValue" in field) return Boolean(field.booleanValue);
-  if ("timestampValue" in field) return field.timestampValue;
-  if ("nullValue" in field) return null;
-  return "";
-}
-
-function parseTicketDocument(document) {
-  const fields = document.fields || {};
-  return {
-    id: document.name.split("/").pop(),
-    eventId: parseFirestoreValue(fields.eventId),
-    eventTitle: parseFirestoreValue(fields.eventTitle),
-    eventDate: parseFirestoreValue(fields.eventDate),
-    eventTime: parseFirestoreValue(fields.eventTime),
-    venue: parseFirestoreValue(fields.venue),
-    tierName: parseFirestoreValue(fields.tierName),
-    price: parseFirestoreValue(fields.price),
-    userName: parseFirestoreValue(fields.userName),
-    userEmail: parseFirestoreValue(fields.userEmail),
-    used: parseFirestoreValue(fields.used),
-    purchasedAt: parseFirestoreValue(fields.purchasedAt),
-  };
-}
-
 async function fetchTicketsByEmail(email) {
-  const projectId = process.env.FIREBASE_PROJECT_ID || DEFAULT_PROJECT_ID;
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      structuredQuery: {
-        from: [{ collectionId: "tickets" }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: "userEmail" },
-            op: "EQUAL",
-            value: { stringValue: email.toLowerCase() },
-          },
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error("Could not load tickets");
-  }
-
-  const rows = await response.json();
-  return rows
-    .filter(row => row.document)
-    .map(row => parseTicketDocument(row.document))
+  const db = getAdminDb();
+  const snap = await db.collection("tickets").where("userEmail", "==", email.toLowerCase()).get();
+  return snap.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
     .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
 }
 

@@ -1,7 +1,6 @@
 import crypto from "crypto";
 import nodemailer from "nodemailer";
-
-const DEFAULT_PROJECT_ID = "stagepro-327e8";
+import { getAdminDb } from "./_firebaseAdmin.js";
 const ACCESS_WINDOW_MS = 1000 * 60 * 20;
 
 function encodeBase64Url(value) {
@@ -14,32 +13,10 @@ function signPayload(payload, secret) {
   return `${body}.${signature}`;
 }
 
-async function fetchTicketsByEmail(email) {
-  const projectId = process.env.FIREBASE_PROJECT_ID || DEFAULT_PROJECT_ID;
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      structuredQuery: {
-        from: [{ collectionId: "tickets" }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: "userEmail" },
-            op: "EQUAL",
-            value: { stringValue: email.toLowerCase() },
-          },
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error("Could not look up tickets");
-  }
-
-  const rows = await response.json();
-  return rows.filter(row => row.document).length;
+async function fetchTicketCountByEmail(email) {
+  const db = getAdminDb();
+  const snap = await db.collection("tickets").where("userEmail", "==", email.toLowerCase()).limit(1).get();
+  return snap.size;
 }
 
 export default async function handler(req, res) {
@@ -61,7 +38,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const ticketCount = await fetchTicketsByEmail(email);
+    const ticketCount = await fetchTicketCountByEmail(email);
     if (ticketCount === 0) {
       return res.status(200).json({ ok: true, msg: "If tickets exist for this email, a secure link has been sent." });
     }
