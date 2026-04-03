@@ -904,6 +904,7 @@ export default function App() {
         ...eventData,
         image: eventData.image || "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=800&q=80",
         organizer: currentUser.uid,
+        visibility: eventData.visibility || "public",
         tiers: eventData.tiers.map((t, i) => ({
           id: `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: 0,
         })),
@@ -924,6 +925,7 @@ export default function App() {
     try {
       const data = {
         ...eventData,
+        visibility: eventData.visibility || "public",
         tiers: eventData.tiers.map((t, i) => ({
           id: t.id || `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: t.sold||0,
         })),
@@ -1389,6 +1391,7 @@ function HomePage({ ctx }) {
   };
 
   const filtered = events
+    .filter(e => (e.visibility || "public") === "public")
     .filter(e => filter === "All" || e.category === filter)
     .filter(e => {
       const q = search.toLowerCase();
@@ -1806,6 +1809,12 @@ function EventPage({ ctx }) {
         <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.92) 0%, transparent 55%)" }} />
         <div style={{ position:"absolute", bottom:20, left:20, right:20 }}>
           <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:6 }}>{event.category?.toUpperCase()}</div>
+          {(event.visibility || "public") === "private" && (
+            <div style={{ display:"inline-flex", alignItems:"center", gap:6, background:"rgba(8,8,8,0.55)", border:"1px solid rgba(245,166,35,0.25)", color:"var(--gold)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700, marginBottom:8 }}>
+              <i className="fa-solid fa-lock" />
+              Private event
+            </div>
+          )}
           <h1 style={{ fontSize:"clamp(28px,6vw,56px)", lineHeight:1, marginBottom:4 }}>{event.title}</h1>
           <p style={{ color:"rgba(232,224,208,0.75)", fontSize:"clamp(14px,2.5vw,18px)" }}>{event.subtitle}</p>
         </div>
@@ -2782,7 +2791,12 @@ function DashboardPage({ ctx }) {
               <div style={{ display:"flex", alignItems:"center", gap:20, flexWrap:"wrap" }}>
                 <img src={event.image} style={{ width:60, height:60, objectFit:"cover", borderRadius:8, flexShrink:0 }} alt="" />
                 <div style={{ flex:1, minWidth:160 }}>
-                  <div style={{ fontWeight:600, marginBottom:2 }}>{event.title}</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:2 }}>
+                    <div style={{ fontWeight:600 }}>{event.title}</div>
+                    <span style={{ background:(event.visibility || "public") === "private" ? "rgba(232,64,64,0.12)" : "rgba(61,220,132,0.14)", color:(event.visibility || "public") === "private" ? "var(--red)" : "var(--green)", padding:"2px 8px", borderRadius:100, fontSize:10, fontWeight:700 }}>
+                      {(event.visibility || "public").toUpperCase()}
+                    </span>
+                  </div>
                   <div style={{ fontSize:13, color:"var(--muted)" }}>{fmtDate(event.date)}</div>
                 </div>
                 {/* Ticket sales bar */}
@@ -2836,7 +2850,7 @@ function Req() {
 
 function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, pageSubtitle }) {
   const navigate = useNavigate();
-  const [form, setForm] = useState(initialForm);
+  const [form, setForm] = useState({ visibility:"public", ...initialForm });
   const [touched, setTouched] = useState({});
   const [imageUploading, setImageUploading] = useState(false);
   const [imageProgress, setImageProgress] = useState(0);
@@ -2935,6 +2949,47 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
             <select value={form.category} onChange={F("category")} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }}>
               {["Concert","Festival","Sports","Comedy","Conference"].map(c=><option key={c}>{c}</option>)}
             </select>
+          </div>
+        </div>
+
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:10, display:"block", letterSpacing:1 }}>EVENT VISIBILITY</label>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            {[
+              {
+                id: "public",
+                title: "Public Event",
+                body: "Shows on the homepage and can also be opened through its direct link.",
+                icon: "fa-solid fa-earth-africa",
+              },
+              {
+                id: "private",
+                title: "Private Event",
+                body: "Hidden from the homepage, but anyone with the event link can still open it.",
+                icon: "fa-solid fa-lock",
+              },
+            ].map(option => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setForm(p => ({ ...p, visibility: option.id }))}
+                style={{
+                  background: form.visibility === option.id ? "rgba(245,166,35,0.12)" : "var(--bg3)",
+                  border: `1px solid ${form.visibility === option.id ? "var(--gold)" : "var(--border)"}`,
+                  borderRadius: 12,
+                  padding: "16px 18px",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  color: form.visibility === option.id ? "var(--text)" : "var(--muted)",
+                }}
+              >
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, color: form.visibility === option.id ? "var(--gold)" : "var(--muted)" }}>
+                  <i className={option.icon} />
+                  <span style={{ fontWeight:700, fontSize:14 }}>{option.title}</span>
+                </div>
+                <div style={{ fontSize:12, lineHeight:1.7 }}>{option.body}</div>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -3094,7 +3149,7 @@ function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
-  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", description:"", image:"", theme:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", tiers:[{ name:"General", price:"", total:"" }] };
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
@@ -3116,7 +3171,7 @@ function EditEventPage({ ctx }) {
 
   const prefilled = {
     title: event.title, subtitle: event.subtitle||"", date: event.date,
-    time: event.time||"", venue: event.venue, category: event.category||"Concert",
+    time: event.time||"", venue: event.venue, category: event.category||"Concert", visibility: event.visibility || "public",
     description: event.description||"",
     image: event.image||"",
     theme: event.theme||"",
