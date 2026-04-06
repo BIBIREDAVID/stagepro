@@ -3460,13 +3460,12 @@ function AnalyticsPage({ ctx }) {
   if (!event || event.organizer !== currentUser.uid) return <Navigate to="/dashboard" />;
 
   const eventTickets = tickets.filter(t => t.eventId === eventId);
-  const sold = event.tiers.reduce((s,t) => s + getSold(event, t.id), 0);
+  const sold = eventTickets.length;
   const cap  = event.tiers.reduce((s,t) => s + (t.total||0), 0);
-  const rev  = event.tiers.reduce((s,t) => s + getSold(event, t.id) * (t.price||0), 0);
+  const rev  = eventTickets.reduce((s,t) => s + (t.price||0), 0);
   const checkedIn = eventTickets.filter(t => t.used).length;
   const fillPct = cap ? Math.round((sold/cap)*100) : 0;
   const checkPct = sold ? Math.round((checkedIn/sold)*100) : 0;
-
   // Build daily sales data from ticket purchasedAt
   const dailySales = {};
   eventTickets.forEach(t => {
