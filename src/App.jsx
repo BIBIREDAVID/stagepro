@@ -2777,12 +2777,12 @@ function DashboardPage({ ctx }) {
         </div>
         {myEvents.length===0 ? (
           <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
-        ) : myEvents.map((event, i) => {
-          const sold = event.tiers.reduce((s,t) => s + getSold(event, t.id), 0);
-          const cap = event.tiers.reduce((s,t) => s + (t.total||0), 0);
-          const rev = event.tiers.reduce((s,t) => s + getSold(event, t.id) * (t.price||0), 0);
-          const pct = cap ? Math.round((sold/cap)*100) : 0;
+       ) : myEvents.map((event, i) => {
           const eventTickets = tickets.filter(t => t.eventId === event.id);
+          const sold = eventTickets.length;
+          const cap = event.tiers.reduce((s,t) => s + (t.total||0), 0);
+          const rev = eventTickets.reduce((s,t) => s + (t.price||0), 0);
+          const pct = cap ? Math.round((sold/cap)*100) : 0;
           const checkedIn = eventTickets.filter(t => t.used).length;
           // Use sold (from event tiers) as denominator so check-in matches tickets sold stat
           const checkInPct = sold ? Math.round((checkedIn/sold)*100) : 0;
