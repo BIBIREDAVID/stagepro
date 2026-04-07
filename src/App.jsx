@@ -26,12 +26,14 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   setDoc,
   addDoc,
   updateDoc,
   deleteDoc,
   query,
   where,
+  limit,
   increment,
 } from "firebase/firestore";
 import {
@@ -242,6 +244,33 @@ function QRCode({ ticketId, size = 160 }) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const fmt = (n) => `₦${Number(n).toLocaleString()}`;
+const slugify = (value = "") =>
+  String(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+
+const buildEventRouteId = (eventOrId, fallbackTitle = "") => {
+  if (!eventOrId) return "";
+  if (typeof eventOrId === "string") return eventOrId;
+  const id = eventOrId.id || "";
+  if (!id) return "";
+  const titleSlug = slugify(eventOrId.slug || eventOrId.title || fallbackTitle || "event");
+  return titleSlug ? `${titleSlug}-${id}` : id;
+};
+
+const eventPath = (eventOrId, fallbackTitle = "") => `/event/${buildEventRouteId(eventOrId, fallbackTitle)}`;
+
+const resolveEventIdFromParam = (param = "") => {
+  const raw = String(param || "");
+  if (!raw) return "";
+  const parts = raw.split("-");
+  const maybeId = parts[parts.length - 1];
+  return /^[A-Za-z0-9]{16,}$/.test(maybeId) ? maybeId : raw;
+};
 // ── Sold count for a tier ─────────────────────────────────────────────────
 // Sold count for a tier — reads from event.soldCounts map (atomic increments)
 // with fallback to tier.sold for legacy events
@@ -586,6 +615,8 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [organizerEvents, setOrganizerEvents] = useState([]);
   const [tickets, setTickets] = useState([]);
+  const [organizerNotifications, setOrganizerNotifications] = useState([]);
+  const [organizerAttendeeFeed, setOrganizerAttendeeFeed] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [notification, setNotification] = useState(null);
 
@@ -665,6 +696,66 @@ export default function App() {
     };
     load();
   }, [currentUser, organizerEvents]);
+
+  useEffect(() => {
+    if (currentUser?.role !== "organizer") {
+      setOrganizerNotifications([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "organizerNotifications"),
+      where("organizerId", "==", currentUser.uid),
+      limit(50)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => {
+          const aMs = new Date(a.createdAt || 0).getTime();
+          const bMs = new Date(b.createdAt || 0).getTime();
+          return bMs - aMs;
+        });
+        setOrganizerNotifications(rows.slice(0, 20));
+      },
+      (err) => {
+        console.error("Organizer notifications listener failed:", err);
+        setOrganizerNotifications([]);
+      }
+    );
+
+    return () => unsub();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (currentUser?.role !== "organizer") {
+      setOrganizerAttendeeFeed([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, "organizerAttendeeFeed"),
+      where("organizerId", "==", currentUser.uid),
+      limit(80)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        setOrganizerAttendeeFeed(rows.slice(0, 40));
+      },
+      (err) => {
+        console.error("Organizer attendee feed listener failed:", err);
+        setOrganizerAttendeeFeed([]);
+      }
+    );
+
+    return () => unsub();
+  }, [currentUser]);
 
   const login = async (email, password) => {
     try {
@@ -1074,7 +1165,7 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, organizerEvents, tickets, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
+  const ctx = { currentUser, events, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
 
   return (
     <BrowserRouter>
@@ -1549,7 +1640,7 @@ function EventCard({ event, index }) {
   const bg = getEventBg(event);
 
   return (
-    <Link to={`/event/${event.id}`} style={{ display:"block", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", transition:"transform 0.3s, border-color 0.3s", animation:`fadeUp 0.5s ${index*0.1}s ease both` }}
+          <Link to={eventPath(event)} style={{ display:"block", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", transition:"transform 0.3s, border-color 0.3s", animation:`fadeUp 0.5s ${index*0.1}s ease both` }}
       onMouseEnter={e => { e.currentTarget.style.transform="translateY(-4px)"; e.currentTarget.style.borderColor="var(--gold-dim)"; }}
       onMouseLeave={e => { e.currentTarget.style.transform=""; e.currentTarget.style.borderColor="var(--border)"; }}
     >
@@ -1731,7 +1822,8 @@ function AuthPage({ mode, ctx }) {
 
 // ── Event Page ──────────────────────────────────────────────────────────────
 function EventPage({ ctx }) {
-  const { eventId } = useParams();
+  const { eventId: eventRouteParam } = useParams();
+  const eventId = resolveEventIdFromParam(eventRouteParam);
   const { events, currentUser, tickets, joinWaitlist } = ctx;
   const navigate = useNavigate();
   const [cart, setCart] = useState({});
@@ -1782,14 +1874,14 @@ function EventPage({ ctx }) {
     if (!currentUser) {
       setGuestModal(true); // collect guest details instead of forcing login
     } else {
-      navigate(`/event/${eventId}/checkout`);
+      navigate(`${eventPath(event)}/checkout`);
     }
   };
 
   const handleGuestProceed = (guestInfo) => {
     sessionStorage.setItem("guestInfo", JSON.stringify(guestInfo));
     setGuestModal(false);
-    navigate(`/event/${eventId}/checkout`);
+    navigate(`${eventPath(event)}/checkout`);
   };
 
   return (
@@ -1797,7 +1889,7 @@ function EventPage({ ctx }) {
       {/* Top bar */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20, padding:"0 8px" }}>
         <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, padding:0 }}>← Back</button>
-<ShareButton url={window.location.href} />
+<ShareButton url={`${window.location.origin}${eventPath(event)}`} />
       </div>
 
       {/* Hero image */}
@@ -1842,7 +1934,7 @@ function EventPage({ ctx }) {
           )}
 
           {/* Reviews preview */}
-          <EventReviewsPreview eventId={event.id} currentUser={ctx.currentUser} tickets={ctx.tickets} submitReview={ctx.submitReview} />
+          <EventReviewsPreview eventId={event.id} event={event} currentUser={ctx.currentUser} tickets={ctx.tickets} submitReview={ctx.submitReview} />
         </div>
 
         {/* Right — ticket selector */}
@@ -2086,7 +2178,8 @@ function PaymentVerificationPage({ ctx }) {
 }
 
 function CheckoutPage({ ctx }) {
-  const { eventId } = useParams();
+  const { eventId: eventRouteParam } = useParams();
+  const eventId = resolveEventIdFromParam(eventRouteParam);
   const { events, currentUser, tickets, purchaseTickets, notify } = ctx;
   const navigate = useNavigate();
   const [agreed, setAgreed] = useState(false);
@@ -2099,9 +2192,10 @@ function CheckoutPage({ ctx }) {
   const buyer = currentUser || guestInfo;
 
   const event = events.find(e => e.id === eventId);
+  const eventDetailsPath = event ? eventPath(event) : eventPath(eventRouteParam || eventId);
 
-  if (!buyer) return <Navigate to={`/event/${eventId}`} />;
-  if (!event || Object.keys(cart).length === 0) return <Navigate to={`/event/${eventId}`} />;
+  if (!buyer) return <Navigate to={eventDetailsPath} />;
+  if (!event || Object.keys(cart).length === 0) return <Navigate to={eventDetailsPath} />;
 
   const selections = event.tiers.filter(t => (cart[t.id]||0) > 0);
   const selectedCount = selections.reduce((sum, tier) => sum + Number(cart[tier.id] || 0), 0);
@@ -2221,6 +2315,8 @@ function CheckoutPage({ ctx }) {
         custom_fields: [
           { display_name:"Customer", variable_name:"customer", value: buyer.name },
           { display_name:"Event", variable_name:"event", value: event.title },
+          { display_name:"Event ID", variable_name:"event_id", value: event.id },
+          { display_name:"Organizer ID", variable_name:"organizer_id", value: event.organizer || "" },
         ]
       },
       callback: (response) => {
@@ -2468,7 +2564,7 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { organizerEvents, tickets, currentUser, deleteEvent, refreshEvents } = ctx;
+  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, deleteEvent, refreshEvents } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [view, setView] = useState("list"); // list | calendar | payouts
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
@@ -2534,6 +2630,18 @@ function DashboardPage({ ctx }) {
   }, [currentUser.uid]);
 
   const handleDelete = async (event) => { await deleteEvent(event.id); setConfirmDelete(null); };
+  const formatNotifTime = (value) => {
+    if (!value) return "";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString("en-NG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  };
+  const notifMeta = (item) => {
+    if (item.type === "ticket_sold") return { icon: "fa-solid fa-ticket", color: "var(--green)" };
+    if (item.type === "charge_failed") return { icon: "fa-solid fa-circle-exclamation", color: "var(--red)" };
+    if (item.type === "refund") return { icon: "fa-solid fa-rotate-left", color: "var(--muted)" };
+    return { icon: "fa-solid fa-bell", color: "var(--gold)" };
+  };
 
   // Calendar helpers
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -2586,6 +2694,69 @@ function DashboardPage({ ctx }) {
         </div>
       </div>
 
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:"16px 18px", marginBottom:24 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, gap:10, flexWrap:"wrap" }}>
+          <div style={{ fontWeight:700, fontSize:14, letterSpacing:1 }}>LIVE ACTIVITY</div>
+          <span style={{ fontSize:11, color:"var(--muted)" }}>Updates from webhook events</span>
+        </div>
+        {organizerNotifications?.length ? (
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {organizerNotifications.slice(0, 5).map(item => {
+              const meta = notifMeta(item);
+              return (
+                <div key={item.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 12px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, minWidth:0 }}>
+                    <i className={meta.icon} style={{ color: meta.color, fontSize:13, flexShrink:0 }} />
+                    <div style={{ fontSize:13, color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.title || "New activity"}</div>
+                  </div>
+                  <div style={{ fontSize:11, color:"var(--muted)", whiteSpace:"nowrap" }}>{formatNotifTime(item.createdAt)}</div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ fontSize:13, color:"var(--muted)" }}>No live webhook activity yet.</div>
+        )}
+      </div>
+
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:"16px 18px", marginBottom:24 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, gap:10, flexWrap:"wrap" }}>
+          <div style={{ fontWeight:700, fontSize:14, letterSpacing:1 }}>ATTENDEE PAYMENTS</div>
+          <span style={{ fontSize:11, color:"var(--muted)" }}>Live from webhook, no CSV required</span>
+        </div>
+        {organizerAttendeeFeed?.length ? (
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+              <thead>
+                <tr style={{ background:"var(--bg3)" }}>
+                  {["Attendee", "Email", "Event", "Amount", "Status", "Time"].map(h => (
+                    <th key={h} style={{ padding:"9px 10px", textAlign:"left", color:"var(--muted)", fontWeight:600, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{h.toUpperCase()}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {organizerAttendeeFeed.slice(0, 20).map((row, i) => (
+                  <tr key={row.id} style={{ borderTop:"1px solid var(--border)", background: i % 2 ? "rgba(255,255,255,0.01)" : "transparent" }}>
+                    <td style={{ padding:"10px", fontWeight:600, whiteSpace:"nowrap" }}>{row.attendeeName || "Attendee"}</td>
+                    <td style={{ padding:"10px", color:"var(--muted)", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.attendeeEmail || "-"}</td>
+                    <td style={{ padding:"10px", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.eventTitle || "-"}</td>
+                    <td style={{ padding:"10px", fontFamily:"IBM Plex Mono", color:"var(--gold)", whiteSpace:"nowrap" }}>{fmt(Number(row.amount || 0))}</td>
+                    <td style={{ padding:"10px", whiteSpace:"nowrap" }}>
+                      <span style={{ background: row.status === "paid" ? "rgba(61,220,132,0.14)" : "rgba(232,64,64,0.12)", color: row.status === "paid" ? "var(--green)" : "var(--red)", borderRadius:100, padding:"2px 8px", fontSize:10, fontWeight:700 }}>
+                        {(row.status || "unknown").toUpperCase()}
+                      </span>
+                    </td>
+                    <td style={{ padding:"10px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatNotifTime(row.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div style={{ fontSize:13, color:"var(--muted)" }}>No attendee payment records yet.</div>
+        )}
+      </div>
+
       {/* Stats */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:40 }}>
         {[
@@ -2628,7 +2799,7 @@ function DashboardPage({ ctx }) {
                 <div key={day} style={{ minHeight:80, borderRight:"1px solid var(--border)", borderBottom:"1px solid var(--border)", padding:6, background: isToday?"rgba(245,166,35,0.05)":"transparent" }}>
                   <div style={{ fontSize:13, fontWeight: isToday?700:400, color: isToday?"var(--gold)":"var(--text)", marginBottom:4, width:24, height:24, borderRadius:"50%", background: isToday?"rgba(245,166,35,0.15)":"transparent", display:"flex", alignItems:"center", justifyContent:"center" }}>{day}</div>
                   {dayEvents.map(e => (
-                    <Link key={e.id} to={`/event/${e.id}`}
+        <Link key={e.id} to={eventPath(e)}
                       style={{ display:"block", background: e.theme&&THEMES[e.theme]?THEMES[e.theme]:"var(--gold)", backgroundSize:"cover", color:"#000", fontSize:10, fontWeight:700, padding:"2px 6px", borderRadius:4, marginBottom:3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", textDecoration:"none" }}
                       title={e.title}
                     >{e.title}</Link>
@@ -2824,7 +2995,7 @@ function DashboardPage({ ctx }) {
                   <div style={{ fontSize:12, color:"var(--muted)" }}>revenue</div>
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                  <Link to={`/event/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
+                  <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
                   <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>
                   <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>
                   <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
@@ -3153,7 +3324,7 @@ function CreateEventPage({ ctx }) {
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
-    if (ev) navigate(`/event/${ev.id}`);
+    if (ev) navigate(eventPath(ev));
     setSaving(false);
   };
   return <EventForm initialForm={blank} onSubmit={handle} saving={saving} submitLabel="PUBLISH EVENT" pageTitle="CREATE EVENT" />;
@@ -4509,7 +4680,7 @@ function ProfilePage({ ctx }) {
 }
 
 // ── Event Reviews Preview (embedded in EventPage) ──────────────────────────
-function EventReviewsPreview({ eventId, currentUser, tickets, submitReview }) {
+function EventReviewsPreview({ eventId, event, currentUser, tickets, submitReview }) {
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -4619,7 +4790,7 @@ function EventReviewsPreview({ eventId, currentUser, tickets, submitReview }) {
             </div>
           ))}
           {reviews.length > 5 && (
-            <Link to={`/event/${eventId}/reviews`} style={{ color:"var(--gold)", fontSize:13, textAlign:"center", display:"block", paddingTop:8 }}>See all {reviews.length} reviews →</Link>
+            <Link to={`${eventPath(event || eventId)}/reviews`} style={{ color:"var(--gold)", fontSize:13, textAlign:"center", display:"block", paddingTop:8 }}>See all {reviews.length} reviews →</Link>
           )}
         </div>
       )}
@@ -4629,7 +4800,8 @@ function EventReviewsPreview({ eventId, currentUser, tickets, submitReview }) {
 
 // ── Full Reviews Page (/event/:eventId/reviews) ───────────────────────────
 function ReviewsPage({ ctx }) {
-  const { eventId } = useParams();
+  const { eventId: eventRouteParam } = useParams();
+  const eventId = resolveEventIdFromParam(eventRouteParam);
   const { events, currentUser, tickets, submitReview } = ctx;
   const navigate = useNavigate();
   const event = events.find(e => e.id === eventId);
@@ -4657,7 +4829,7 @@ function ReviewsPage({ ctx }) {
 
   return (
     <div style={{ maxWidth:800, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
-      <button onClick={() => navigate(`/event/${eventId}`)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, marginBottom:24 }}>← Back to Event</button>
+      <button onClick={() => navigate(eventPath(event || eventId))} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:14, marginBottom:24 }}>← Back to Event</button>
 
       <h1 style={{ fontSize:48, marginBottom:4 }}>REVIEWS</h1>
       <div style={{ color:"var(--muted)", fontSize:14, marginBottom:32 }}>{event.title}</div>
@@ -5353,10 +5525,10 @@ function ContactPage() {
       {/* Contact info cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:16, marginTop:48 }}>
         {[
-          { icon:<i className="fa-solid fa-envelope" />, title:"Email Support", detail:"davidbibiresanmi@gmail.com", sub:"Response within 24 hours" },
+          { icon:<i className="fa-solid fa-envelope" />, title:"Email Support", detail:"stageproticketingco@gmail.com", sub:"Response within 24 hours" },
           { icon:<i className="fa-solid fa-building" />, title:"Office", detail:"Victoria Island, Lagos", sub:"Nigeria" },
           { icon:<i className="fa-solid fa-clock" />, title:"Support Hours", detail:"Mon – Fri, 9am – 6pm", sub:"West Africa Time (WAT)" },
-          { icon:<i className="fa-solid fa-bolt" />, title:"Urgent Issues", detail:"davidbibiresanmi@gmail.com", sub:"For time-sensitive event matters" },
+          { icon:<i className="fa-solid fa-bolt" />, title:"Urgent Issues", detail:"stageproticketingco@gmail.com", sub:"For time-sensitive event matters" },
         ].map(c => (
           <div key={c.title} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"20px 24px" }}>
             <div style={{ fontSize:28, marginBottom:10 }}>{c.icon}</div>
@@ -5393,6 +5565,7 @@ function GuestTicketLookupPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token: accessToken }),
         });
+        
         const data = await res.json();
         if (!active) return;
 
@@ -5607,4 +5780,3 @@ function GuestTicketLookupPage() {
     </div>
   );
 }
-
