@@ -2,14 +2,20 @@ import { getAdminAuth, getAdminDb } from "../server/firebaseAdmin.js";
 
 async function authorizeAdmin(req, db) {
   const authHeader = String(req.headers.authorization || "");
-  if (!authHeader.startsWith("Bearer ")) return { ok: false, status: 401, msg: "Missing bearer token" };
+  if (!authHeader.startsWith("Bearer ")) {
+    return { ok: false, status: 401, msg: "Missing bearer token" };
+  }
+
   const token = authHeader.slice(7).trim();
+
   try {
     const decoded = await getAdminAuth().verifyIdToken(token);
     const userSnap = await db.collection("users").doc(decoded.uid).get();
+
     if (!userSnap.exists || userSnap.data()?.role !== "admin") {
       return { ok: false, status: 403, msg: "Admin access required" };
     }
+
     return { ok: true, uid: decoded.uid };
   } catch {
     return { ok: false, status: 401, msg: "Invalid bearer token" };
@@ -23,7 +29,9 @@ export default async function handler(req, res) {
 
   const db = getAdminDb();
   const authz = await authorizeAdmin(req, db);
-  if (!authz.ok) return res.status(authz.status).json({ ok: false, msg: authz.msg });
+  if (!authz.ok) {
+    return res.status(authz.status).json({ ok: false, msg: authz.msg });
+  }
 
   try {
     const [eventsSnap, ticketsSnap] = await Promise.all([
@@ -32,13 +40,15 @@ export default async function handler(req, res) {
     ]);
 
     const eventTierMap = new Map();
-    eventsSnap.docs.forEach(d => {
-      const event = d.data() || {};
+    eventsSnap.docs.forEach((docSnap) => {
+      const event = docSnap.data() || {};
       const byName = new Map();
-      (event.tiers || []).forEach(t => {
-        if (t?.name) byName.set(String(t.name).trim().toLowerCase(), t.id);
+      (event.tiers || []).forEach((tier) => {
+        if (tier?.name) {
+          byName.set(String(tier.name).trim().toLowerCase(), tier.id);
+        }
       });
-      eventTierMap.set(d.id, byName);
+      eventTierMap.set(docSnap.id, byName);
     });
 
     let scanned = 0;
@@ -48,21 +58,24 @@ export default async function handler(req, res) {
     let batchCount = 0;
     const flushes = [];
 
-    for (const tDoc of ticketsSnap.docs) {
+    for (const ticketDoc of ticketsSnap.docs) {
       scanned++;
-      const t = tDoc.data() || {};
-      if (t.tierId || !t.eventId || !t.tierName) {
+      const ticket = ticketDoc.data() || {};
+
+      if (ticket.tierId || !ticket.eventId || !ticket.tierName) {
         skipped++;
         continue;
       }
-      const tiersByName = eventTierMap.get(t.eventId);
-      const matchedTierId = tiersByName?.get(String(t.tierName).trim().toLowerCase());
+
+      const tiersByName = eventTierMap.get(ticket.eventId);
+      const matchedTierId = tiersByName?.get(String(ticket.tierName).trim().toLowerCase());
+
       if (!matchedTierId) {
         skipped++;
         continue;
       }
 
-      batch.update(tDoc.ref, { tierId: matchedTierId });
+      batch.update(ticketDoc.ref, { tierId: matchedTierId });
       batchCount++;
       updated++;
 
@@ -73,7 +86,10 @@ export default async function handler(req, res) {
       }
     }
 
-    if (batchCount > 0) flushes.push(batch.commit());
+    if (batchCount > 0) {
+      flushes.push(batch.commit());
+    }
+
     await Promise.all(flushes);
 
     return res.status(200).json({ ok: true, scanned, updated, skipped });
