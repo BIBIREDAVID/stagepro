@@ -139,6 +139,12 @@ export default async function handler(req, res) {
     } catch (fallbackErr) {
       console.error("Ticket access direct fallback error:", fallbackErr);
     }
-    return res.status(500).json({ ok: false, msg: "Could not send the access email" });
+    return res.status(500).json({
+      ok: false,
+      msg: "Could not send the access email",
+      debug: process.env.NODE_ENV === "production"
+        ? (err?.message || "Unknown server error")
+        : String(err),
+    });
   }
 }
