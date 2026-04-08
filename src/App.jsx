@@ -1319,7 +1319,6 @@ export default function App() {
   const updateEvent = async (eventId, eventData) => {
     try {
       const currentEvent = events.find(e => e.id === eventId) || organizerEvents.find(e => e.id === eventId) || null;
-      const prevEmails = Array.isArray(currentEvent?.coOrganizerEmails) ? currentEvent.coOrganizerEmails : [];
       const requestedCoEmails = parseEmailList(eventData.coOrganizerEmailsText || "");
       const resolved = await resolveCoOrganizerUids(requestedCoEmails);
       const data = {
@@ -1335,12 +1334,11 @@ export default function App() {
       delete data.coOrganizerEmailsText;
       await updateDoc(doc(db, "events", eventId), data);
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...data } : e));
-      const newlyAddedEmails = requestedCoEmails.filter(email => !prevEmails.includes(email));
-      if (newlyAddedEmails.length > 0) {
+      if (requestedCoEmails.length > 0) {
         const inviteResult = await notifyCoOrganizers({
           eventId,
           eventTitle: data.title || currentEvent?.title || "Event",
-          recipients: newlyAddedEmails.map(email => ({
+          recipients: requestedCoEmails.map(email => ({
             email,
             uid: (resolved.resolvedUsers.find(item => item.email === email) || {}).uid || null,
           })),

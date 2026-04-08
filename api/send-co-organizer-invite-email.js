@@ -106,9 +106,27 @@ export default async function handler(req, res) {
 
     const sent = emailResults.filter((r) => r.status === "fulfilled").length;
     const failed = emailResults.filter((r) => r.status === "rejected").length;
-    return res.status(200).json({ ok: true, sent, failed, inAppSent, inAppFailed });
+    const firstEmailError = emailResults.find((r) => r.status === "rejected");
+    const firstEmailErrorMsg = firstEmailError?.status === "rejected"
+      ? String(firstEmailError.reason?.message || "Unknown email error")
+      : "";
+
+    const anyDelivered = sent > 0 || inAppSent > 0;
+    if (!anyDelivered) {
+      return res.status(500).json({
+        ok: false,
+        msg: "No co-organizer notifications were delivered",
+        sent,
+        failed,
+        inAppSent,
+        inAppFailed,
+        debug: firstEmailErrorMsg || "No invite was delivered",
+      });
+    }
+
+    return res.status(200).json({ ok: true, sent, failed, inAppSent, inAppFailed, debug: firstEmailErrorMsg || "" });
   } catch (err) {
     console.error("Co-organizer invite email error:", err);
-    return res.status(500).json({ ok: false, msg: "Could not send invite emails" });
+    return res.status(500).json({ ok: false, msg: "Could not send invite emails", debug: String(err?.message || "") });
   }
 }
