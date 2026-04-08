@@ -305,6 +305,38 @@ const getEventBg = (event) => {
   return "linear-gradient(135deg,#1a1a1a,#2a2a2a)";
 };
 
+const DEFAULT_EVENT_IMAGE = "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=1200&q=80";
+
+const normalizeEventImageUrl = (raw) => {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  try {
+    const u = new URL(value);
+    const host = u.hostname.toLowerCase();
+    if (host === "imgur.com" || host === "www.imgur.com") {
+      const id = u.pathname.replace(/^\/+/, "").split("/")[0];
+      if (id) return `https://i.imgur.com/${id}.jpg`;
+    }
+    if (host === "i.imgur.com") {
+      const path = u.pathname || "";
+      if (!/\.(png|jpe?g|webp|gif)$/i.test(path)) {
+        return `https://i.imgur.com${path}.jpg`;
+      }
+    }
+    return value;
+  } catch {
+    return value;
+  }
+};
+
+const getEventImageSrc = (event = {}) => {
+  const normalized = normalizeEventImageUrl(event?.image);
+  const base = normalized || DEFAULT_EVENT_IMAGE;
+  const stamp = event?.updatedAt || event?.createdAt || "";
+  if (!stamp) return base;
+  return base.includes("?") ? `${base}&v=${encodeURIComponent(stamp)}` : `${base}?v=${encodeURIComponent(stamp)}`;
+};
+
 const fmtDate = (d) =>
   new Date(d).toLocaleDateString("en-NG", {
     weekday: "short", year: "numeric", month: "long", day: "numeric",
@@ -361,26 +393,30 @@ const calculatePayoutSummary = (tickets) => {
 const sendTicketEmail = async ({ toEmail, toName, ticket, eventImage, themeColor, organizerName }) => {
   try {
     const ticketUrl = `${window.location.origin}/ticket/${ticket.id}`;
-    const amountPaid = ticket.price === 0 ? "FREE" : `₦${Number(ticket.price).toLocaleString()}`;
-    await fetch("/api/send-ticket-email", {
+    const amountPaid = ticket.price === 0 ? "FREE" : `NGN ${Number(ticket.price).toLocaleString()}`;
+    const res = await fetch("/api/send-ticket-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         toEmail,
         toName,
-        eventTitle:    ticket.eventTitle,
-        eventDate:     new Date(ticket.eventDate).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }),
-        eventTime:     ticket.eventTime || "See event page",
-        eventVenue:    ticket.venue,
-        tierName:      ticket.tierName,
+        eventTitle: ticket.eventTitle,
+        eventDate: new Date(ticket.eventDate).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }),
+        eventTime: ticket.eventTime || "See event page",
+        eventVenue: ticket.venue,
+        tierName: ticket.tierName,
         amountPaid,
         ticketUrl,
-        ticketId:      ticket.id,
-        eventImage:    eventImage || null,
-        themeColor:    themeColor || "#f5a623",
+        ticketId: ticket.id,
+        eventImage: eventImage || null,
+        themeColor: themeColor || "#f5a623",
         organizerName: organizerName || "StagePro",
       }),
     });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || payload?.success !== true) {
+      console.warn("Ticket email failed (non-critical):", payload?.error || "Request failed", payload?.debug || "");
+    }
   } catch (err) {
     console.warn("Ticket email failed (non-critical):", err);
   }
@@ -1152,7 +1188,6 @@ export default function App() {
           recipients: uniqueRecipients.map(r => ({ email: r.email, uid: r.uid || null })),
           senderName: currentUser?.name || "StagePro Organizer",
           origin: window.location.origin,
-          sendEmail: false,
         }),
       });
       const payload = await res.json().catch(() => ({}));
@@ -1276,16 +1311,19 @@ export default function App() {
 
   const createEvent = async (eventData) => {
     try {
+      const nowIso = new Date().toISOString();
       const requestedCoEmails = parseEmailList(eventData.coOrganizerEmailsText || "");
       const resolved = await resolveCoOrganizerUids(requestedCoEmails);
       const data = {
         ...eventData,
-        image: eventData.image || "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=800&q=80",
+        image: normalizeEventImageUrl(eventData.image) || DEFAULT_EVENT_IMAGE,
         organizer: currentUser.uid,
         coOrganizers: resolved.uids,
         coOrganizerEmails: requestedCoEmails,
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
+        createdAt: nowIso,
+        updatedAt: nowIso,
         tiers: eventData.tiers.map((t, i) => ({
           id: `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: 0,
         })),
@@ -1303,7 +1341,7 @@ export default function App() {
         })),
       });
       if (inviteResult?.ok && !inviteResult?.skipped) {
-        notify(`Co-organizer alerts sent in-app: ${inviteResult.inAppSent}.`);
+        notify(`Co-organizer alerts sent: email ${inviteResult.sent}, in-app ${inviteResult.inAppSent}.`);
       } else if (!inviteResult?.ok) {
         notify(`Co-organizer invite delivery issue: ${inviteResult?.msg || "Could not send notifications."}`, "error");
       }
@@ -1326,10 +1364,12 @@ export default function App() {
       const resolved = await resolveCoOrganizerUids(requestedCoEmails);
       const data = {
         ...eventData,
+        image: normalizeEventImageUrl(eventData.image),
         coOrganizers: resolved.uids,
         coOrganizerEmails: requestedCoEmails,
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
+        updatedAt: new Date().toISOString(),
         tiers: eventData.tiers.map((t, i) => ({
           id: t.id || `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: t.sold||0,
         })),
@@ -1347,7 +1387,7 @@ export default function App() {
           })),
         });
         if (inviteResult?.ok && !inviteResult?.skipped) {
-          notify(`Co-organizer alerts sent in-app: ${inviteResult.inAppSent}.`);
+          notify(`Co-organizer alerts sent: email ${inviteResult.sent}, in-app ${inviteResult.inAppSent}.`);
         } else if (!inviteResult?.ok) {
           notify(`Co-organizer invite delivery issue: ${inviteResult?.msg || "Could not send notifications."}`, "error");
         }
@@ -1986,7 +2026,15 @@ function EventCard({ event, index }) {
     >
       <div style={{ height:200, overflow:"hidden", position:"relative", background: hasImage?"var(--bg3)":bg, backgroundSize:"cover", backgroundPosition:"center" }}>
         {hasImage
-          ? <img src={event.image} alt={event.title} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+          ? <img
+              src={getEventImageSrc(event)}
+              alt={event.title}
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = DEFAULT_EVENT_IMAGE;
+              }}
+              style={{ width:"100%", height:"100%", objectFit:"cover" }}
+            />
           : <div style={{ position:"absolute", inset:0, background:bg }} />
         }
         <div style={{ position:"absolute", top:12, left:12, background:"var(--gold)", color:"#000", fontSize:11, fontWeight:700, padding:"4px 10px", borderRadius:100 }}>{event.category?.toUpperCase()}</div>
@@ -2226,7 +2274,15 @@ function EventPage({ ctx }) {
       {/* Hero image */}
       <div style={{ borderRadius:16, overflow:"hidden", marginBottom:20, position:"relative" }}>
         {event.image
-          ? <img src={event.image} alt={event.title} style={{ width:"100%", height:"min(360px, 55vw)", objectFit:"cover", display:"block" }} />
+          ? <img
+              src={getEventImageSrc(event)}
+              alt={event.title}
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = DEFAULT_EVENT_IMAGE;
+              }}
+              style={{ width:"100%", height:"min(360px, 55vw)", objectFit:"cover", display:"block" }}
+            />
           : <div style={{ width:"100%", height:"min(360px, 55vw)", background: getEventBg(event) }} />
         }
         <div style={{ position:"absolute", inset:0, background:"linear-gradient(to top, rgba(8,8,8,0.92) 0%, transparent 55%)" }} />
@@ -3558,7 +3614,15 @@ function DashboardPage({ ctx }) {
           return (
             <div key={event.id} style={{ padding:"20px 24px", borderBottom: i<myEvents.length-1?"1px solid var(--border)":"none" }}>
               <div style={{ display:"flex", alignItems:"center", gap:20, flexWrap:"wrap" }}>
-                <img src={event.image} style={{ width:60, height:60, objectFit:"cover", borderRadius:8, flexShrink:0 }} alt="" />
+                <img
+                  src={getEventImageSrc(event)}
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = DEFAULT_EVENT_IMAGE;
+                  }}
+                  style={{ width:60, height:60, objectFit:"cover", borderRadius:8, flexShrink:0 }}
+                  alt=""
+                />
                 <div style={{ flex:1, minWidth:160 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:2 }}>
                     <div style={{ fontWeight:600 }}>{event.title}</div>
@@ -4287,41 +4351,44 @@ function AnalyticsPage({ ctx }) {
     try {
       const userIds = [...new Set(eventTickets.map(t => t.userId))];
 
-      // 1 — Save in-app notification to Firestore
       await addDoc(collection(db, "notifications"), {
-        eventId, eventTitle: event.title,
-        title, body,
+        eventId,
+        eventTitle: event.title,
+        title,
+        body,
         sentBy: currentUser.uid,
         sentAt: new Date().toISOString(),
         targetUsers: userIds,
         readBy: [],
       });
 
-      // 2 — Build recipient list with emails from tickets
       const recipientMap = {};
-      eventTickets.forEach(t => {
+      eventTickets.forEach((t) => {
         if (t.userEmail && !recipientMap[t.userEmail]) {
           recipientMap[t.userEmail] = { email: t.userEmail, name: t.userName };
         }
       });
       const recipients = Object.values(recipientMap);
 
-      // 3 — Send email to all ticket holders
       if (recipients.length > 0) {
-        await fetch("/api/send-notification-email", {
+        const emailRes = await fetch("/api/send-notification-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             recipients,
             eventTitle: event.title,
-            eventDate: event.date ? new Date(event.date).toLocaleDateString("en-NG", { weekday:"long", year:"numeric", month:"long", day:"numeric" }) : "",
+            eventDate: event.date ? new Date(event.date).toLocaleDateString("en-NG", { weekday: "long", year: "numeric", month: "long", day: "numeric" }) : "",
             eventVenue: event.venue,
             notifTitle: title,
             notifBody: body,
             eventImage: event.image || null,
-            themeColor: { purple:"#6a11cb", fire:"#f83600", ocean:"#0575e6", forest:"#134e5e", gold:"#f7971e", rose:"#f953c6", midnight:"#232526", neon:"#00f260", sunset:"#f857a4", teal:"#11998e", royal:"#141e30" }[event.theme] || "#f5a623",
+            themeColor: { purple: "#6a11cb", fire: "#f83600", ocean: "#0575e6", forest: "#134e5e", gold: "#f7971e", rose: "#f953c6", midnight: "#232526", neon: "#00f260", sunset: "#f857a4", teal: "#11998e", royal: "#141e30" }[event.theme] || "#f5a623",
           }),
         });
+        const emailPayload = await emailRes.json().catch(() => ({}));
+        if (!emailRes.ok) {
+          throw new Error(emailPayload?.error || "Could not send attendee emails");
+        }
       }
 
       setNotifStatus("sent");
@@ -4362,7 +4429,15 @@ function AnalyticsPage({ ctx }) {
 
       {/* Header */}
       <div style={{ display:"flex", gap:20, alignItems:"center", marginBottom:40, flexWrap:"wrap" }}>
-        <img src={event.image} style={{ width:80, height:80, objectFit:"cover", borderRadius:12, flexShrink:0 }} alt="" />
+        <img
+          src={getEventImageSrc(event)}
+          onError={(e) => {
+            e.currentTarget.onerror = null;
+            e.currentTarget.src = DEFAULT_EVENT_IMAGE;
+          }}
+          style={{ width:80, height:80, objectFit:"cover", borderRadius:12, flexShrink:0 }}
+          alt=""
+        />
         <div>
           <div style={{ fontSize:11, letterSpacing:3, color:"var(--gold)", marginBottom:4 }}>ANALYTICS</div>
           <h1 style={{ fontSize:"clamp(28px,5vw,48px)", lineHeight:1 }}>{event.title}</h1>
@@ -6579,6 +6654,10 @@ function GuestTicketLookupPage() {
     </div>
   );
 }
+
+
+
+
 
 
 
