@@ -19,6 +19,14 @@ async function fetchTicketCountByEmail(email) {
   return snap.size;
 }
 
+async function fetchTicketsByEmail(email) {
+  const db = getAdminDb();
+  const snap = await db.collection("tickets").where("userEmail", "==", email.toLowerCase()).get();
+  return snap.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, msg: "Method not allowed" });
@@ -27,9 +35,6 @@ export default async function handler(req, res) {
   const GMAIL_USER = process.env.GMAIL_USER;
   const GMAIL_PASS = process.env.GMAIL_PASS;
   const ACCESS_SECRET = process.env.TICKET_ACCESS_SECRET;
-  if (!GMAIL_USER || !GMAIL_PASS || !ACCESS_SECRET) {
-    return res.status(500).json({ ok: false, msg: "Ticket access email is not configured" });
-  }
 
   const email = String(req.body?.email || "").trim().toLowerCase();
   const originFromBody = String(req.body?.origin || "").trim();
@@ -41,6 +46,17 @@ export default async function handler(req, res) {
     const ticketCount = await fetchTicketCountByEmail(email);
     if (ticketCount === 0) {
       return res.status(200).json({ ok: true, msg: "If tickets exist for this email, a secure link has been sent." });
+    }
+
+    if (!GMAIL_USER || !GMAIL_PASS || !ACCESS_SECRET) {
+      const tickets = await fetchTicketsByEmail(email);
+      return res.status(200).json({
+        ok: true,
+        mode: "direct",
+        email,
+        tickets,
+        msg: "Email delivery is currently unavailable. Showing your tickets directly.",
+      });
     }
 
     const payload = {
@@ -106,9 +122,23 @@ export default async function handler(req, res) {
       html,
     });
 
-    return res.status(200).json({ ok: true, msg: "If tickets exist for this email, a secure link has been sent." });
+    return res.status(200).json({ ok: true, mode: "email", msg: "If tickets exist for this email, a secure link has been sent." });
   } catch (err) {
     console.error("Ticket access link error:", err);
+    try {
+      const tickets = await fetchTicketsByEmail(email);
+      if (tickets.length > 0) {
+        return res.status(200).json({
+          ok: true,
+          mode: "direct",
+          email,
+          tickets,
+          msg: "We could not send email right now. Showing your tickets directly.",
+        });
+      }
+    } catch (fallbackErr) {
+      console.error("Ticket access direct fallback error:", fallbackErr);
+    }
     return res.status(500).json({ ok: false, msg: "Could not send the access email" });
   }
 }

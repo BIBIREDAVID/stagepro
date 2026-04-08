@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     eventTitle, eventDate, eventTime, eventVenue,
     tierName, amountPaid,
     ticketUrl, ticketId,
-    eventImage, themeColor, organizerName,
+    themeColor, organizerName,
   } = req.body;
 
   if (!toEmail || !eventTitle || !ticketUrl) {
@@ -30,6 +30,8 @@ export default async function handler(req, res) {
   const isFree = amountPaid === "FREE" || amountPaid === "₦0";
   const accent = themeColor || "#f5a623";
   const orgName = organizerName || "StagePro";
+  const APP_BASE_URL = (process.env.PUBLIC_APP_URL || "https://stagepro-phi.vercel.app").replace(/\/+$/, "");
+  const headerImage = process.env.EMAIL_HEADER_URL || `${APP_BASE_URL}/email-header-motion-2026.jpg`;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -43,7 +45,7 @@ export default async function handler(req, res) {
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#111111;border-radius:20px;overflow:hidden;border:1px solid #2a2a2a;">
 
-        ${eventImage ? `<tr><td style="padding:0;line-height:0;"><img src="${eventImage}" alt="${eventTitle}" width="600" style="display:block;width:100%;max-height:280px;object-fit:cover;" /></td></tr>` : ""}
+        <tr><td style="padding:0;line-height:0;"><img src="${headerImage}" alt="${eventTitle}" width="600" style="display:block;width:100%;max-height:280px;object-fit:cover;" /></td></tr>
 
         <tr>
           <td style="background:#1a1a1a;padding:28px 40px;border-bottom:2px solid ${accent};">
@@ -142,3 +144,4 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
+

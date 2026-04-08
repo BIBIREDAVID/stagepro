@@ -5,9 +5,17 @@ function verifyToken(token, secret) {
   const [body, signature] = String(token || "").split(".");
   if (!body || !signature) return null;
   const expected = crypto.createHmac("sha256", secret).update(body).digest("base64url");
-  const isValid = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return null;
+  const isValid = crypto.timingSafeEqual(sigBuf, expBuf);
   if (!isValid) return null;
-  const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  let payload = null;
+  try {
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
   if (!payload?.email || !payload?.exp || Date.now() > Number(payload.exp)) return null;
   return payload;
 }

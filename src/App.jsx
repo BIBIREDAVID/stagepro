@@ -83,7 +83,7 @@ const logToSheets = async (payload) => {
 };
 
 // ── CSV Download ───────────────────────────────────────────────────────────
-function downloadCSVWithEmail(event, tickets) {
+function downloadCSVWithEmail(event, myTickets) {
   const eventTickets = tickets.filter(t => t.eventId === event.id);
   if (eventTickets.length === 0) { alert("No tickets sold for this event yet."); return; }
   const headers = ["Ticket ID", "Event", "Tier", "Buyer Name", "Price (₦)", "Date Purchased", "Used"];
@@ -1304,7 +1304,7 @@ export default function App() {
           <Route path="/tickets" element={currentUser ? <MyTicketsPage ctx={ctx} /> : <Navigate to="/login" />} />
           <Route path="/ticket/:ticketId" element={<TicketPage ctx={ctx} />} />
           <Route path="/find-tickets" element={<GuestTicketLookupPage />} />
-          <Route path="/dashboard" element={currentUser?.role === "organizer" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
@@ -2656,6 +2656,15 @@ function MyTicketsPage({ ctx }) {
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
   const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, deleteEvent, refreshEvents } = ctx;
+  const [searchParams] = useSearchParams();
+  const adminOrganizerId = currentUser?.role === "admin" ? (searchParams.get("organizerId") || "").trim() : "";
+  const isAdminView = currentUser?.role === "admin" && Boolean(adminOrganizerId);
+  const canManage = currentUser?.role === "organizer" && !isAdminView;
+  const [viewedOrganizer, setViewedOrganizer] = useState(null);
+  const [adminEvents, setAdminEvents] = useState([]);
+  const [adminTickets, setAdminTickets] = useState([]);
+  const [adminNotifications, setAdminNotifications] = useState([]);
+  const [adminAttendeeFeed, setAdminAttendeeFeed] = useState([]);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [compModalEvent, setCompModalEvent] = useState(null);
   const [compTierId, setCompTierId] = useState("");
@@ -2667,9 +2676,138 @@ function DashboardPage({ ctx }) {
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const [payoutRecords, setPayoutRecords] = useState([]);
   const [webhookCopyState, setWebhookCopyState] = useState("idle");
-  const myEvents = organizerEvents;
+  const activeOrganizer = isAdminView ? viewedOrganizer : currentUser;
+  const activeEvents = isAdminView ? adminEvents : organizerEvents;
+  const activeTickets = isAdminView ? adminTickets : tickets;
+  const activeNotifications = isAdminView ? adminNotifications : organizerNotifications;
+  const activeAttendeeFeed = isAdminView ? adminAttendeeFeed : organizerAttendeeFeed;
+  const payoutOwnerId = isAdminView ? adminOrganizerId : currentUser.uid;
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setViewedOrganizer(null);
+      return;
+    }
+    const loadOrganizer = async () => {
+      try {
+        const snap = await getDoc(doc(db, "users", adminOrganizerId));
+        if (snap.exists()) setViewedOrganizer({ uid: snap.id, ...snap.data() });
+        else setViewedOrganizer({ uid: adminOrganizerId, name: "Organizer", email: "" });
+      } catch (err) {
+        console.error("Could not load selected organizer:", err);
+        setViewedOrganizer({ uid: adminOrganizerId, name: "Organizer", email: "" });
+      }
+    };
+    loadOrganizer();
+  }, [isAdminView, adminOrganizerId]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminEvents([]);
+      return;
+    }
+    const q = query(collection(db, "events"), where("organizer", "==", adminOrganizerId));
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => setAdminEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))),
+      (err) => {
+        console.error("Admin organizer events listener failed:", err);
+        setAdminEvents([]);
+      }
+    );
+    return () => unsub();
+  }, [isAdminView, adminOrganizerId]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminTickets([]);
+      return;
+    }
+    const eventIds = adminEvents.map(e => e.id);
+    if (eventIds.length === 0) {
+      setAdminTickets([]);
+      return;
+    }
+    const chunks = [];
+    for (let i = 0; i < eventIds.length; i += 30) chunks.push(eventIds.slice(i, i + 30));
+    const bucket = new Map();
+    const unsubs = chunks.map((chunk, idx) => {
+      const q = query(collection(db, "tickets"), where("eventId", "in", chunk));
+      return onSnapshot(
+        q,
+        (snap) => {
+          bucket.set(idx, snap.docs.map(d => ({ id: d.id, ...d.data() })));
+          const merged = [];
+          bucket.forEach(rows => merged.push(...rows));
+          setAdminTickets(merged);
+        },
+        (err) => {
+          console.error("Admin organizer tickets listener failed:", err);
+          bucket.set(idx, []);
+          const merged = [];
+          bucket.forEach(rows => merged.push(...rows));
+          setAdminTickets(merged);
+        }
+      );
+    });
+    return () => unsubs.forEach(unsub => unsub());
+  }, [isAdminView, adminEvents]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminNotifications([]);
+      return;
+    }
+    const q = query(
+      collection(db, "organizerNotifications"),
+      where("organizerId", "==", adminOrganizerId),
+      orderBy("createdAt", "desc"),
+      limit(50)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setAdminNotifications(rows.slice(0, 20));
+      },
+      (err) => {
+        console.error("Admin organizer notifications listener failed:", err);
+        setAdminNotifications([]);
+      }
+    );
+    return () => unsub();
+  }, [isAdminView, adminOrganizerId]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminAttendeeFeed([]);
+      return;
+    }
+    const q = query(
+      collection(db, "organizerAttendeeFeed"),
+      where("organizerId", "==", adminOrganizerId),
+      orderBy("createdAt", "desc"),
+      limit(80)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setAdminAttendeeFeed(rows.slice(0, 40));
+      },
+      (err) => {
+        console.error("Admin organizer attendee feed listener failed:", err);
+        setAdminAttendeeFeed([]);
+      }
+    );
+    return () => unsub();
+  }, [isAdminView, adminOrganizerId]);
+
+  const myEvents = activeEvents;
   const myEventIds = new Set(myEvents.map(e => e.id));
-  const myTickets = tickets.filter(t => myEventIds.has(t.eventId));
+  const myTickets = activeTickets.filter(t => myEventIds.has(t.eventId));
   const payoutSummary = calculatePayoutSummary(myTickets);
 
   const totalSold = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id), 0), 0);
@@ -2706,7 +2844,7 @@ function DashboardPage({ ctx }) {
   const netPayout = revenue - totalStagePro - totalPaystack;
   const totalPaidOut = payoutRecords.filter(p => p.status === "paid").reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const outstandingPayout = Math.max(0, Math.round(netPayout) - totalPaidOut);
-  const payoutDetails = currentUser.payoutDetails || {};
+  const payoutDetails = activeOrganizer?.payoutDetails || {};
   const hasPayoutDetails = Boolean(
     payoutDetails.bankName?.trim() &&
     payoutDetails.accountName?.trim() &&
@@ -2716,7 +2854,7 @@ function DashboardPage({ ctx }) {
   useEffect(() => {
     const loadPayouts = async () => {
       try {
-        const q = query(collection(db, "payouts"), where("organizerId", "==", currentUser.uid));
+        const q = query(collection(db, "payouts"), where("organizerId", "==", payoutOwnerId));
         const snap = await getDocs(q);
         setPayoutRecords(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(b.createdAt || b.paidAt || 0) - new Date(a.createdAt || a.paidAt || 0)));
       } catch (err) {
@@ -2725,9 +2863,13 @@ function DashboardPage({ ctx }) {
       }
     };
     loadPayouts();
-  }, [currentUser.uid]);
+  }, [payoutOwnerId]);
 
-  const handleDelete = async (event) => { await deleteEvent(event.id); setConfirmDelete(null); };
+  const handleDelete = async (event) => {
+    if (!canManage) return;
+    await deleteEvent(event.id);
+    setConfirmDelete(null);
+  };
   const openCompModal = (event) => {
     setCompModalEvent(event);
     setCompTierId(event?.tiers?.[0]?.id || "");
@@ -2741,6 +2883,7 @@ function DashboardPage({ ctx }) {
     setCompStatus({ type: "idle", msg: "" });
   };
   const submitCompFromDashboard = async () => {
+    if (!canManage) return;
     if (!compModalEvent?.id || !compTierId) return;
     setCompStatus({ type: "sending", msg: "Issuing complimentary tickets..." });
     const res = await issueComplimentaryTickets({
@@ -2801,9 +2944,31 @@ function DashboardPage({ ctx }) {
     }
   });
 
+  if (currentUser?.role === "admin" && !adminOrganizerId) {
+    return (
+      <div style={{ maxWidth:900, margin:"0 auto", padding:"56px 24px", textAlign:"center" }}>
+        <h1 style={{ fontSize:42, marginBottom:12 }}>Select an Organizer First</h1>
+        <p style={{ color:"var(--muted)", marginBottom:20 }}>
+          Open an organizer from Admin Control to view their dashboard data.
+        </p>
+        <Link to="/admin" style={{ background:"var(--gold)", color:"#000", padding:"12px 18px", borderRadius:10, fontWeight:700 }}>
+          Go to Admin Control
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
-      {compModalEvent && (
+      {isAdminView && (
+        <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid rgba(245,166,35,0.24)", borderRadius:12, padding:"12px 16px", marginBottom:18, display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+          <div style={{ color:"var(--muted)", fontSize:13 }}>
+            Viewing organizer dashboard for <strong style={{ color:"var(--text)" }}>{activeOrganizer?.name || activeOrganizer?.email || adminOrganizerId}</strong> ({activeOrganizer?.email || adminOrganizerId})
+          </div>
+          <Link to="/admin" style={{ color:"var(--gold)", fontSize:12, fontWeight:700 }}>Back to Admin</Link>
+        </div>
+      )}
+      {canManage && compModalEvent && (
         <div onClick={closeCompModal} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, width:"100%", maxWidth:700, animation:"fadeUp 0.2s ease" }}>
             <h2 style={{ fontFamily:"Oswald", fontSize:30, marginBottom:6 }}>ISSUE COMPLIMENTARY TICKETS</h2>
@@ -2844,7 +3009,7 @@ function DashboardPage({ ctx }) {
       )}
 
       {/* Delete confirm modal */}
-      {confirmDelete && (
+      {canManage && confirmDelete && (
         <div onClick={() => setConfirmDelete(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, maxWidth:400, width:"100%", animation:"fadeUp 0.3s ease" }}>
             <div style={{ fontSize:40, marginBottom:16, color:"var(--red)" }}><i className="fa-solid fa-trash" /></div>
@@ -2859,7 +3024,7 @@ function DashboardPage({ ctx }) {
       )}
 
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:40, flexWrap:"wrap", gap:12 }}>
-        <h1 style={{ fontSize:48 }}>DASHBOARD</h1>
+        <h1 style={{ fontSize:48 }}>{isAdminView ? "ORGANIZER DASHBOARD" : "DASHBOARD"}</h1>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
           {/* View toggle */}
           <div style={{ display:"flex", background:"var(--bg3)", borderRadius:10, padding:4, border:"1px solid var(--border)" }}>
@@ -2867,8 +3032,12 @@ function DashboardPage({ ctx }) {
               <button key={id} onClick={() => setView(id)} style={{ padding:"7px 14px", borderRadius:7, border:"none", cursor:"pointer", fontSize:13, fontWeight:600, background: view===id?"var(--bg2)":"transparent", color: view===id?"var(--text)":"var(--muted)", transition:"all 0.2s" }}>{label}</button>
             ))}
           </div>
-          <button onClick={refreshEvents} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 16px", borderRadius:10, cursor:"pointer", fontSize:13 }}><i className="fa-solid fa-rotate-right" style={{marginRight:6}} />Refresh</button>
-          <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
+          {canManage && (
+            <button onClick={refreshEvents} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 16px", borderRadius:10, cursor:"pointer", fontSize:13 }}><i className="fa-solid fa-rotate-right" style={{marginRight:6}} />Refresh</button>
+          )}
+          {canManage && (
+            <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
+          )}
         </div>
       </div>
 
@@ -2900,9 +3069,9 @@ function DashboardPage({ ctx }) {
           <div style={{ fontWeight:700, fontSize:14, letterSpacing:1 }}>LIVE ACTIVITY</div>
           <span style={{ fontSize:11, color:"var(--muted)" }}>Updates from webhook events</span>
         </div>
-        {organizerNotifications?.length ? (
+        {activeNotifications?.length ? (
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {organizerNotifications.slice(0, 5).map(item => {
+            {activeNotifications.slice(0, 5).map(item => {
               const meta = notifMeta(item);
               return (
                 <div key={item.id} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 12px" }}>
@@ -2925,7 +3094,7 @@ function DashboardPage({ ctx }) {
           <div style={{ fontWeight:700, fontSize:14, letterSpacing:1 }}>ATTENDEE PAYMENTS</div>
           <span style={{ fontSize:11, color:"var(--muted)" }}>Live from webhook, no CSV required</span>
         </div>
-        {organizerAttendeeFeed?.length ? (
+        {activeAttendeeFeed?.length ? (
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead>
@@ -2936,7 +3105,7 @@ function DashboardPage({ ctx }) {
                 </tr>
               </thead>
               <tbody>
-                {organizerAttendeeFeed.slice(0, 20).map((row, i) => (
+                {activeAttendeeFeed.slice(0, 20).map((row, i) => (
                   <tr key={row.id} style={{ borderTop:"1px solid var(--border)", background: i % 2 ? "rgba(255,255,255,0.01)" : "transparent" }}>
                     <td style={{ padding:"10px", fontWeight:600, whiteSpace:"nowrap" }}>{row.attendeeName || "Attendee"}</td>
                     <td style={{ padding:"10px", color:"var(--muted)", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.attendeeEmail || "-"}</td>
@@ -3067,13 +3236,21 @@ function DashboardPage({ ctx }) {
                   <div><strong style={{ color:"var(--text)" }}>Account name:</strong> {payoutDetails.accountName}</div>
                   <div><strong style={{ color:"var(--text)" }}>Account number:</strong> {payoutDetails.accountNumber}</div>
                   {payoutDetails.notes && <div><strong style={{ color:"var(--text)" }}>Notes:</strong> {payoutDetails.notes}</div>}
-                  <Link to="/profile" style={{ color:"var(--gold)", fontSize:12, marginTop:6 }}>Update payout details â†’</Link>
+                  {canManage ? (
+                    <Link to="/profile" style={{ color:"var(--gold)", fontSize:12, marginTop:6 }}>Update payout details â†’</Link>
+                  ) : (
+                    <div style={{ color:"var(--muted)", fontSize:12, marginTop:6 }}>Edit payout details in organizer account.</div>
+                  )}
                 </div>
               ) : (
                 <div style={{ fontSize:13, color:"var(--muted)", lineHeight:1.7 }}>
                   Add your bank details in your profile before requesting a payout.
                   <div style={{ marginTop:10 }}>
-                    <Link to="/profile" style={{ color:"var(--gold)", fontSize:12 }}>Add payout details â†’</Link>
+                    {canManage ? (
+                      <Link to="/profile" style={{ color:"var(--gold)", fontSize:12 }}>Add payout details â†’</Link>
+                    ) : (
+                      <span style={{ color:"var(--muted)", fontSize:12 }}>Organizer has not added payout details.</span>
+                    )}
                   </div>
                 </div>
               )}
@@ -3144,13 +3321,16 @@ function DashboardPage({ ctx }) {
       {/* Events table */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
         <div style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <h3 style={{ fontSize:22 }}>YOUR EVENTS</h3>
+          <h3 style={{ fontSize:22 }}>{isAdminView ? "ORGANIZER EVENTS" : "YOUR EVENTS"}</h3>
           <span style={{ fontSize:12, color:"var(--muted)" }}><i className="fa-solid fa-circle-info" style={{marginRight:4}} />CSV downloads buyer list</span>
         </div>
         {myEvents.length===0 ? (
-          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>No events yet. <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></div>
+          <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>
+            No events yet.
+            {canManage && <span> <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></span>}
+          </div>
        ) : myEvents.map((event, i) => {
-          const eventTickets = tickets.filter(t => t.eventId === event.id);
+          const eventTickets = myTickets.filter(t => t.eventId === event.id);
           const sold = eventTickets.length;
           const cap = event.tiers.reduce((s,t) => s + (t.total||0), 0);
           const rev = eventTickets.reduce((s,t) => s + (t.price||0), 0);
@@ -3197,14 +3377,14 @@ function DashboardPage({ ctx }) {
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                   <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
-                  <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>
-                  <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>
-                  <button onClick={() => openCompModal(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-gift" style={{marginRight:5}} />Issue Comp</button>
-                  <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
-<button onClick={() => downloadCSVWithEmail(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
+                  {canManage && <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}
+                  {canManage && <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
+                  {canManage && <button onClick={() => openCompModal(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-gift" style={{marginRight:5}} />Issue Comp</button>}
+                  {canManage && <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>}
+                  <button onClick={() => downloadCSVWithEmail(event, myTickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
                     <i className="fa-solid fa-download" style={{marginRight:5}} />{eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
                   </button>
-                  <button onClick={() => setConfirmDelete(event)} style={{ background:"rgba(232,64,64,0.1)", border:"1px solid rgba(232,64,64,0.3)", color:"var(--red)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-trash" /></button>
+                  {canManage && <button onClick={() => setConfirmDelete(event)} style={{ background:"rgba(232,64,64,0.1)", border:"1px solid rgba(232,64,64,0.3)", color:"var(--red)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-trash" /></button>}
                 </div>
               </div>
             </div>
@@ -4368,8 +4548,8 @@ function AdminHomePage({ ctx }) {
           <Link to="/admin/payouts" style={{ background:"var(--gold)", color:"#000", padding:"12px 18px", borderRadius:10, fontWeight:700, fontSize:13 }}>
             Open Payouts
           </Link>
-          <Link to="/dashboard" style={{ border:"1px solid var(--border)", color:"var(--text)", padding:"12px 18px", borderRadius:10, fontWeight:600, fontSize:13 }}>
-            Organizer View
+          <Link to="/admin" style={{ border:"1px solid var(--border)", color:"var(--text)", padding:"12px 18px", borderRadius:10, fontWeight:600, fontSize:13 }}>
+            Pick Organizer View
           </Link>
         </div>
       </div>
@@ -4431,6 +4611,9 @@ function AdminHomePage({ ctx }) {
                     <div style={{ color:"var(--muted)", fontSize:11, letterSpacing:1, marginBottom:6 }}>OUTSTANDING</div>
                     <div style={{ fontFamily:"Oswald", fontSize:30, color:"var(--green)", lineHeight:1 }}>{fmt(card.outstanding)}</div>
                     <div style={{ color:"var(--muted)", fontSize:12, marginTop:8 }}>{card.summary.paidTickets.length} paid tickets</div>
+                    <Link to={`/dashboard?organizerId=${encodeURIComponent(card.organizer.uid)}`} style={{ color:"var(--gold)", fontSize:12, fontWeight:700, display:"inline-block", marginTop:10 }}>
+                      Open Dashboard
+                    </Link>
                   </div>
                 </div>
               );
@@ -5987,6 +6170,16 @@ function GuestTicketLookupPage() {
         setStatus("error");
         return;
       }
+      if (data.mode === "direct" && Array.isArray(data.tickets)) {
+        setSearchParams({});
+        setEmail(data.email || email.trim().toLowerCase());
+        setTickets(data.tickets);
+        setStatus(data.tickets.length ? "found" : "empty");
+        setMessage(data.msg || (data.tickets.length
+          ? "We found your tickets."
+          : "No tickets were found for this email address."));
+        return;
+      }
       setSearchParams({});
       setMessage(`We sent a secure ticket link to ${email.trim().toLowerCase()}. Open it from your inbox to view your tickets.`);
       setStatus("sent");
@@ -6155,5 +6348,7 @@ function GuestTicketLookupPage() {
     </div>
   );
 }
+
+
 
 

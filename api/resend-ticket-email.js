@@ -28,7 +28,9 @@ export default async function handler(req, res) {
     const tierName = f.tierName || "";
     const price = Number(f.price || 0);
     const amountPaid = price === 0 ? "FREE" : `₦${price.toLocaleString()}`;
-    const ticketUrl = `https://stagepro-phi.vercel.app/ticket/${ticketId}`;
+    const APP_BASE_URL = (process.env.PUBLIC_APP_URL || "https://stagepro-phi.vercel.app").replace(/\/+$/, "");
+    const headerImage = process.env.EMAIL_HEADER_URL || `${APP_BASE_URL}/email-header-motion-2026.jpg`;
+    const ticketUrl = `${APP_BASE_URL}/ticket/${ticketId}`;
     const accent = "#f5a623";
 
     if (!toEmail) return res.status(400).json({ error: "No email on ticket" });
@@ -43,6 +45,8 @@ export default async function handler(req, res) {
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:40px 20px;">
 <tr><td align="center">
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#111111;border-radius:20px;overflow:hidden;border:1px solid #2a2a2a;">
+
+  <tr><td style="padding:0;line-height:0;"><img src="${headerImage}" alt="${eventTitle}" width="600" style="display:block;width:100%;max-height:280px;object-fit:cover;" /></td></tr>
 
   <tr><td style="background:#1a1a1a;padding:28px 40px;border-bottom:2px solid ${accent};">
     <span style="font-size:26px;font-weight:900;color:${accent};letter-spacing:6px;">STAGE</span>
