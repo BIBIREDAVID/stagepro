@@ -1,5 +1,15 @@
 {
+  "crons": [
+    {
+      "path": "/api/auto-payouts-run",
+      "schedule": "0 */6 * * *"
+    }
+  ],
   "rewrites": [
+    {
+      "source": "/webhooks/paystack",
+      "destination": "/api/paystack-webhook"
+    },
     {
       "source": "/api/(.*)",
       "destination": "/api/$1"

@@ -80,7 +80,7 @@ export default async function handler(req, res) {
   const eventId = getEventIdFromPayload(data);
 
   // Handle only organizer-relevant money events.
-  if (!["charge.success", "charge.failed", "refund.processed"].includes(eventType)) {
+  if (!["charge.success", "charge.failed", "refund.processed", "transfer.success", "transfer.failed", "transfer.reversed"].includes(eventType)) {
     return res.status(200).json({ ok: true, ignored: true });
   }
 
@@ -104,6 +104,54 @@ export default async function handler(req, res) {
   }
 
   try {
+    if (eventType.startsWith("transfer.")) {
+      const transferCode = data?.transfer_code || "";
+      const transferRef = data?.reference || "";
+      const amount = Number.isFinite(amountKobo) ? amountKobo / 100 : 0;
+
+      // Attempt to reconcile payout status by transfer code/reference.
+      const byCode = transferCode
+        ? await db.collection("payouts").where("paystackTransferCode", "==", transferCode).limit(1).get()
+        : null;
+      const byRef = transferRef && (!byCode || byCode.empty)
+        ? await db.collection("payouts").where("paystackReference", "==", transferRef).limit(1).get()
+        : null;
+      const targetDoc = (byCode && !byCode.empty) ? byCode.docs[0] : (byRef && !byRef.empty ? byRef.docs[0] : null);
+
+      if (targetDoc) {
+        const payout = targetDoc.data() || {};
+        const nextStatus = eventType === "transfer.success" ? "paid" : "failed";
+        await targetDoc.ref.update({
+          status: nextStatus,
+          paidAt: nextStatus === "paid" ? new Date().toISOString() : payout.paidAt || null,
+          transferWebhookType: eventType,
+          transferWebhookUpdatedAt: new Date().toISOString(),
+          ...(nextStatus === "failed" ? { failureReason: data?.reason || data?.status || "Transfer failed/reversed" } : {}),
+        });
+
+        if (payout.organizerId) {
+          const transferTitle = eventType === "transfer.success"
+            ? "Automatic payout completed"
+            : "Automatic payout failed";
+          await db.collection("organizerNotifications").add({
+            organizerId: payout.organizerId,
+            eventId: "",
+            paystackReference: transferRef || "",
+            paystackEventType: eventType,
+            amount,
+            currency: data?.currency || "NGN",
+            title: transferTitle,
+            type: eventType === "transfer.success" ? "payout" : "payout_failed",
+            source: "paystack_webhook",
+            read: false,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      return res.status(200).json({ ok: true });
+    }
+
     let resolvedEventId = eventId;
     let organizerId = getOrganizerIdFromPayload(data);
     let eventTitle = getCustomField(data?.metadata || {}, "event") || "Event";

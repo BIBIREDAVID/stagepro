@@ -33,6 +33,7 @@ import {
   deleteDoc,
   query,
   where,
+  orderBy,
   limit,
   increment,
 } from "firebase/firestore";
@@ -651,50 +652,71 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const loadOrganizerEvents = async () => {
-      if (currentUser?.role !== "organizer") {
+    if (currentUser?.role !== "organizer") {
+      setOrganizerEvents([]);
+      return;
+    }
+    const q = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => setOrganizerEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))),
+      (err) => {
+        console.error("Organizer events listener failed:", err);
         setOrganizerEvents([]);
-        return;
       }
-      try {
-        const q = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
-        const snapshot = await getDocs(q);
-        setOrganizerEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) {
-        console.error("Organizer events fetch failed:", err);
-        setOrganizerEvents([]);
-      }
-    };
-    loadOrganizerEvents();
+    );
+    return () => unsub();
   }, [currentUser]);
 
   useEffect(() => {
-    if (!currentUser) { setTickets([]); return; }
-    const load = async () => {
-      try {
-        if (currentUser.role === "organizer") {
-          // Organizer: fetch tickets for each of their events by eventId
-          // (full collection scan is blocked by Firestore rules)
-          const myEventIds = organizerEvents.map(e => e.id);
-          if (myEventIds.length === 0) { setTickets([]); return; }
-          // Firestore "in" query supports up to 30 values; chunk if needed
-          const chunks = [];
-          for (let i = 0; i < myEventIds.length; i += 30) chunks.push(myEventIds.slice(i, i + 30));
-          const allTickets = [];
-          for (const chunk of chunks) {
-            const q = query(collection(db, "tickets"), where("eventId", "in", chunk));
-            const snap = await getDocs(q);
-            snap.docs.forEach(d => allTickets.push({ id: d.id, ...d.data() }));
+    if (!currentUser) {
+      setTickets([]);
+      return;
+    }
+    if (currentUser.role === "organizer") {
+      const myEventIds = organizerEvents.map(e => e.id);
+      if (myEventIds.length === 0) {
+        setTickets([]);
+        return;
+      }
+
+      const chunks = [];
+      for (let i = 0; i < myEventIds.length; i += 30) chunks.push(myEventIds.slice(i, i + 30));
+
+      const bucket = new Map();
+      const unsubs = chunks.map((chunk, idx) => {
+        const q = query(collection(db, "tickets"), where("eventId", "in", chunk));
+        return onSnapshot(
+          q,
+          (snap) => {
+            bucket.set(idx, snap.docs.map(d => ({ id: d.id, ...d.data() })));
+            const merged = [];
+            bucket.forEach(rows => merged.push(...rows));
+            setTickets(merged);
+          },
+          (err) => {
+            console.error("Organizer tickets listener failed:", err);
+            bucket.set(idx, []);
+            const merged = [];
+            bucket.forEach(rows => merged.push(...rows));
+            setTickets(merged);
           }
-          setTickets(allTickets);
-        } else {
-          const q = query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
-          const snap = await getDocs(q);
-          setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        }
-      } catch (err) { console.error("Tickets fetch error:", err); }
-    };
-    load();
+        );
+      });
+
+      return () => unsubs.forEach(unsub => unsub());
+    }
+
+    const q = query(collection(db, "tickets"), where("userId", "==", currentUser.uid));
+    const unsub = onSnapshot(
+      q,
+      (snap) => setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      (err) => {
+        console.error("Customer tickets listener failed:", err);
+        setTickets([]);
+      }
+    );
+    return () => unsub();
   }, [currentUser, organizerEvents]);
 
   useEffect(() => {
@@ -706,6 +728,7 @@ export default function App() {
     const q = query(
       collection(db, "organizerNotifications"),
       where("organizerId", "==", currentUser.uid),
+      orderBy("createdAt", "desc"),
       limit(50)
     );
 
@@ -738,6 +761,7 @@ export default function App() {
     const q = query(
       collection(db, "organizerAttendeeFeed"),
       where("organizerId", "==", currentUser.uid),
+      orderBy("createdAt", "desc"),
       limit(80)
     );
 
@@ -838,13 +862,25 @@ export default function App() {
 
     let existingTicketCount = 0;
     try {
-      if (buyer?.uid || currentUser?.uid) {
-        const existingSnap = await getDocs(query(collection(db, "tickets"), where("userId", "==", buyerUid)));
-        existingTicketCount = existingSnap.docs.filter(d => d.data().eventId === eventId).length;
-      } else if (buyerEmail) {
-        const existingSnap = await getDocs(query(collection(db, "tickets"), where("userEmail", "==", buyerEmail)));
-        existingTicketCount = existingSnap.docs.filter(d => d.data().eventId === eventId).length;
+      const token = await auth.currentUser?.getIdToken().catch(() => null);
+      const limitRes = await fetch("/api/check-ticket-limit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          eventId,
+          requestedQty,
+          email: buyerEmail,
+          userUid: buyer?.uid || currentUser?.uid || "",
+        }),
+      });
+      const limitData = await limitRes.json();
+      if (!limitRes.ok || !limitData.ok) {
+        throw new Error(limitData?.msg || "Ticket limit check failed");
       }
+      existingTicketCount = Number(limitData.existingCount || 0);
     } catch (err) {
       console.error("Failed to check ticket limit:", err);
       notify("We couldn't confirm your ticket limit for this event. Please try again.", "error");
@@ -871,7 +907,7 @@ export default function App() {
           const ticketData = {
             eventId, eventTitle: event.title, eventDate: event.date,
             eventTime: event.time || "", venue: event.venue,
-            tierName: tier.name, price: Number(tier.price),
+            tierId: tier.id, tierName: tier.name, price: Number(tier.price),
             userId: buyerUid, userName: buyerName,
             userEmail: buyerEmail,
             isGuest: isGuest || false,
@@ -892,6 +928,26 @@ export default function App() {
           await setDoc(ticketRef, ticketData);
           const newTicket = { id: ticketRef.id, ...ticketData };
           newTickets.push(newTicket);
+
+          if (!paystackRef) {
+            try {
+              await addDoc(collection(db, "organizerAttendeeFeed"), {
+                organizerId: event.organizer || "",
+                eventId: event.id,
+                eventTitle: event.title || "",
+                paystackReference: "free",
+                amount: 0,
+                currency: "NGN",
+                attendeeName: buyerName,
+                attendeeEmail: buyerEmail || "",
+                status: "free",
+                source: "app_free_ticket",
+                createdAt: new Date().toISOString(),
+              });
+            } catch (feedErr) {
+              console.warn("Could not write free-ticket attendee feed entry:", feedErr);
+            }
+          }
 
           // Fetch organiser name for personalised email
           let organizerName = "StagePro";
@@ -986,6 +1042,114 @@ export default function App() {
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
     } catch {
       return { ok: false, msg: "Error checking ticket" };
+    }
+  };
+
+  const issueComplimentaryTickets = async ({ eventId, tierId, qty, attendeeName, attendeeEmail }) => {
+    try {
+      if (currentUser?.role !== "organizer") {
+        return { ok: false, msg: "Only organizers can issue complimentary tickets." };
+      }
+
+      const quantity = Number(qty);
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        return { ok: false, msg: "Quantity must be a whole number greater than 0." };
+      }
+
+      const eventSnap = await getDoc(doc(db, "events", eventId));
+      if (!eventSnap.exists()) return { ok: false, msg: "Event not found." };
+      const event = { id: eventSnap.id, ...eventSnap.data() };
+      if (event.organizer !== currentUser.uid) {
+        return { ok: false, msg: "You can only issue tickets for your own events." };
+      }
+
+      const tier = event.tiers.find(t => t.id === tierId);
+      if (!tier) return { ok: false, msg: "Selected tier was not found." };
+
+      const alreadySold = getSold(event, tierId);
+      const available = Math.max(0, Number(tier.total || 0) - alreadySold);
+      if (quantity > available) {
+        return { ok: false, msg: `Only ${available} ticket(s) left in this tier.` };
+      }
+
+      const cleanName = String(attendeeName || "").trim() || "Complimentary Guest";
+      const cleanEmail = String(attendeeEmail || "").trim().toLowerCase();
+      const syntheticUserId = cleanEmail ? `comp_${cleanEmail}` : `comp_${Date.now()}`;
+      const nowIso = new Date().toISOString();
+      const created = [];
+
+      for (let i = 0; i < quantity; i++) {
+        let ticketRef = null;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const nextId = generateShortTicketId();
+          const candidateRef = doc(collection(db, "tickets"), nextId);
+          const existing = await getDoc(candidateRef);
+          if (!existing.exists()) {
+            ticketRef = candidateRef;
+            break;
+          }
+        }
+        if (!ticketRef) throw new Error("Could not generate a unique complimentary ticket ID");
+
+        const ticketData = {
+          eventId: event.id,
+          eventTitle: event.title,
+          eventDate: event.date,
+          eventTime: event.time || "",
+          venue: event.venue,
+          tierId: tier.id,
+          tierName: tier.name,
+          price: 0,
+          userId: syntheticUserId,
+          userName: cleanName,
+          userEmail: cleanEmail,
+          isGuest: !cleanEmail,
+          used: false,
+          purchasedAt: nowIso,
+          paymentStatus: "complimentary",
+          complimentary: true,
+          issuedByOrganizerId: currentUser.uid,
+        };
+
+        await setDoc(ticketRef, ticketData);
+        created.push({ id: ticketRef.id, ...ticketData });
+
+        try {
+          await addDoc(collection(db, "organizerAttendeeFeed"), {
+            organizerId: currentUser.uid,
+            eventId: event.id,
+            eventTitle: event.title || "",
+            paystackReference: "complimentary",
+            amount: 0,
+            currency: "NGN",
+            attendeeName: cleanName,
+            attendeeEmail: cleanEmail || "",
+            status: "complimentary",
+            source: "app_complimentary_ticket",
+            createdAt: new Date().toISOString(),
+          });
+        } catch (feedErr) {
+          console.warn("Could not write complimentary attendee feed entry:", feedErr);
+        }
+      }
+
+      try {
+        await updateDoc(doc(db, "events", event.id), { [`soldCounts.${tier.id}`]: increment(quantity) });
+      } catch (err) {
+        console.warn("Could not increment soldCounts for complimentary tickets:", err);
+      }
+
+      setTickets(prev => [...created, ...prev]);
+      setEvents(prev => prev.map(e => {
+        if (e.id !== event.id) return e;
+        const nextSoldCounts = { ...(e.soldCounts || {}), [tier.id]: Number((e.soldCounts || {})[tier.id] || 0) + quantity };
+        return { ...e, soldCounts: nextSoldCounts };
+      }));
+
+      return { ok: true, count: created.length };
+    } catch (err) {
+      console.error("Complimentary ticket issuance failed:", err);
+      return { ok: false, msg: "Could not issue complimentary tickets right now." };
     }
   };
 
@@ -1165,7 +1329,7 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
+  const ctx = { currentUser, events, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
 
   return (
     <BrowserRouter>
@@ -2564,11 +2728,18 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, deleteEvent, refreshEvents } = ctx;
+  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, deleteEvent, refreshEvents } = ctx;
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [compModalEvent, setCompModalEvent] = useState(null);
+  const [compTierId, setCompTierId] = useState("");
+  const [compQty, setCompQty] = useState("1");
+  const [compName, setCompName] = useState("");
+  const [compEmail, setCompEmail] = useState("");
+  const [compStatus, setCompStatus] = useState({ type: "idle", msg: "" });
   const [view, setView] = useState("list"); // list | calendar | payouts
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const [payoutRecords, setPayoutRecords] = useState([]);
+  const [webhookCopyState, setWebhookCopyState] = useState("idle");
   const myEvents = organizerEvents;
   const myEventIds = new Set(myEvents.map(e => e.id));
   const myTickets = tickets.filter(t => myEventIds.has(t.eventId));
@@ -2630,6 +2801,46 @@ function DashboardPage({ ctx }) {
   }, [currentUser.uid]);
 
   const handleDelete = async (event) => { await deleteEvent(event.id); setConfirmDelete(null); };
+  const openCompModal = (event) => {
+    setCompModalEvent(event);
+    setCompTierId(event?.tiers?.[0]?.id || "");
+    setCompQty("1");
+    setCompName("");
+    setCompEmail("");
+    setCompStatus({ type: "idle", msg: "" });
+  };
+  const closeCompModal = () => {
+    setCompModalEvent(null);
+    setCompStatus({ type: "idle", msg: "" });
+  };
+  const submitCompFromDashboard = async () => {
+    if (!compModalEvent?.id || !compTierId) return;
+    setCompStatus({ type: "sending", msg: "Issuing complimentary tickets..." });
+    const res = await issueComplimentaryTickets({
+      eventId: compModalEvent.id,
+      tierId: compTierId,
+      qty: Number(compQty || 0),
+      attendeeName: compName,
+      attendeeEmail: compEmail,
+    });
+    if (res.ok) {
+      setCompStatus({ type: "sent", msg: `${res.count} complimentary ticket(s) issued.` });
+      setTimeout(() => closeCompModal(), 1200);
+    } else {
+      setCompStatus({ type: "error", msg: res.msg || "Could not issue complimentary tickets." });
+    }
+  };
+  const webhookUrl = `${window.location.origin}/webhooks/paystack`;
+  const copyWebhookUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setWebhookCopyState("copied");
+      setTimeout(() => setWebhookCopyState("idle"), 1800);
+    } catch {
+      setWebhookCopyState("error");
+      setTimeout(() => setWebhookCopyState("idle"), 1800);
+    }
+  };
   const formatNotifTime = (value) => {
     if (!value) return "";
     const d = new Date(value);
@@ -2665,6 +2876,46 @@ function DashboardPage({ ctx }) {
 
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
+      {compModalEvent && (
+        <div onClick={closeCompModal} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, width:"100%", maxWidth:700, animation:"fadeUp 0.2s ease" }}>
+            <h2 style={{ fontFamily:"Oswald", fontSize:30, marginBottom:6 }}>ISSUE COMPLIMENTARY TICKETS</h2>
+            <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>{compModalEvent.title}</p>
+            <div style={{ display:"grid", gridTemplateColumns:"1.1fr 0.7fr 1fr 1fr", gap:10, marginBottom:14 }}>
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>TIER</label>
+                <select value={compTierId} onChange={e => setCompTierId(e.target.value)} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }}>
+                  {compModalEvent.tiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>QTY</label>
+                <input type="number" min="1" value={compQty} onChange={e => setCompQty(e.target.value)} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>ATTENDEE NAME</label>
+                <input value={compName} onChange={e => setCompName(e.target.value)} placeholder="Optional" style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>ATTENDEE EMAIL</label>
+                <input type="email" value={compEmail} onChange={e => setCompEmail(e.target.value)} placeholder="Optional" style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+              </div>
+            </div>
+            {compStatus.type !== "idle" && (
+              <div style={{ fontSize:12, marginBottom:12, color: compStatus.type === "error" ? "var(--red)" : compStatus.type === "sent" ? "var(--green)" : "var(--muted)" }}>
+                {compStatus.msg}
+              </div>
+            )}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <button onClick={closeCompModal} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:12, borderRadius:10, cursor:"pointer", fontWeight:600 }}>Cancel</button>
+              <button onClick={submitCompFromDashboard} disabled={!compTierId || Number(compQty || 0) <= 0 || compStatus.type === "sending"} style={{ background: (!compTierId || Number(compQty || 0) <= 0) ? "var(--bg3)" : "var(--gold)", border:"none", color: (!compTierId || Number(compQty || 0) <= 0) ? "var(--muted)" : "#000", padding:12, borderRadius:10, cursor: (!compTierId || Number(compQty || 0) <= 0) ? "not-allowed" : "pointer", fontWeight:700 }}>
+                {compStatus.type === "sending" ? "ISSUING..." : "ISSUE COMPLIMENTARY"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete confirm modal */}
       {confirmDelete && (
         <div onClick={() => setConfirmDelete(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
@@ -2691,6 +2942,29 @@ function DashboardPage({ ctx }) {
           </div>
           <button onClick={refreshEvents} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 16px", borderRadius:10, cursor:"pointer", fontSize:13 }}><i className="fa-solid fa-rotate-right" style={{marginRight:6}} />Refresh</button>
           <Link to="/dashboard/create" style={{ background:"var(--gold)", color:"#000", padding:"12px 24px", borderRadius:10, fontWeight:700, fontSize:14 }}>+ Create Event</Link>
+        </div>
+      </div>
+
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:"14px 16px", marginBottom:20, display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
+        <div style={{ minWidth:240 }}>
+          <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:4 }}>WEBHOOK URL</div>
+          <div style={{ fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--text)", wordBreak:"break-all" }}>{webhookUrl}</div>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button
+            onClick={copyWebhookUrl}
+            style={{ background:"var(--gold)", border:"none", color:"#000", padding:"9px 14px", borderRadius:8, cursor:"pointer", fontWeight:700, fontSize:12, letterSpacing:1 }}
+          >
+            {webhookCopyState === "copied" ? "COPIED" : webhookCopyState === "error" ? "COPY FAILED" : "COPY WEBHOOK URL"}
+          </button>
+          <a
+            href="https://dashboard.paystack.com/#/settings/developer"
+            target="_blank"
+            rel="noreferrer"
+            style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"9px 14px", borderRadius:8, fontSize:12, fontWeight:700, letterSpacing:1, textDecoration:"none" }}
+          >
+            OPEN PAYSTACK SETTINGS
+          </a>
         </div>
       </div>
 
@@ -2998,6 +3272,7 @@ function DashboardPage({ ctx }) {
                   <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
                   <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>
                   <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>
+                  <button onClick={() => openCompModal(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-gift" style={{marginRight:5}} />Issue Comp</button>
                   <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>
 <button onClick={() => downloadCSVWithEmail(event, tickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
                     <i className="fa-solid fa-download" style={{marginRight:5}} />{eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
@@ -3623,10 +3898,20 @@ function ValidatePage({ ctx }) {
 // ── Analytics Page (/dashboard/analytics/:eventId) ────────────────────────
 function AnalyticsPage({ ctx }) {
   const { eventId } = useParams();
-  const { organizerEvents, tickets, currentUser } = ctx;
+  const { organizerEvents, tickets, currentUser, issueComplimentaryTickets } = ctx;
   const navigate = useNavigate();
   const event = organizerEvents.find(e => e.id === eventId);
   const [notifStatus, setNotifStatus] = useState("idle"); // idle | sending | sent | error
+  const [compTierId, setCompTierId] = useState("");
+  const [compQty, setCompQty] = useState("1");
+  const [compName, setCompName] = useState("");
+  const [compEmail, setCompEmail] = useState("");
+  const [compStatus, setCompStatus] = useState({ type: "idle", msg: "" });
+
+  useEffect(() => {
+    if (!event?.tiers?.length) return;
+    setCompTierId(prev => (prev && event.tiers.some(t => t.id === prev)) ? prev : event.tiers[0].id);
+  }, [event]);
 
   if (!event || event.organizer !== currentUser.uid) return <Navigate to="/dashboard" />;
 
@@ -3646,13 +3931,17 @@ function AnalyticsPage({ ctx }) {
   const salesData = Object.entries(dailySales).slice(-14); // last 14 days
 
   // Tier breakdown
-  const tierData = event.tiers.map(t => ({
-    name: t.name,
-    sold: getSold(event, t.id),
-    total: t.total,
-    rev: getSold(event, t.id) * t.price,
-    pct: t.total ? Math.round((getSold(event, t.id)/t.total)*100) : 0,
-  }));
+  const tierData = event.tiers.map(t => {
+    const tierTickets = eventTickets.filter(ticket => (ticket.tierId ? ticket.tierId === t.id : ticket.tierName === t.name));
+    const soldCount = tierTickets.length;
+    return {
+      name: t.name,
+      sold: soldCount,
+      total: t.total,
+      rev: tierTickets.reduce((sum, ticket) => sum + Number(ticket.price || 0), 0),
+      pct: t.total ? Math.round((soldCount / t.total) * 100) : 0,
+    };
+  });
 
   // Send push notification to all ticket holders
   const sendNotification = async (title, body) => {
@@ -3704,6 +3993,27 @@ function AnalyticsPage({ ctx }) {
       setNotifStatus("error");
       setTimeout(() => setNotifStatus("idle"), 3000);
     }
+  };
+
+  const handleIssueComp = async () => {
+    if (!compTierId) return;
+    setCompStatus({ type: "sending", msg: "Issuing complimentary tickets..." });
+    const res = await issueComplimentaryTickets({
+      eventId,
+      tierId: compTierId,
+      qty: Number(compQty || 0),
+      attendeeName: compName,
+      attendeeEmail: compEmail,
+    });
+    if (res.ok) {
+      setCompStatus({ type: "sent", msg: `${res.count} complimentary ticket(s) issued.` });
+      setCompQty("1");
+      setCompName("");
+      setCompEmail("");
+      setTimeout(() => setCompStatus({ type: "idle", msg: "" }), 2500);
+      return;
+    }
+    setCompStatus({ type: "error", msg: res.msg || "Could not issue complimentary tickets." });
   };
 
   const maxBar = Math.max(...salesData.map(([,v]) => v), 1);
@@ -3778,6 +4088,43 @@ function AnalyticsPage({ ctx }) {
             </div>
           ))}
         </div>
+      </div>
+
+      <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:24 }}>
+        <h3 style={{ fontSize:20, marginBottom:8 }}>COMPLIMENTARY TICKETS</h3>
+        <p style={{ color:"var(--muted)", fontSize:13, marginBottom:16 }}>Issue free tickets to guests without checkout.</p>
+        <div style={{ display:"grid", gridTemplateColumns:"1.2fr 0.7fr 1fr 1fr auto", gap:10, alignItems:"end" }}>
+          <div>
+            <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>TIER</label>
+            <select value={compTierId} onChange={e => setCompTierId(e.target.value)} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }}>
+              {event.tiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>QTY</label>
+            <input type="number" min="1" value={compQty} onChange={e => setCompQty(e.target.value)} style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+          </div>
+          <div>
+            <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>ATTENDEE NAME</label>
+            <input value={compName} onChange={e => setCompName(e.target.value)} placeholder="Optional" style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+          </div>
+          <div>
+            <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>ATTENDEE EMAIL</label>
+            <input type="email" value={compEmail} onChange={e => setCompEmail(e.target.value)} placeholder="Optional" style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none" }} />
+          </div>
+          <button
+            onClick={handleIssueComp}
+            disabled={!compTierId || Number(compQty || 0) <= 0 || compStatus.type === "sending"}
+            style={{ background: (!compTierId || Number(compQty || 0) <= 0) ? "var(--bg3)" : "var(--gold)", color: (!compTierId || Number(compQty || 0) <= 0) ? "var(--muted)" : "#000", border:"none", borderRadius:9, padding:"10px 14px", cursor: (!compTierId || Number(compQty || 0) <= 0) ? "not-allowed" : "pointer", fontWeight:700, fontSize:12, letterSpacing:1, whiteSpace:"nowrap" }}
+          >
+            {compStatus.type === "sending" ? "ISSUING..." : "ISSUE COMP"}
+          </button>
+        </div>
+        {compStatus.type !== "idle" && (
+          <div style={{ marginTop:12, fontSize:12, color: compStatus.type === "error" ? "var(--red)" : compStatus.type === "sent" ? "var(--green)" : "var(--muted)" }}>
+            {compStatus.msg}
+          </div>
+        )}
       </div>
 
       {/* Push notification panel */}
@@ -4034,7 +4381,7 @@ function buildOrganizerPayoutCards(organizers, events, tickets, payoutRecords) {
     const summary = calculatePayoutSummary(organizerTickets);
     const organizerPayouts = payoutRecords.filter(record => record.organizerId === organizer.uid);
     const paidOut = organizerPayouts
-      .filter(record => record.status === "paid")
+      .filter(record => record.status === "paid" || record.status === "processing")
       .reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
     const outstanding = Math.max(0, summary.net - paidOut);
     return { organizer, ownedEvents, organizerTickets, summary, organizerPayouts, paidOut, outstanding };
@@ -4222,6 +4569,10 @@ function AdminPayoutsPage({ ctx }) {
   const [payoutRecords, setPayoutRecords] = useState([]);
   const [drafts, setDrafts] = useState({});
   const [recordingId, setRecordingId] = useState(null);
+  const [togglingAutoId, setTogglingAutoId] = useState(null);
+  const [runningAuto, setRunningAuto] = useState(false);
+  const [runningAutoDry, setRunningAutoDry] = useState(false);
+  const [runningBackfill, setRunningBackfill] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -4240,6 +4591,14 @@ function AdminPayoutsPage({ ctx }) {
     };
     load();
   }, [notify]);
+
+  const reloadAdminData = async () => {
+    const data = await fetchAdminDashboardData();
+    setOrganizers(data.organizers);
+    setEvents(data.events);
+    setTickets(data.tickets);
+    setPayoutRecords(data.payoutRecords);
+  };
 
   const updateDraft = (organizerId, patch) => {
     setDrafts(prev => ({
@@ -4300,6 +4659,72 @@ function AdminPayoutsPage({ ctx }) {
     setRecordingId(null);
   };
 
+  const toggleAutoPayout = async (card) => {
+    setTogglingAutoId(card.organizer.uid);
+    try {
+      const nextValue = !Boolean(card.organizer.autoPayoutEnabled);
+      await updateDoc(doc(db, "users", card.organizer.uid), { autoPayoutEnabled: nextValue });
+      setOrganizers(prev => prev.map(o => o.uid === card.organizer.uid ? { ...o, autoPayoutEnabled: nextValue } : o));
+      notify(`Auto payout ${nextValue ? "enabled" : "disabled"} for ${card.organizer.name}.`);
+    } catch (err) {
+      console.error("Auto payout toggle failed:", err);
+      notify("Could not update auto payout setting.", "error");
+    }
+    setTogglingAutoId(null);
+  };
+
+  const runAutoPayoutNow = async (dryRun = false) => {
+    if (dryRun) setRunningAutoDry(true);
+    else setRunningAuto(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("No admin token available");
+      const res = await fetch("/api/auto-payouts-run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ dryRun }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data?.msg || "Auto payout run failed");
+      }
+      const paidCount = (data.results || []).filter(r => r.status === "paid").length;
+      const failedCount = (data.results || []).filter(r => r.status === "failed").length;
+      if (!dryRun) await reloadAdminData();
+      notify(`${dryRun ? "Dry run" : "Auto payout run"} finished: ${paidCount} paid, ${failedCount} failed.`);
+    } catch (err) {
+      console.error("Run auto payout now failed:", err);
+      notify(err?.message || "Could not run auto payouts.", "error");
+    }
+    if (dryRun) setRunningAutoDry(false);
+    else setRunningAuto(false);
+  };
+
+  const runTierIdBackfill = async () => {
+    setRunningBackfill(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error("No admin token available");
+      const res = await fetch("/api/backfill-tier-ids", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data?.msg || "Backfill failed");
+      notify(`TierId backfill complete: ${data.updated || 0} ticket(s) updated.`);
+      await reloadAdminData();
+    } catch (err) {
+      console.error("TierId backfill failed:", err);
+      notify(err?.message || "Could not backfill tier IDs.", "error");
+    }
+    setRunningBackfill(false);
+  };
+
   return (
     <div style={{ maxWidth:1200, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:16, flexWrap:"wrap", marginBottom:28 }}>
@@ -4314,6 +4739,15 @@ function AdminPayoutsPage({ ctx }) {
           <div style={{ color:"var(--muted)", fontSize:14 }}>Track organizer bank details, outstanding balances, and manual settlements.</div>
         </div>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          <button onClick={() => runAutoPayoutNow(false)} disabled={runningAuto || runningAutoDry} style={{ background: runningAuto ? "var(--bg3)" : "var(--green)", color: runningAuto ? "var(--muted)" : "#000", border:"none", borderRadius:12, padding:"12px 16px", cursor: runningAuto ? "not-allowed" : "pointer", fontWeight:700, fontSize:13 }}>
+            {runningAuto ? "RUNNING AUTO PAYOUTS..." : "RUN AUTO PAYOUTS NOW"}
+          </button>
+          <button onClick={() => runAutoPayoutNow(true)} disabled={runningAuto || runningAutoDry} style={{ background: runningAutoDry ? "var(--bg3)" : "var(--bg2)", color: runningAutoDry ? "var(--muted)" : "var(--text)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px", cursor: runningAutoDry ? "not-allowed" : "pointer", fontWeight:700, fontSize:13 }}>
+            {runningAutoDry ? "SIMULATING..." : "DRY RUN"}
+          </button>
+          <button onClick={runTierIdBackfill} disabled={runningBackfill} style={{ background: runningBackfill ? "var(--bg3)" : "var(--bg2)", color: runningBackfill ? "var(--muted)" : "var(--text)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px", cursor: runningBackfill ? "not-allowed" : "pointer", fontWeight:700, fontSize:13 }}>
+            {runningBackfill ? "BACKFILLING..." : "BACKFILL TIER IDS"}
+          </button>
           <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px" }}>
             <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--gold)" }}>{organizerCards.length}</div>
             <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:1 }}>ORGANIZERS</div>
@@ -4349,6 +4783,17 @@ function AdminPayoutsPage({ ctx }) {
                         <span style={{ background: hasPayoutDetails ? "rgba(61,220,132,0.14)" : "rgba(244,90,90,0.12)", color: hasPayoutDetails ? "var(--green)" : "var(--red)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
                           {hasPayoutDetails ? "BANK DETAILS READY" : "BANK DETAILS MISSING"}
                         </span>
+                        <button
+                          onClick={() => toggleAutoPayout(card)}
+                          disabled={togglingAutoId === card.organizer.uid}
+                          style={{ background: card.organizer.autoPayoutEnabled ? "rgba(61,220,132,0.14)" : "var(--bg3)", color: card.organizer.autoPayoutEnabled ? "var(--green)" : "var(--muted)", border:"1px solid var(--border)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700, cursor: togglingAutoId === card.organizer.uid ? "not-allowed" : "pointer" }}
+                        >
+                          {togglingAutoId === card.organizer.uid
+                            ? "SAVING..."
+                            : card.organizer.autoPayoutEnabled
+                              ? "AUTO PAYOUT ON"
+                              : "AUTO PAYOUT OFF"}
+                        </button>
                         <span style={{ background:"rgba(245,166,35,0.12)", color:"var(--gold)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
                           {card.ownedEvents.length} EVENT{card.ownedEvents.length !== 1 ? "S" : ""}
                         </span>
@@ -4393,7 +4838,10 @@ function AdminPayoutsPage({ ctx }) {
                             <div key={record.id} style={{ display:"flex", justifyContent:"space-between", gap:10, flexWrap:"wrap", fontSize:13 }}>
                               <span style={{ color:"var(--muted)" }}>{new Date(record.paidAt || record.createdAt || Date.now()).toLocaleDateString("en-NG", { month:"short", day:"numeric", year:"numeric" })}</span>
                               <span style={{ color:"var(--green)", fontFamily:"IBM Plex Mono" }}>{fmt(Number(record.amount) || 0)}</span>
-                              <span style={{ color:"var(--muted)" }}>{record.notes || "Manual payout"}</span>
+                              <span style={{ color:"var(--muted)" }}>{record.notes || (record.source === "auto" ? "Auto payout" : "Manual payout")}</span>
+                              <span style={{ color: record.status === "paid" ? "var(--green)" : record.status === "failed" ? "var(--red)" : "var(--gold)", fontSize:11, fontWeight:700 }}>
+                                {(record.status || "processing").toUpperCase()}
+                              </span>
                             </div>
                           ))}
                         </div>
