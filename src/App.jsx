@@ -84,11 +84,11 @@ const logToSheets = async (payload) => {
 
 // ── CSV Download ───────────────────────────────────────────────────────────
 function downloadCSVWithEmail(event, myTickets) {
-  const eventTickets = tickets.filter(t => t.eventId === event.id);
+  const eventTickets = myTickets.filter(t => t.eventId === event.id);
   if (eventTickets.length === 0) { alert("No tickets sold for this event yet."); return; }
-  const headers = ["Ticket ID", "Event", "Tier", "Buyer Name", "Price (₦)", "Date Purchased", "Used"];
+  const headers = ["Ticket ID", "Event", "Tier", "Buyer Name", "Buyer Email", "Price (NGN)", "Date Purchased", "Used"];
   const rows = eventTickets.map(t => [
-    t.id, t.eventTitle, t.tierName, t.userName, t.price,
+    t.id, t.eventTitle, t.tierName, t.userName, t.userEmail || "", t.price,
     new Date(t.purchasedAt).toLocaleString("en-NG"),
     t.used ? "Yes" : "No",
   ]);
@@ -98,7 +98,9 @@ function downloadCSVWithEmail(event, myTickets) {
   const a = document.createElement("a");
   a.href = url;
   a.download = `${event.title.replace(/\s+/g, "_")}_tickets.csv`;
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   URL.revokeObjectURL(url);
 }
 
