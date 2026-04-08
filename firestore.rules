@@ -1,0 +1,173 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function authEmail() {
+      return signedIn() && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : "";
+    }
+
+    function hasUserDoc() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userRole() {
+      return hasUserDoc() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role != null
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : "";
+    }
+
+    function isAdmin() {
+      return userRole() == "admin";
+    }
+
+    function isOrganizerRole() {
+      return userRole() == "organizer" || isAdmin();
+    }
+
+    function eventDoc(eventId) {
+      return get(/databases/$(database)/documents/events/$(eventId));
+    }
+
+    function isEventManagerData(data) {
+      return signedIn() && (
+        isAdmin() ||
+        data.organizer == request.auth.uid ||
+        (data.coOrganizers != null && data.coOrganizers.hasAny([request.auth.uid])) ||
+        (data.coOrganizerEmails != null && data.coOrganizerEmails.hasAny([authEmail()])) ||
+        (data.coOrganizerInviteEmails != null && data.coOrganizerInviteEmails.hasAny([authEmail()]))
+      );
+    }
+
+    function isEventManagerById(eventId) {
+      return signedIn() && eventDoc(eventId).exists() && isEventManagerData(eventDoc(eventId).data);
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /events/{eventId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && isOrganizerRole()
+        && request.resource.data.organizer == request.auth.uid;
+      allow update, delete: if isEventManagerData(resource.data);
+    }
+
+    match /tickets/{ticketId} {
+      allow read: if signedIn() && (
+        isAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        isEventManagerById(resource.data.eventId)
+      );
+
+      allow create: if
+        (signedIn() && (
+          isAdmin() ||
+          request.resource.data.userId == request.auth.uid ||
+          isEventManagerById(request.resource.data.eventId)
+        )) ||
+        (
+          !signedIn() &&
+          request.resource.data.isGuest == true &&
+          request.resource.data.paymentStatus == "free" &&
+          request.resource.data.price == 0
+        );
+
+      allow update: if signedIn() && (
+        isAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        isEventManagerById(resource.data.eventId)
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /organizerNotifications/{notificationId} {
+      allow read: if signedIn() && (isAdmin() || resource.data.organizerId == request.auth.uid);
+      allow create: if signedIn() && (isAdmin() || request.resource.data.organizerId == request.auth.uid);
+      allow update, delete: if signedIn() && (isAdmin() || resource.data.organizerId == request.auth.uid);
+    }
+
+    match /organizerAttendeeFeed/{feedId} {
+      allow read: if signedIn() && (isAdmin() || resource.data.organizerId == request.auth.uid);
+      allow create: if
+        (signedIn() && (
+          isAdmin() ||
+          request.resource.data.organizerId == request.auth.uid ||
+          isEventManagerById(request.resource.data.eventId)
+        )) ||
+        (
+          !signedIn() &&
+          request.resource.data.status == "free" &&
+          request.resource.data.amount == 0
+        );
+      allow update, delete: if isAdmin();
+    }
+
+    match /payouts/{payoutId} {
+      allow read: if signedIn() && (isAdmin() || resource.data.organizerId == request.auth.uid);
+      allow create, update, delete: if signedIn() && isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if signedIn() && (
+        isAdmin() ||
+        resource.data.userId == request.auth.uid
+      );
+    }
+
+    match /waitlist/{waitlistId} {
+      allow read: if signedIn() && (
+        isAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        isEventManagerById(resource.data.eventId)
+      );
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if signedIn() && (
+        isAdmin() ||
+        resource.data.userId == request.auth.uid ||
+        isEventManagerById(resource.data.eventId)
+      );
+    }
+
+    match /enquiries/{enquiryId} {
+      allow create: if true;
+      allow read, update, delete: if signedIn() && isAdmin();
+    }
+
+    match /paymentFinalizations/{docId} {
+      allow read, write: if false;
+    }
+
+    match /orders/{docId} {
+      allow read, write: if false;
+    }
+
+    match /webhookEvents/{docId} {
+      allow read, write: if false;
+    }
+
+    match /payoutRuns/{docId} {
+      allow read, write: if false;
+    }
+
+    match /payoutAttempts/{docId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,255 @@
+import { getAdminDb } from "../server/firebaseAdmin.js";
+import { sendEmailWithFallback } from "../server/email.js";
+import { buildTicketEmail } from "../server/ticketEmail.js";
+
+const SHORT_TICKET_ID_LENGTH = 7;
+const SHORT_TICKET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function generateShortTicketId(length = SHORT_TICKET_ID_LENGTH) {
+  let value = "";
+  for (let i = 0; i < length; i++) {
+    value += SHORT_TICKET_ALPHABET[Math.floor(Math.random() * SHORT_TICKET_ALPHABET.length)];
+  }
+  return value;
+}
+
+async function createUniqueTicketRef(db) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const nextId = generateShortTicketId();
+    const ref = db.collection("tickets").doc(nextId);
+    const snap = await ref.get();
+    if (!snap.exists) return ref;
+  }
+  throw new Error("Could not generate a unique ticket ID");
+}
+
+async function verifyPaystackTransaction(reference, expectedAmount, expectedCurrency, email) {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) throw new Error("PAYSTACK_SECRET_KEY is not configured");
+
+  const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.status || !payload?.data) {
+    throw new Error(payload?.message || "Unable to verify transaction");
+  }
+
+  const tx = payload.data;
+  if (tx.status !== "success") throw new Error(`Transaction status is ${tx.status}`);
+  if (Number.isFinite(Number(expectedAmount)) && Number(tx.amount) !== Number(expectedAmount)) {
+    throw new Error("Verified amount does not match checkout amount");
+  }
+  if (expectedCurrency && tx.currency !== expectedCurrency) {
+    throw new Error("Verified currency does not match checkout currency");
+  }
+  if (email && tx.customer?.email && tx.customer.email.toLowerCase() !== String(email).toLowerCase()) {
+    throw new Error("Verified email does not match checkout email");
+  }
+
+  return tx;
+}
+
+function buildRequestedQuantities(event, cart = {}) {
+  const quantities = [];
+  for (const tier of event.tiers || []) {
+    const qty = Number(cart?.[tier.id] || 0);
+    if (!Number.isInteger(qty) || qty < 0) {
+      throw new Error("Cart quantities must be whole numbers");
+    }
+    if (qty > 0) quantities.push({ tier, qty });
+  }
+  if (!quantities.length) throw new Error("No tickets selected");
+  return quantities;
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, msg: "Method not allowed" });
+  }
+
+  const {
+    reference,
+    eventId,
+    cart,
+    buyer,
+    expectedAmount,
+    expectedCurrency = "NGN",
+  } = req.body || {};
+
+  const buyerEmail = String(buyer?.email || "").trim().toLowerCase();
+  const buyerName = String(buyer?.name || "").trim() || "Guest";
+  const buyerPhone = String(buyer?.phone || "").trim();
+  const buyerUid = String(buyer?.uid || "").trim() || `guest_${Date.now()}`;
+  const isGuest = !String(buyer?.uid || "").trim();
+
+  if (!reference || !eventId || !buyerEmail) {
+    return res.status(400).json({ ok: false, msg: "reference, eventId, and buyer email are required" });
+  }
+
+  try {
+    const tx = await verifyPaystackTransaction(reference, expectedAmount, expectedCurrency, buyerEmail);
+
+    const db = getAdminDb();
+    const existingSnap = await db.collection("tickets").where("paystackRef", "==", String(reference)).get();
+    const existingTickets = existingSnap.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .filter((ticket) => ticket.eventId === eventId && String(ticket.userEmail || "").trim().toLowerCase() === buyerEmail);
+
+    if (existingTickets.length > 0) {
+      return res.status(200).json({ ok: true, tickets: existingTickets, existing: true });
+    }
+
+    const eventRef = db.collection("events").doc(String(eventId));
+    const eventSnap = await eventRef.get();
+    if (!eventSnap.exists) {
+      return res.status(404).json({ ok: false, msg: "Event not found" });
+    }
+
+    const event = { id: eventSnap.id, ...eventSnap.data() };
+    const requested = buildRequestedQuantities(event, cart);
+
+    const soldSnap = await db.collection("tickets").where("eventId", "==", event.id).get();
+    const soldCounts = {};
+    soldSnap.docs.forEach((doc) => {
+      const ticket = doc.data() || {};
+      const tierId = String(ticket.tierId || "").trim();
+      if (!tierId) return;
+      soldCounts[tierId] = Number(soldCounts[tierId] || 0) + 1;
+    });
+
+    for (const { tier, qty } of requested) {
+      const alreadySold = Number(soldCounts[tier.id] || 0);
+      const remaining = Math.max(0, Number(tier.total || 0) - alreadySold);
+      if (qty > remaining) {
+        return res.status(409).json({ ok: false, msg: `Only ${remaining} ticket(s) left for ${tier.name}.` });
+      }
+    }
+
+    const now = new Date().toISOString();
+    const finalizationRef = db.collection("paymentFinalizations").doc(`paystack_${String(reference)}`);
+    const orderRef = db.collection("orders").doc(`paystack_${String(reference)}`);
+    const batch = db.batch();
+    const newTickets = [];
+
+    for (const { tier, qty } of requested) {
+      for (let i = 0; i < qty; i++) {
+        const ticketRef = await createUniqueTicketRef(db);
+        const ticketData = {
+          eventId: event.id,
+          eventTitle: event.title,
+          eventDate: event.date,
+          eventTime: event.time || "",
+          venue: event.venue,
+          tierId: tier.id,
+          tierName: tier.name,
+          price: Number(tier.price),
+          userId: buyerUid,
+          userName: buyerName,
+          userEmail: buyerEmail,
+          userPhone: buyerPhone,
+          isGuest,
+          used: false,
+          purchasedAt: now,
+          paystackRef: String(reference),
+          paymentStatus: "paid",
+        };
+        batch.set(ticketRef, ticketData);
+        newTickets.push({ id: ticketRef.id, ...ticketData });
+        soldCounts[tier.id] = Number(soldCounts[tier.id] || 0) + 1;
+      }
+    }
+
+    batch.update(eventRef, {
+      soldCounts,
+      updatedAt: now,
+    });
+    batch.set(finalizationRef, {
+      provider: "paystack",
+      reference: String(reference),
+      eventId: event.id,
+      buyerEmail,
+      ticketIds: newTickets.map((ticket) => ticket.id),
+      status: "completed",
+      createdAt: now,
+      updatedAt: now,
+    }, { merge: true });
+    batch.set(orderRef, {
+      provider: "paystack",
+      reference: String(reference),
+      eventId: event.id,
+      buyerEmail,
+      totalTickets: newTickets.length,
+      amount: Number(tx.amount || 0) / 100,
+      currency: tx.currency || expectedCurrency,
+      status: "completed",
+      createdAt: now,
+      updatedAt: now,
+      ticketIds: newTickets.map((ticket) => ticket.id),
+    }, { merge: true });
+
+    await batch.commit();
+
+    let organizerName = "StagePro";
+    if (event.organizer) {
+      const organizerSnap = await db.collection("users").doc(String(event.organizer)).get();
+      if (organizerSnap.exists) {
+        organizerName = organizerSnap.data()?.name || organizerName;
+      }
+    }
+
+    const formattedDate = event.date
+      ? new Date(event.date).toLocaleDateString("en-NG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })
+      : "See event page";
+    const appBaseUrl = (process.env.PUBLIC_APP_URL || "https://stagepro-phi.vercel.app").replace(/\/+$/, "");
+    const themeColors = {
+      purple: "#6a11cb",
+      fire: "#f83600",
+      ocean: "#0575e6",
+      forest: "#134e5e",
+      gold: "#f7971e",
+      rose: "#f953c6",
+      midnight: "#232526",
+      neon: "#00f260",
+      sunset: "#f857a4",
+      teal: "#11998e",
+      royal: "#141e30",
+    };
+    const themeColor = themeColors[event.theme] || "#f5a623";
+
+    await Promise.allSettled(
+      newTickets.map((ticket) => {
+        const message = buildTicketEmail({
+          toName: buyerName,
+          eventTitle: ticket.eventTitle,
+          eventDate: formattedDate,
+          eventTime: ticket.eventTime || "See event page",
+          eventVenue: ticket.venue || "See event page",
+          tierName: ticket.tierName,
+          amountPaid: ticket.price === 0 ? "FREE" : `NGN ${Number(ticket.price).toLocaleString()}`,
+          ticketUrl: `${appBaseUrl}/ticket/${ticket.id}`,
+          ticketId: ticket.id,
+          themeColor,
+          organizerName,
+          eventImage: event.image || "",
+        });
+        return sendEmailWithFallback({
+          to: buyerEmail,
+          subject: message.subject,
+          html: message.html,
+          fromName: "StagePro Tickets",
+        });
+      })
+    );
+
+    return res.status(200).json({ ok: true, tickets: newTickets, existing: false });
+  } catch (err) {
+    console.error("Finalize paystack order failed:", err);
+    return res.status(500).json({ ok: false, msg: String(err?.message || "Could not finalize order") });
+  }
+}

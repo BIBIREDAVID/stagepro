@@ -285,6 +285,14 @@ const getSold = (event, tierId) => {
   return Number(tier?.sold) || 0;
 };
 
+const getLiveSold = (event, tierId, liveSoldCounts = {}) => {
+  const eventCounts = liveSoldCounts?.[event?.id];
+  if (eventCounts && eventCounts[tierId] !== undefined) {
+    return Number(eventCounts[tierId]);
+  }
+  return getSold(event, tierId);
+};
+
 // ── Banner themes ──────────────────────────────────────────────────────────
 const THEMES = {
   purple:   "linear-gradient(135deg,#6a11cb,#2575fc)",
@@ -669,6 +677,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [events, setEvents] = useState([]);
+  const [publicSoldCounts, setPublicSoldCounts] = useState({});
   const [organizerEvents, setOrganizerEvents] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [organizerNotifications, setOrganizerNotifications] = useState([]);
@@ -705,6 +714,35 @@ export default function App() {
     };
     init();
   }, []);
+
+  useEffect(() => {
+    const eventIds = events.map((event) => event.id).filter(Boolean);
+    if (eventIds.length === 0) {
+      setPublicSoldCounts({});
+      return;
+    }
+
+    let active = true;
+    const loadSoldCounts = async () => {
+      try {
+        const res = await fetch("/api/public-event-sold-counts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventIds }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!active) return;
+        if (res.ok && payload?.ok) {
+          setPublicSoldCounts(payload.soldCounts || {});
+        }
+      } catch (err) {
+        console.warn("Could not load public sold counts:", err);
+      }
+    };
+
+    loadSoldCounts();
+    return () => { active = false; };
+  }, [events]);
 
   useEffect(() => {
     if (currentUser?.role !== "organizer") {
@@ -1551,7 +1589,7 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
+  const ctx = { currentUser, events, publicSoldCounts, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
 
   return (
     <BrowserRouter>
@@ -1845,7 +1883,7 @@ function TicketPage({ ctx }) {
 
 // ── Home Page ──────────────────────────────────────────────────────────────
 function HomePage({ ctx }) {
-  const { events, eventsLoading } = ctx;
+  const { events, publicSoldCounts, eventsLoading } = ctx;
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -2010,16 +2048,16 @@ function HomePage({ ctx }) {
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
-          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} />)}
+          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} publicSoldCounts={publicSoldCounts} />)}
         </div>
       )}
     </div>
   );
 }
 
-function EventCard({ event, index }) {
+function EventCard({ event, index, publicSoldCounts }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
-  const totalSold = event.tiers.reduce((s,t) => s + getSold(event, t.id), 0);
+  const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, publicSoldCounts), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
   const hasImage = !!event.image;
@@ -2219,7 +2257,7 @@ function AuthPage({ mode, ctx }) {
 function EventPage({ ctx }) {
   const { eventId: eventRouteParam } = useParams();
   const eventId = resolveEventIdFromParam(eventRouteParam);
-  const { events, currentUser, tickets, joinWaitlist } = ctx;
+  const { events, publicSoldCounts, currentUser, tickets, joinWaitlist } = ctx;
   const navigate = useNavigate();
   const [cart, setCart] = useState({});
   const [event, setEvent] = useState(null);
@@ -2249,7 +2287,7 @@ function EventPage({ ctx }) {
       const tier = event.tiers.find(t => t.id===tierId);
       const draft = { ...prev };
       draft[tierId] = Math.max(0, (draft[tierId] || 0) + delta);
-      const inventoryCap = tier.total - getSold(event, tier.id);
+      const inventoryCap = tier.total - getLiveSold(event, tier.id, publicSoldCounts);
       draft[tierId] = Math.min(draft[tierId], inventoryCap);
       return draft;
     });
@@ -2337,7 +2375,7 @@ function EventPage({ ctx }) {
             <h3 style={{ fontSize:20, marginBottom:20 }}>SELECT TICKETS</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:20 }}>
               {event.tiers.map(tier => {
-                const available = tier.total - getSold(event, tier.id);
+                const available = tier.total - getLiveSold(event, tier.id, publicSoldCounts);
                 const qty = cart[tier.id]||0;
                 const wStatus = waitlistStatus[tier.id];
                 return (
@@ -2456,7 +2494,7 @@ function GuestModal({ onProceed, onClose }) {
 
 // ── Checkout Page ──────────────────────────────────────────────────────────
 function PaymentVerificationPage({ ctx }) {
-  const { purchaseTickets, notify } = ctx;
+  const { notify } = ctx;
   const navigate = useNavigate();
   const handledRef = useRef(false);
   const [status, setStatus] = useState("verifying");
@@ -2487,52 +2525,37 @@ function PaymentVerificationPage({ ctx }) {
       }
 
       try {
-        const verifyRes = await fetch("/api/verify-paystack", {
+        const finalizeRes = await fetch("/api/finalize-paystack-order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             reference,
+            eventId: pending.eventId,
+            cart: pending.cart,
+            buyer: pending.buyer,
             expectedAmount: pending.total * 100,
             expectedCurrency: "NGN",
-            eventId: pending.eventId,
-            email: pending.buyer?.email,
           }),
         });
 
-        const verifyData = await verifyRes.json().catch(() => ({}));
-        if (!verifyRes.ok || !verifyData?.ok) {
+        const finalizeData = await finalizeRes.json().catch(() => ({}));
+        if (!finalizeRes.ok || !finalizeData?.ok) {
           setStatus("failed");
-          setMessage(verifyData?.msg || "Payment verification failed.");
-          notify(verifyData?.msg || "Payment verification failed.", "error");
+          setMessage(finalizeData?.msg || "Payment finalization failed.");
+          notify(finalizeData?.msg || "Payment finalization failed.", "error");
           return;
         }
 
-        setMessage("Payment confirmed. Fetching your ticket...");
-        const existingSnap = await getDocs(query(collection(db, "tickets"), where("paystackRef", "==", reference)));
-        const existingTickets = existingSnap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(t => t.eventId === pending.eventId && t.userEmail === pending.buyer?.email);
-
-        if (existingTickets.length > 0) {
+        const finalizedTickets = Array.isArray(finalizeData?.tickets) ? finalizeData.tickets : [];
+        if (finalizedTickets.length > 0) {
           sessionStorage.removeItem("cart");
           sessionStorage.removeItem("guestInfo");
           sessionStorage.removeItem("pendingPaystackCheckout");
-          navigate(`/ticket/${existingTickets[0].id}`, { replace: true });
+          navigate(`/ticket/${finalizedTickets[0].id}`, { replace: true });
           return;
         }
-
-        setMessage("Creating your ticket...");
-        const created = await purchaseTickets(pending.eventId, pending.cart, reference, pending.buyer);
-        if (Array.isArray(created) && created.length > 0) {
-          sessionStorage.removeItem("cart");
-          sessionStorage.removeItem("guestInfo");
-          sessionStorage.removeItem("pendingPaystackCheckout");
-          navigate(`/ticket/${created[0].id}`, { replace: true });
-          return;
-        }
-
         setStatus("failed");
-        setMessage("Payment was verified, but we couldn't create your ticket automatically.");
+        setMessage("Payment was verified, but no tickets were returned.");
       } catch (err) {
         console.error("Payment verification page error:", err);
         setStatus("failed");

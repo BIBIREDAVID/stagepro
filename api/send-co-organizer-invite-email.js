@@ -1,15 +1,12 @@
-import nodemailer from "nodemailer";
 import { getAdminDb } from "../server/firebaseAdmin.js";
+import { sendEmailWithFallback } from "../server/email.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, msg: "Method not allowed" });
   }
 
-  const GMAIL_USER = process.env.GMAIL_USER;
-  const GMAIL_PASS = process.env.GMAIL_PASS;
   const sendEmail = req.body?.sendEmail !== false;
-
   const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
   const eventId = String(req.body?.eventId || "").trim();
   const eventTitle = String(req.body?.eventTitle || "").trim();
@@ -21,12 +18,12 @@ export default async function handler(req, res) {
   const eventUrl = `${base}/event/${eventId}`;
 
   const uniqueRecipients = recipients
-    .map((r) => ({
-      email: String(r?.email || "").trim().toLowerCase(),
-      uid: String(r?.uid || "").trim() || null,
+    .map((recipient) => ({
+      email: String(recipient?.email || "").trim().toLowerCase(),
+      uid: String(recipient?.uid || "").trim() || null,
     }))
-    .filter((r) => r.email)
-    .filter((r, i, arr) => arr.findIndex((x) => x.email === r.email) === i);
+    .filter((recipient) => recipient.email)
+    .filter((recipient, index, all) => all.findIndex((row) => row.email === recipient.email) === index);
 
   if (!eventId || !eventTitle || uniqueRecipients.length === 0) {
     return res.status(400).json({ ok: false, msg: "Missing required fields" });
@@ -62,21 +59,13 @@ export default async function handler(req, res) {
   try {
     let emailResults = [];
     if (sendEmail) {
-      if (!GMAIL_USER || !GMAIL_PASS) {
-        return res.status(500).json({ ok: false, msg: "Email not configured", debug: "Set GMAIL_USER and GMAIL_PASS or call with sendEmail=false" });
-      }
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-      });
-
       emailResults = await Promise.allSettled(
-        uniqueRecipients.map((r) =>
-          transporter.sendMail({
-            from: `"StagePro" <${GMAIL_USER}>`,
-            to: r.email,
+        uniqueRecipients.map((recipient) =>
+          sendEmailWithFallback({
+            to: recipient.email,
             subject: `Co-organizer invite - ${eventTitle}`,
             html,
+            fromName: "StagePro",
           })
         )
       );
@@ -88,10 +77,10 @@ export default async function handler(req, res) {
       const db = getAdminDb();
       const inAppResults = await Promise.allSettled(
         uniqueRecipients
-          .filter((r) => r.uid)
-          .map((r) =>
+          .filter((recipient) => recipient.uid)
+          .map((recipient) =>
             db.collection("organizerNotifications").add({
-              organizerId: r.uid,
+              organizerId: recipient.uid,
               eventId,
               eventTitle,
               type: "co_organizer_invite",
@@ -101,18 +90,18 @@ export default async function handler(req, res) {
             })
           )
       );
-      inAppSent = inAppResults.filter((r) => r.status === "fulfilled").length;
-      inAppFailed = inAppResults.filter((r) => r.status === "rejected").length;
+      inAppSent = inAppResults.filter((result) => result.status === "fulfilled").length;
+      inAppFailed = inAppResults.filter((result) => result.status === "rejected").length;
     } catch (inAppErr) {
       console.warn("Could not write co-organizer in-app notifications:", inAppErr);
-      inAppFailed = uniqueRecipients.filter((r) => r.uid).length;
+      inAppFailed = uniqueRecipients.filter((recipient) => recipient.uid).length;
     }
 
-    const sent = emailResults.filter((r) => r.status === "fulfilled").length;
-    const failed = emailResults.filter((r) => r.status === "rejected").length;
-    const firstEmailError = emailResults.find((r) => r.status === "rejected");
+    const sent = emailResults.filter((result) => result.status === "fulfilled").length;
+    const failed = emailResults.filter((result) => result.status === "rejected").length;
+    const firstEmailError = emailResults.find((result) => result.status === "rejected");
     const firstEmailErrorMsg = firstEmailError?.status === "rejected"
-      ? String(firstEmailError.reason?.message || "Unknown email error")
+      ? String(firstEmailError.reason?.debugMessage || firstEmailError.reason?.message || "Unknown email error")
       : "";
 
     const anyDelivered = sent > 0 || inAppSent > 0;
@@ -124,13 +113,24 @@ export default async function handler(req, res) {
         failed,
         inAppSent,
         inAppFailed,
-        debug: firstEmailErrorMsg || "No invite was delivered",
+        debug: process.env.NODE_ENV === "development" ? (firstEmailErrorMsg || "No invite was delivered") : undefined,
       });
     }
 
-    return res.status(200).json({ ok: true, sent, failed, inAppSent, inAppFailed, debug: firstEmailErrorMsg || "" });
+    return res.status(200).json({
+      ok: true,
+      sent,
+      failed,
+      inAppSent,
+      inAppFailed,
+      debug: process.env.NODE_ENV === "development" ? (firstEmailErrorMsg || "") : undefined,
+    });
   } catch (err) {
     console.error("Co-organizer invite email error:", err);
-    return res.status(500).json({ ok: false, msg: "Could not send invite emails", debug: String(err?.message || "") });
+    return res.status(500).json({
+      ok: false,
+      msg: err?.publicMessage || "Could not send invite emails",
+      debug: process.env.NODE_ENV === "development" ? String(err?.debugMessage || err?.message || "") : undefined,
+    });
   }
 }
