@@ -69,9 +69,22 @@ const db = getFirestore(app);
 const storage = getStorage(app);
 
 // ── Google Sheets logger (non-blocking) ────────────────────────────────────
-const logToSheets = async (payload) => {
+const getSheetsEndpoint = () => {
+  const raw = String(import.meta.env.VITE_SHEETS_URL || "").trim();
+  if (!raw) return "";
   try {
-    await fetch(import.meta.env.VITE_SHEETS_URL, {
+    const parsed = new URL(raw);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+};
+
+const logToSheets = async (payload) => {
+  const sheetsUrl = getSheetsEndpoint();
+  if (!sheetsUrl) return;
+  try {
+    await fetch(sheetsUrl, {
       method: "POST",
       mode: "no-cors",
       headers: { "Content-Type": "text/plain" },
@@ -283,6 +296,18 @@ const getSold = (event, tierId) => {
   }
   const tier = event?.tiers?.find(t => t.id === tierId);
   return Number(tier?.sold) || 0;
+};
+
+const normalizePhone = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  const compact = raw.replace(/[^\d+]/g, "");
+  if (!compact) return "";
+  if (compact.startsWith("+")) return compact;
+  if (compact.startsWith("234")) return `+${compact}`;
+  if (compact.startsWith("0")) return `+234${compact.slice(1)}`;
+  return compact;
 };
 
 const getLiveSold = (event, tierId, liveSoldCounts = {}) => {
@@ -968,23 +993,35 @@ export default function App() {
       const res = await signInWithPopup(auth, provider);
       const userRef = doc(db, "users", res.user.uid);
       const snap = await getDoc(userRef);
+      const googlePhone = normalizePhone(res.user.phoneNumber || "");
       let userData;
       if (snap.exists()) {
-        userData = { uid: res.user.uid, ...snap.data() };
+        const existingData = snap.data() || {};
+        const updates = {};
+        if (!String(existingData.phone || "").trim() && googlePhone) updates.phone = googlePhone;
+        if (Object.keys(updates).length > 0) {
+          await updateDoc(userRef, updates);
+        }
+        userData = { uid: res.user.uid, ...existingData, ...updates };
       } else {
         // First time — create user doc
         const newUser = {
           name: res.user.displayName || "User",
           email: res.user.email,
           role,
+          phone: googlePhone,
         };
         await setDoc(userRef, newUser);
         userData = { uid: res.user.uid, ...newUser };
       }
       setCurrentUser(userData);
       await claimCoOrganizerInvites(userData.uid, userData.email);
-      notify(`Welcome, ${userData.name.split(" ")[0]}!`);
-      return { ok: true, role: userData.role };
+      if (!String(userData.phone || "").trim()) {
+        notify("Signed in. Add your phone number to complete your profile.");
+      } else {
+        notify(`Welcome, ${userData.name.split(" ")[0]}!`);
+      }
+      return { ok: true, role: userData.role, needsPhone: !String(userData.phone || "").trim() };
     } catch (err) {
       console.error(err);
       return { ok: false };
@@ -995,7 +1032,7 @@ export default function App() {
     try {
       const normalizedEmail = email.trim().toLowerCase();
       const res = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
-      const userData = { name: name.trim(), email: normalizedEmail, role, phone: String(phone || "").trim() };
+      const userData = { name: name.trim(), email: normalizedEmail, role, phone: normalizePhone(phone) };
       await setDoc(doc(db, "users", res.user.uid), userData);
       setCurrentUser({ uid: res.user.uid, ...userData });
       await claimCoOrganizerInvites(res.user.uid, normalizedEmail);
@@ -1028,7 +1065,7 @@ export default function App() {
     const isFreeOrder = orderSubtotal === 0;
     const buyerName = buyer?.name || currentUser?.name || "Guest";
     const buyerEmail = (buyer?.email || currentUser?.email || "").trim().toLowerCase();
-    const buyerPhone = String(buyer?.phone || currentUser?.phone || "").trim();
+    const buyerPhone = normalizePhone(buyer?.phone || currentUser?.phone || "");
     const buyerUid = buyer?.uid || currentUser?.uid || `guest_${Date.now()}`;
     const isGuest = !buyer?.uid && !currentUser?.uid;
     // Step 1 — create ticket documents
@@ -1266,7 +1303,11 @@ export default function App() {
       const tier = event.tiers.find(t => t.id === tierId);
       if (!tier) return { ok: false, msg: "Selected tier was not found." };
 
-      const alreadySold = getSold(event, tierId);
+      const existingTicketsSnap = await getDocs(query(collection(db, "tickets"), where("eventId", "==", event.id)));
+      const alreadySold = existingTicketsSnap.docs.reduce((count, docSnap) => {
+        const ticket = docSnap.data() || {};
+        return String(ticket.tierId || "") === tierId ? count + 1 : count;
+      }, 0);
       const available = Math.max(0, Number(tier.total || 0) - alreadySold);
       if (quantity > available) {
         return { ok: false, msg: `Only ${available} ticket(s) left in this tier.` };
@@ -1333,18 +1374,7 @@ export default function App() {
         }
       }
 
-      try {
-        await updateDoc(doc(db, "events", event.id), { [`soldCounts.${tier.id}`]: increment(quantity) });
-      } catch (err) {
-        console.warn("Could not increment soldCounts for complimentary tickets:", err);
-      }
-
       setTickets(prev => [...created, ...prev]);
-      setEvents(prev => prev.map(e => {
-        if (e.id !== event.id) return e;
-        const nextSoldCounts = { ...(e.soldCounts || {}), [tier.id]: Number((e.soldCounts || {})[tier.id] || 0) + quantity };
-        return { ...e, soldCounts: nextSoldCounts };
-      }));
 
       return { ok: true, count: created.length };
     } catch (err) {
@@ -1530,10 +1560,11 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  const updateProfile = async ({ name, payoutDetails }) => {
+  const updateProfile = async ({ name, phone, payoutDetails }) => {
     try {
       const updates = {};
       if (typeof name === "string") updates.name = name.trim();
+      if (typeof phone === "string") updates.phone = normalizePhone(phone);
       if (payoutDetails) updates.payoutDetails = payoutDetails;
       await updateDoc(doc(db, "users", currentUser.uid), updates);
       setCurrentUser(prev => ({ ...prev, ...updates }));
@@ -2121,7 +2152,12 @@ function AuthPage({ mode, ctx }) {
   const [resetMsg, setResetMsg] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
 
-  if (currentUser) return <Navigate to="/" />;
+  if (currentUser) {
+    const nextPath = String(currentUser.phone || "").trim()
+      ? (currentUser.role === "organizer" ? "/dashboard" : "/")
+      : "/profile?complete=phone";
+    return <Navigate to={nextPath} />;
+  }
   const F = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
 
   const submit = async () => {
@@ -2152,7 +2188,12 @@ function AuthPage({ mode, ctx }) {
   };
 
   // redirect logged-in users away (but only if not viewing reset screen)
-  if (currentUser && !showReset) return <Navigate to="/" />;
+  if (currentUser && !showReset) {
+    const nextPath = String(currentUser.phone || "").trim()
+      ? (currentUser.role === "organizer" ? "/dashboard" : "/")
+      : "/profile?complete=phone";
+    return <Navigate to={nextPath} />;
+  }
 
   // ── Reset password screen ─────────────────────────────────────────────
   if (showReset) return (
@@ -2221,7 +2262,9 @@ function AuthPage({ mode, ctx }) {
             onClick={async () => {
               setLoading(true);
               const res = await loginWithGoogle(form.role || "customer");
-              if (res.ok) navigate(res.role === "organizer" ? "/dashboard" : "/");
+              if (res.ok) {
+                navigate(res.needsPhone ? "/profile?complete=phone" : (res.role === "organizer" ? "/dashboard" : "/"));
+              }
               else { setError("Google sign-in failed. Please try again."); setLoading(false); }
             }}
             disabled={loading}
@@ -5352,7 +5395,9 @@ function AdminPayoutsPage({ ctx }) {
 
 function ProfilePage({ ctx }) {
   const { currentUser, tickets, events, updateProfile, notify } = ctx;
+  const [searchParams] = useSearchParams();
   const [name, setName] = useState(currentUser.name);
+  const [phone, setPhone] = useState(currentUser.phone || "");
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState("info"); // info | history | payouts
   const [bankName, setBankName] = useState(currentUser.payoutDetails?.bankName || "");
@@ -5368,6 +5413,7 @@ function ProfilePage({ ctx }) {
     : [];
   const payoutSummary = currentUser.role === "organizer" ? calculatePayoutSummary(organizerTickets) : null;
   const hasPayoutDetails = Boolean(bankName.trim() && accountName.trim() && accountNumber.trim());
+  const phoneRequired = searchParams.get("complete") === "phone" && !String(currentUser.phone || "").trim();
   const roleMeta = currentUser.role === "admin"
     ? {
         label: "Administrator",
@@ -5390,17 +5436,18 @@ function ProfilePage({ ctx }) {
         };
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !normalizePhone(phone)) return;
     setSaving(true);
-    await updateProfile({ name });
+    await updateProfile({ name, phone });
     setSaving(false);
   };
 
   const handlePayoutSave = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !normalizePhone(phone)) return;
     setSaving(true);
     await updateProfile({
       name,
+      phone,
       payoutDetails: {
         bankName: bankName.trim(),
         accountName: accountName.trim(),
@@ -5454,16 +5501,27 @@ function ProfilePage({ ctx }) {
       {/* Account info tab */}
       {tab === "info" && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, display:"flex", flexDirection:"column", gap:20 }}>
+          {phoneRequired && (
+            <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid var(--gold-dim)", borderRadius:12, padding:"12px 14px", color:"var(--gold)", fontSize:13 }}>
+              Add your phone number to complete your account setup and keep ticket records consistent.
+            </div>
+          )}
           <div>
             <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>DISPLAY NAME</label>
             <div style={{ display:"flex", gap:10 }}>
               <input value={name} onChange={e => setName(e.target.value)}
                 style={{ flex:1, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
-              <button onClick={handleSave} disabled={saving || name.trim()===currentUser.name}
-                style={{ background: name.trim()!==currentUser.name?"var(--gold)":"var(--bg3)", color: name.trim()!==currentUser.name?"#000":"var(--muted)", border:"none", padding:"12px 20px", borderRadius:8, cursor: name.trim()!==currentUser.name?"pointer":"not-allowed", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
+              <button onClick={handleSave} disabled={saving || (name.trim() === currentUser.name && normalizePhone(phone) === normalizePhone(currentUser.phone || "")) || !normalizePhone(phone)}
+                style={{ background: (name.trim() !== currentUser.name || normalizePhone(phone) !== normalizePhone(currentUser.phone || "")) && normalizePhone(phone) ? "var(--gold)" : "var(--bg3)", color: (name.trim() !== currentUser.name || normalizePhone(phone) !== normalizePhone(currentUser.phone || "")) && normalizePhone(phone) ? "#000" : "var(--muted)", border:"none", padding:"12px 20px", borderRadius:8, cursor: (name.trim() !== currentUser.name || normalizePhone(phone) !== normalizePhone(currentUser.phone || "")) && normalizePhone(phone) ? "pointer" : "not-allowed", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
                 {saving ? "Saving..." : "Save"}
               </button>
             </div>
+          </div>
+          <div>
+            <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>PHONE NUMBER</label>
+            <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+234 801 234 5678"
+              style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+            <div style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>A phone number is required for guest checkout follow-up and ticket support.</div>
           </div>
           <div>
             <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>EMAIL ADDRESS</label>
