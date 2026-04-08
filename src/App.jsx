@@ -1105,7 +1105,7 @@ export default function App() {
       .filter(Boolean)
       .filter((v, i, arr) => arr.indexOf(v) === i);
 
-    if (!normalized.length) return { uids: [], foundEmails: [], missing: [] };
+    if (!normalized.length) return { uids: [], foundEmails: [], missing: [], resolvedUsers: [] };
 
     const lookups = await Promise.all(normalized.map(async (email) => {
       try {
@@ -1119,14 +1119,48 @@ export default function App() {
       }
     }));
 
-    const uids = lookups
+    const resolvedUsers = lookups
+      .filter(item => item.uid && item.uid !== currentUser?.uid)
+      .map(item => ({ email: item.email, uid: item.uid }));
+
+    const uids = resolvedUsers
       .map(item => item.uid)
-      .filter(Boolean)
-      .filter(uid => uid !== currentUser?.uid)
       .filter((v, i, arr) => arr.indexOf(v) === i);
-    const foundEmails = lookups.filter(item => item.uid && item.uid !== currentUser?.uid).map(item => item.email);
+    const foundEmails = resolvedUsers.map(item => item.email).filter((v, i, arr) => arr.indexOf(v) === i);
     const missing = lookups.filter(item => !item.uid).map(item => item.email);
-    return { uids, foundEmails, missing };
+    return { uids, foundEmails, missing, resolvedUsers };
+  };
+
+  const notifyCoOrganizers = async ({ eventId, eventTitle, recipients = [] }) => {
+    if (!eventId || !eventTitle || recipients.length === 0) {
+      return { ok: true, skipped: true, sent: 0, failed: 0, inAppSent: 0, inAppFailed: 0 };
+    }
+    const uniqueRecipients = recipients
+      .map(r => ({ email: String(r.email || "").trim().toLowerCase(), uid: r.uid || null }))
+      .filter(r => r.email)
+      .filter((r, i, arr) => arr.findIndex(x => x.email === r.email) === i);
+
+    try {
+      const res = await fetch("/api/send-co-organizer-invite-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventId,
+          eventTitle,
+          recipients: uniqueRecipients.map(r => ({ email: r.email, uid: r.uid || null })),
+          senderName: currentUser?.name || "StagePro Organizer",
+          origin: window.location.origin,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.ok) {
+        throw new Error(payload.msg || "Could not deliver co-organizer notifications");
+      }
+      return payload;
+    } catch (err) {
+      console.warn("Could not send co-organizer invite emails:", err);
+      return { ok: false, msg: err?.message || "Could not deliver co-organizer notifications", sent: 0, failed: uniqueRecipients.length, inAppSent: 0, inAppFailed: uniqueRecipients.filter(r => r.uid).length };
+    }
   };
 
   const issueComplimentaryTickets = async ({ eventId, tierId, qty, attendeeName, attendeeEmail }) => {
@@ -1257,6 +1291,19 @@ export default function App() {
       const ref = await addDoc(collection(db, "events"), data);
       const newEvent = { id: ref.id, ...data };
       setEvents(prev => [...prev, newEvent]);
+      const inviteResult = await notifyCoOrganizers({
+        eventId: ref.id,
+        eventTitle: data.title,
+        recipients: requestedCoEmails.map(email => ({
+          email,
+          uid: (resolved.resolvedUsers.find(item => item.email === email) || {}).uid || null,
+        })),
+      });
+      if (inviteResult?.ok && !inviteResult?.skipped) {
+        notify(`Co-organizer alerts sent: email ${inviteResult.sent}, in-app ${inviteResult.inAppSent}.`);
+      } else if (!inviteResult?.ok) {
+        notify(`Co-organizer invite delivery issue: ${inviteResult?.msg || "Could not send notifications."}`, "error");
+      }
       if (resolved.missing.length > 0) {
         notify(`Co-organizer invites saved for pending emails: ${resolved.missing.join(", ")}`);
       }
@@ -1271,6 +1318,8 @@ export default function App() {
 
   const updateEvent = async (eventId, eventData) => {
     try {
+      const currentEvent = events.find(e => e.id === eventId) || organizerEvents.find(e => e.id === eventId) || null;
+      const prevEmails = Array.isArray(currentEvent?.coOrganizerEmails) ? currentEvent.coOrganizerEmails : [];
       const requestedCoEmails = parseEmailList(eventData.coOrganizerEmailsText || "");
       const resolved = await resolveCoOrganizerUids(requestedCoEmails);
       const data = {
@@ -1286,6 +1335,22 @@ export default function App() {
       delete data.coOrganizerEmailsText;
       await updateDoc(doc(db, "events", eventId), data);
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...data } : e));
+      const newlyAddedEmails = requestedCoEmails.filter(email => !prevEmails.includes(email));
+      if (newlyAddedEmails.length > 0) {
+        const inviteResult = await notifyCoOrganizers({
+          eventId,
+          eventTitle: data.title || currentEvent?.title || "Event",
+          recipients: newlyAddedEmails.map(email => ({
+            email,
+            uid: (resolved.resolvedUsers.find(item => item.email === email) || {}).uid || null,
+          })),
+        });
+        if (inviteResult?.ok && !inviteResult?.skipped) {
+          notify(`Co-organizer alerts sent: email ${inviteResult.sent}, in-app ${inviteResult.inAppSent}.`);
+        } else if (!inviteResult?.ok) {
+          notify(`Co-organizer invite delivery issue: ${inviteResult?.msg || "Could not send notifications."}`, "error");
+        }
+      }
       if (resolved.missing.length > 0) {
         notify(`Co-organizer invites saved for pending emails: ${resolved.missing.join(", ")}`);
       }
