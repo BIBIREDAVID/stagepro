@@ -1,4 +1,4 @@
-import { getAdminAuth, getAdminDb } from "./_firebaseAdmin.js";
+import { getAdminAuth, getAdminDb } from "../server/firebaseAdmin.js";
 
 async function authorizeAdmin(req, db) {
   const authHeader = String(req.headers.authorization || "");

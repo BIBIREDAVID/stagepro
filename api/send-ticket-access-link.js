@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import nodemailer from "nodemailer";
-import { getAdminDb } from "./_firebaseAdmin.js";
+import { getAdminDb } from "../server/firebaseAdmin.js";
 const ACCESS_WINDOW_MS = 1000 * 60 * 20;
 
 function encodeBase64Url(value) {

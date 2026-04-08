@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getAdminDb } from "./_firebaseAdmin.js";
+import { getAdminDb } from "../server/firebaseAdmin.js";
 
 function getCustomField(metadata, variableName) {
   const fields = Array.isArray(metadata?.custom_fields) ? metadata.custom_fields : [];

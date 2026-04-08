@@ -1,5 +1,5 @@
 import { FieldValue } from "firebase-admin/firestore";
-import { getAdminAuth, getAdminDb } from "./_firebaseAdmin.js";
+import { getAdminAuth, getAdminDb } from "../server/firebaseAdmin.js";
 
 function readBearerToken(req) {
   const authHeader = req.headers.authorization || req.headers.Authorization || "";

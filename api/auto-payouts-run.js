@@ -1,5 +1,5 @@
 import nodemailer from "nodemailer";
-import { getAdminAuth, getAdminDb } from "./_firebaseAdmin.js";
+import { getAdminAuth, getAdminDb } from "../server/firebaseAdmin.js";
 
 const PAYSTACK_BASE = "https://api.paystack.co";
 const STAGEPRO_FEE = 100;

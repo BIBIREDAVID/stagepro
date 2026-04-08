@@ -2,7 +2,7 @@
 // POST { ticketId } — resends the confirmation email for a ticket
 
 import nodemailer from "nodemailer";
-import { getAdminDb } from "./_firebaseAdmin.js";
+import { getAdminDb } from "../server/firebaseAdmin.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });

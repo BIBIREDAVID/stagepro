@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { getAdminDb } from "./_firebaseAdmin.js";
+import { getAdminDb } from "../server/firebaseAdmin.js";
 
 function verifyToken(token, secret) {
   const [body, signature] = String(token || "").split(".");
