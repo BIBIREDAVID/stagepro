@@ -29,6 +29,14 @@ service cloud.firestore {
       return userRole() == "organizer" || isAdmin();
     }
 
+    function isSafeSelfRoleCreate() {
+      return request.resource.data.role == "customer";
+    }
+
+    function isSafeSelfRoleUpdate() {
+      return !("role" in request.resource.data) || request.resource.data.role == resource.data.role;
+    }
+
     function eventDoc(eventId) {
       return get(/databases/$(database)/documents/events/$(eventId));
     }
@@ -49,8 +57,13 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if signedIn();
-      allow create: if signedIn() && request.auth.uid == uid;
-      allow update: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && isSafeSelfRoleCreate();
+      allow update: if signedIn() && (
+        isAdmin() ||
+        (request.auth.uid == uid && isSafeSelfRoleUpdate())
+      );
       allow delete: if isAdmin();
     }
 

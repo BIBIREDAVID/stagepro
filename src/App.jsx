@@ -987,7 +987,7 @@ export default function App() {
     }
   };
 
-  const loginWithGoogle = async (role = "customer") => {
+  const loginWithGoogle = async () => {
     try {
       const provider = new GoogleAuthProvider();
       const res = await signInWithPopup(auth, provider);
@@ -1008,7 +1008,7 @@ export default function App() {
         const newUser = {
           name: res.user.displayName || "User",
           email: res.user.email,
-          role,
+          role: "customer",
           phone: googlePhone,
         };
         await setDoc(userRef, newUser);
@@ -1032,12 +1032,12 @@ export default function App() {
     try {
       const normalizedEmail = email.trim().toLowerCase();
       const res = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
-      const userData = { name: name.trim(), email: normalizedEmail, role, phone: normalizePhone(phone) };
+      const userData = { name: name.trim(), email: normalizedEmail, role: "customer", phone: normalizePhone(phone) };
       await setDoc(doc(db, "users", res.user.uid), userData);
       setCurrentUser({ uid: res.user.uid, ...userData });
       await claimCoOrganizerInvites(res.user.uid, normalizedEmail);
       notify(`Account created! Welcome, ${name.split(" ")[0]}!`);
-      return { ok: true, role };
+      return { ok: true, role: "customer" };
     } catch (err) { console.error(err); return { ok: false }; }
   };
 
@@ -1202,9 +1202,16 @@ export default function App() {
       const snap = await getDoc(ref);
       if (!snap.exists()) return { ok: false, msg: "Ticket not found" };
       const ticket = { id: snap.id, ...snap.data() };
-      if (currentUser?.role === "organizer") {
-        const ownsEvent = organizerEvents.some(e => e.id === ticket.eventId);
-        if (!ownsEvent) {
+      if (!currentUser || !["organizer", "admin"].includes(currentUser.role)) {
+        return { ok: false, msg: "Only approved organizers can validate tickets" };
+      }
+      if (currentUser.role === "organizer") {
+        const eventSnap = await getDoc(doc(db, "events", ticket.eventId));
+        if (!eventSnap.exists()) {
+          return { ok: false, msg: "Event not found for this ticket" };
+        }
+        const ticketEvent = { id: eventSnap.id, ...eventSnap.data() };
+        if (!isEventManager(ticketEvent, currentUser)) {
           return { ok: false, msg: "You can't validate tickets for another organizer's event" };
         }
       }
@@ -2168,9 +2175,9 @@ function AuthPage({ mode, ctx }) {
       navigate(res.role === "organizer" ? "/dashboard" : "/");
     } else {
       if (!form.name || !form.email || !form.phone || !form.password) { setError("All fields required."); setLoading(false); return; }
-      const res = await register(form.name, form.email, form.password, form.role, form.phone);
+      const res = await register(form.name, form.email, form.password, "customer", form.phone);
       if (!res.ok) { setError("Email already in use or invalid."); setLoading(false); return; }
-      navigate(res.role === "organizer" ? "/dashboard" : "/");
+      navigate("/");
     }
     setLoading(false);
   };
@@ -2234,15 +2241,8 @@ function AuthPage({ mode, ctx }) {
           <Input label="Email" type="email" value={form.email} onChange={F("email")} placeholder="you@email.com" />
           <Input label="Password" type="password" value={form.password} onChange={F("password")} placeholder="••••••••" />
           {mode==="register" && (
-            <div>
-              <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>ACCOUNT TYPE</label>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                {["customer","organizer"].map(r => (
-                  <button key={r} onClick={() => setForm(p=>({...p,role:r}))} style={{ background: form.role===r?"rgba(245,166,35,0.15)":"var(--bg3)", border:`1px solid ${form.role===r?"var(--gold)":"var(--border)"}`, color: form.role===r?"var(--gold)":"var(--muted)", padding:12, borderRadius:8, cursor:"pointer", fontWeight:600, fontSize:13 }}>
-                    {r==="customer"?<><i className="fa-solid fa-ticket" style={{marginRight:6}} />Attendee</>:<><i className="fa-solid fa-star" style={{marginRight:6}} />Organizer</>}
-                  </button>
-                ))}
-              </div>
+            <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid var(--gold-dim)", borderRadius:10, padding:"12px 14px", color:"var(--muted)", fontSize:13, lineHeight:1.6 }}>
+              New public signups create attendee accounts. Organizer access is granted separately by StagePro.
             </div>
           )}
           {error && <div style={{ color:"var(--red)", fontSize:13, textAlign:"center" }}>{error}</div>}
@@ -2261,7 +2261,7 @@ function AuthPage({ mode, ctx }) {
           <button
             onClick={async () => {
               setLoading(true);
-              const res = await loginWithGoogle(form.role || "customer");
+              const res = await loginWithGoogle();
               if (res.ok) {
                 navigate(res.needsPhone ? "/profile?complete=phone" : (res.role === "organizer" ? "/dashboard" : "/"));
               }
