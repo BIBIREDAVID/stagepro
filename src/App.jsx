@@ -869,7 +869,7 @@ export default function App() {
       if (!uid || !email) return;
       const token = await auth.currentUser?.getIdToken();
       if (!token) return;
-      await fetch("/api/claim-co-organizer-invites", {
+      const res = await fetch("/api/claim-co-organizer-invites", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -877,6 +877,10 @@ export default function App() {
         },
         body: JSON.stringify({ uid, email: String(email).trim().toLowerCase() }),
       });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.ok) {
+        console.warn("Could not claim co-organizer invites:", payload?.msg || "Request failed", payload?.debug || "");
+      }
     } catch (err) {
       console.warn("Could not claim co-organizer invites:", err);
     }
