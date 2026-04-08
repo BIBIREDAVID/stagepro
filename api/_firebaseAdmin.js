@@ -26,8 +26,42 @@ function resolvePrivateKey() {
   return direct.replace(/\\n/g, "\n");
 }
 
+function resolveServiceAccountFromEnv() {
+  const directJson = stripWrappingQuotes(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "");
+  if (directJson) {
+    try {
+      return JSON.parse(directJson);
+    } catch {
+      // try next source
+    }
+  }
+
+  const b64Json = stripWrappingQuotes(process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 || "");
+  if (b64Json) {
+    try {
+      const decoded = Buffer.from(b64Json, "base64").toString("utf8");
+      return JSON.parse(decoded);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 function getAdminApp() {
   if (getApps().length) return getApps()[0];
+
+  const fromJson = resolveServiceAccountFromEnv();
+  if (fromJson?.client_email && fromJson?.private_key) {
+    return initializeApp({
+      credential: cert({
+        projectId: fromJson.project_id || stripWrappingQuotes(process.env.FIREBASE_PROJECT_ID || "stagepro-327e8"),
+        clientEmail: fromJson.client_email,
+        privateKey: String(fromJson.private_key).replace(/\\n/g, "\n"),
+      }),
+    });
+  }
 
   const projectId = stripWrappingQuotes(process.env.FIREBASE_PROJECT_ID || "stagepro-327e8");
   const clientEmail = stripWrappingQuotes(process.env.FIREBASE_CLIENT_EMAIL || "");
