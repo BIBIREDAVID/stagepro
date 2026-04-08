@@ -51,6 +51,9 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: true, sentTo: toEmail, provider: delivery.provider });
   } catch (err) {
     console.error("Resend ticket error:", err);
-    return res.status(500).json({ error: err?.message || "Could not resend ticket email" });
+    return res.status(500).json({
+      error: err?.publicMessage || "Could not resend ticket email",
+      debug: process.env.NODE_ENV === "development" ? (err?.debugMessage || err?.message || "Unknown server error") : undefined,
+    });
   }
 }

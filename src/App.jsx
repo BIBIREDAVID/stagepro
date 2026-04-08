@@ -415,10 +415,10 @@ const sendTicketEmail = async ({ toEmail, toName, ticket, eventImage, themeColor
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok || payload?.success !== true) {
-      console.warn("Ticket email failed (non-critical):", payload?.error || "Request failed", payload?.debug || "");
+      console.warn("Ticket email failed (non-critical):", payload?.error || "Email delivery is temporarily unavailable.");
     }
   } catch (err) {
-    console.warn("Ticket email failed (non-critical):", err);
+    console.warn("Ticket email failed (non-critical):", err?.message || "Email delivery is temporarily unavailable.");
   }
 };
 
@@ -3083,7 +3083,9 @@ function DashboardPage({ ctx }) {
   const myTickets = activeTickets.filter(t => myEventIds.has(t.eventId));
   const payoutSummary = calculatePayoutSummary(myTickets);
 
-  const totalSold = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + getSold(e, t.id), 0), 0);
+  // Use actual ticket documents as the dashboard source of truth so sales stay
+  // consistent even if soldCounts updates are delayed or blocked.
+  const totalSold = myTickets.length;
   const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
   const revenue   = payoutSummary.gross;
   const totalCheckedIn = myTickets.filter(t => t.used).length;

@@ -4,6 +4,13 @@ function env(name) {
   return String(process.env[name] || "").trim();
 }
 
+function createEmailDeliveryError(message, debug) {
+  const error = new Error(message);
+  error.publicMessage = message;
+  error.debugMessage = debug;
+  return error;
+}
+
 export async function sendEmailWithFallback({ to, subject, html, fromName = "StagePro Tickets" }) {
   const toEmail = String(to || "").trim();
   if (!toEmail) throw new Error("Recipient email is required");
@@ -11,7 +18,7 @@ export async function sendEmailWithFallback({ to, subject, html, fromName = "Sta
   const gmailUser = env("GMAIL_USER");
   const gmailPass = env("GMAIL_PASS");
   const resendKey = env("RESEND_API_KEY");
-  const resendFrom = env("RESEND_FROM") || gmailUser || "onboarding@resend.dev";
+  const resendFrom = env("RESEND_FROM") || "onboarding@resend.dev";
 
   let gmailErr = "";
   if (gmailUser && gmailPass) {
@@ -58,7 +65,8 @@ export async function sendEmailWithFallback({ to, subject, html, fromName = "Sta
     }
   }
 
-  throw new Error(
+  throw createEmailDeliveryError(
+    "Email delivery is temporarily unavailable.",
     `Email delivery failed. Gmail: ${gmailErr || "not configured"}; Resend: ${resendErr || "not configured"}`
   );
 }
