@@ -953,11 +953,11 @@ export default function App() {
     }
   };
 
-  const register = async (name, email, password, role) => {
+  const register = async (name, email, password, role, phone = "") => {
     try {
       const normalizedEmail = email.trim().toLowerCase();
       const res = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
-      const userData = { name: name.trim(), email: normalizedEmail, role };
+      const userData = { name: name.trim(), email: normalizedEmail, role, phone: String(phone || "").trim() };
       await setDoc(doc(db, "users", res.user.uid), userData);
       setCurrentUser({ uid: res.user.uid, ...userData });
       await claimCoOrganizerInvites(res.user.uid, normalizedEmail);
@@ -990,6 +990,7 @@ export default function App() {
     const isFreeOrder = orderSubtotal === 0;
     const buyerName = buyer?.name || currentUser?.name || "Guest";
     const buyerEmail = (buyer?.email || currentUser?.email || "").trim().toLowerCase();
+    const buyerPhone = String(buyer?.phone || currentUser?.phone || "").trim();
     const buyerUid = buyer?.uid || currentUser?.uid || `guest_${Date.now()}`;
     const isGuest = !buyer?.uid && !currentUser?.uid;
     // Step 1 — create ticket documents
@@ -1004,6 +1005,7 @@ export default function App() {
             tierId: tier.id, tierName: tier.name, price: Number(tier.price),
             userId: buyerUid, userName: buyerName,
             userEmail: buyerEmail,
+            userPhone: buyerPhone,
             isGuest: isGuest || false,
             used: false, purchasedAt: new Date().toISOString(),
             ...(paystackRef ? { paystackRef, paymentStatus: "paid" } : { paymentStatus: "free" }),
@@ -1034,6 +1036,7 @@ export default function App() {
                 currency: "NGN",
                 attendeeName: buyerName,
                 attendeeEmail: buyerEmail || "",
+                attendeePhone: buyerPhone,
                 status: "free",
                 source: "app_free_ticket",
                 createdAt: new Date().toISOString(),
@@ -1071,6 +1074,7 @@ export default function App() {
             action: "purchase", ticketId: ticketRef.id,
             eventTitle: event.title, tierName: tier.name,
             userName: buyerName, email: buyerEmail,
+            phone: buyerPhone,
             price: Number(tier.price),
             serviceFee: isFreeOrder ? 0 : SERVICE_FEE,
             purchasedAt: new Date().toLocaleString("en-NG"),
@@ -2071,7 +2075,7 @@ function EventCard({ event, index }) {
 function AuthPage({ mode, ctx }) {
   const { login, loginWithGoogle, register, currentUser } = ctx;
   const navigate = useNavigate();
-  const [form, setForm] = useState({ name:"", email:"", password:"", role:"customer" });
+  const [form, setForm] = useState({ name:"", email:"", phone:"", password:"", role:"customer" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showReset, setShowReset] = useState(false);
@@ -2089,8 +2093,8 @@ function AuthPage({ mode, ctx }) {
       if (!res.ok) { setError("Invalid email or password."); setLoading(false); return; }
       navigate(res.role === "organizer" ? "/dashboard" : "/");
     } else {
-      if (!form.name || !form.email || !form.password) { setError("All fields required."); setLoading(false); return; }
-      const res = await register(form.name, form.email, form.password, form.role);
+      if (!form.name || !form.email || !form.phone || !form.password) { setError("All fields required."); setLoading(false); return; }
+      const res = await register(form.name, form.email, form.password, form.role, form.phone);
       if (!res.ok) { setError("Email already in use or invalid."); setLoading(false); return; }
       navigate(res.role === "organizer" ? "/dashboard" : "/");
     }
@@ -2147,6 +2151,7 @@ function AuthPage({ mode, ctx }) {
         </div>
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, display:"flex", flexDirection:"column", gap:16 }}>
           {mode==="register" && <Input label="Full Name" value={form.name} onChange={F("name")} placeholder="Amara Okafor" />}
+          {mode==="register" && <Input label="Phone Number" type="tel" value={form.phone} onChange={F("phone")} placeholder="+234 801 234 5678" />}
           <Input label="Email" type="email" value={form.email} onChange={F("email")} placeholder="you@email.com" />
           <Input label="Password" type="password" value={form.password} onChange={F("password")} placeholder="••••••••" />
           {mode==="register" && (
@@ -2403,9 +2408,9 @@ function EventPage({ ctx }) {
 
 // ── Guest Checkout Modal ───────────────────────────────────────────────────
 function GuestModal({ onProceed, onClose }) {
-  const [form, setForm] = useState({ name:"", email:"" });
+  const [form, setForm] = useState({ name:"", email:"", phone:"" });
   const F = k => e => setForm(p=>({...p,[k]:e.target.value}));
-  const valid = form.name.trim() && form.email.includes("@");
+  const valid = form.name.trim() && form.email.includes("@") && form.phone.trim();
   const iStyle = { width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:10, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none", fontFamily:"Manrope" };
 
   return (
@@ -2427,6 +2432,10 @@ function GuestModal({ onProceed, onClose }) {
             <div style={{ fontSize:11, color:"var(--muted)", marginTop:5 }}>
               <i className="fa-solid fa-lock" style={{ marginRight:4 }} />Your ticket QR code will be sent here
             </div>
+          </div>
+          <div>
+            <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>PHONE NUMBER *</label>
+            <input type="tel" value={form.phone} onChange={F("phone")} placeholder="+234 801 234 5678" style={iStyle} />
           </div>
         </div>
 
@@ -2685,6 +2694,7 @@ function CheckoutPage({ ctx }) {
       metadata: {
         custom_fields: [
           { display_name:"Customer", variable_name:"customer", value: buyer.name },
+          { display_name:"Phone", variable_name:"phone", value: buyer.phone || "" },
           { display_name:"Event", variable_name:"event", value: event.title },
           { display_name:"Event ID", variable_name:"event_id", value: event.id },
           { display_name:"Organizer ID", variable_name:"organizer_id", value: event.organizer || "" },
@@ -2754,6 +2764,7 @@ function CheckoutPage({ ctx }) {
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ATTENDEE</div>
         <div style={{ fontWeight:600 }}>{buyer.name}</div>
         <div style={{ color:"var(--muted)", fontSize:13 }}>{buyer.email}{!currentUser && <span style={{ marginLeft:8, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:100, padding:"1px 8px", fontSize:10, color:"var(--muted)", letterSpacing:1 }}>GUEST</span>}</div>
+        {buyer.phone && <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>{buyer.phone}</div>}
       </div>
 
       {/* Free banner — no payment needed */}
