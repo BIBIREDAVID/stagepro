@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/auto-payouts-run",
-      "schedule": "0 */6 * * *"
+      "schedule": "0 0 * * *"
     }
   ],
   "rewrites": [
