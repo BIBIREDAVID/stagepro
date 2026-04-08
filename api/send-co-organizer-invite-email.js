@@ -8,9 +8,7 @@ export default async function handler(req, res) {
 
   const GMAIL_USER = process.env.GMAIL_USER;
   const GMAIL_PASS = process.env.GMAIL_PASS;
-  if (!GMAIL_USER || !GMAIL_PASS) {
-    return res.status(500).json({ ok: false, msg: "Email not configured" });
-  }
+  const sendEmail = req.body?.sendEmail !== false;
 
   const recipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
   const eventId = String(req.body?.eventId || "").trim();
@@ -62,21 +60,27 @@ export default async function handler(req, res) {
 </body></html>`;
 
   try {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-    });
+    let emailResults = [];
+    if (sendEmail) {
+      if (!GMAIL_USER || !GMAIL_PASS) {
+        return res.status(500).json({ ok: false, msg: "Email not configured", debug: "Set GMAIL_USER and GMAIL_PASS or call with sendEmail=false" });
+      }
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+      });
 
-    const emailResults = await Promise.allSettled(
-      uniqueRecipients.map((r) =>
-        transporter.sendMail({
-          from: `"StagePro" <${GMAIL_USER}>`,
-          to: r.email,
-          subject: `Co-organizer invite - ${eventTitle}`,
-          html,
-        })
-      )
-    );
+      emailResults = await Promise.allSettled(
+        uniqueRecipients.map((r) =>
+          transporter.sendMail({
+            from: `"StagePro" <${GMAIL_USER}>`,
+            to: r.email,
+            subject: `Co-organizer invite - ${eventTitle}`,
+            html,
+          })
+        )
+      );
+    }
 
     let inAppSent = 0;
     let inAppFailed = 0;

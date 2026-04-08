@@ -1148,6 +1148,7 @@ export default function App() {
           recipients: uniqueRecipients.map(r => ({ email: r.email, uid: r.uid || null })),
           senderName: currentUser?.name || "StagePro Organizer",
           origin: window.location.origin,
+          sendEmail: false,
         }),
       });
       const payload = await res.json().catch(() => ({}));
@@ -1298,7 +1299,7 @@ export default function App() {
         })),
       });
       if (inviteResult?.ok && !inviteResult?.skipped) {
-        notify(`Co-organizer alerts sent: email ${inviteResult.sent}, in-app ${inviteResult.inAppSent}.`);
+        notify(`Co-organizer alerts sent in-app: ${inviteResult.inAppSent}.`);
       } else if (!inviteResult?.ok) {
         notify(`Co-organizer invite delivery issue: ${inviteResult?.msg || "Could not send notifications."}`, "error");
       }
@@ -1342,7 +1343,7 @@ export default function App() {
           })),
         });
         if (inviteResult?.ok && !inviteResult?.skipped) {
-          notify(`Co-organizer alerts sent: email ${inviteResult.sent}, in-app ${inviteResult.inAppSent}.`);
+          notify(`Co-organizer alerts sent in-app: ${inviteResult.inAppSent}.`);
         } else if (!inviteResult?.ok) {
           notify(`Co-organizer invite delivery issue: ${inviteResult?.msg || "Could not send notifications."}`, "error");
         }
