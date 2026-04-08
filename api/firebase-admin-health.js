@@ -26,7 +26,7 @@ export default async function handler(req, res) {
       ok: true,
       msg: "Firebase admin initialized",
       envInfo,
-      projectId: db.app.options.projectId || null,
+      projectId: process.env.FIREBASE_PROJECT_ID || null,
     });
   } catch (err) {
     return res.status(500).json({
