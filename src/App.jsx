@@ -310,6 +310,24 @@ const fmtDate = (d) =>
     weekday: "short", year: "numeric", month: "long", day: "numeric",
   });
 
+const parseEmailList = (value = "") =>
+  String(value)
+    .split(/[,\n;]/)
+    .map(v => v.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((v, i, arr) => arr.indexOf(v) === i);
+
+const isEventManager = (event, userOrUid, userEmail = "") => {
+  if (!event || !userOrUid) return false;
+  const userUid = typeof userOrUid === "string" ? userOrUid : userOrUid.uid;
+  const email = String(typeof userOrUid === "object" ? userOrUid.email : userEmail || "").trim().toLowerCase();
+  if (event.organizer === userUid) return true;
+  if (Array.isArray(event.coOrganizers) && event.coOrganizers.includes(userUid)) return true;
+  if (email && Array.isArray(event.coOrganizerEmails) && event.coOrganizerEmails.includes(email)) return true;
+  if (email && Array.isArray(event.coOrganizerInviteEmails) && event.coOrganizerInviteEmails.includes(email)) return true;
+  return false;
+};
+
 const SHORT_TICKET_ID_LENGTH = 7;
 const SHORT_TICKET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -655,16 +673,72 @@ export default function App() {
       setOrganizerEvents([]);
       return;
     }
-    const q = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
-    const unsub = onSnapshot(
-      q,
-      (snapshot) => setOrganizerEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))),
+
+    const bucket = new Map();
+    const mergeRows = () => {
+      const mergedMap = new Map();
+      bucket.forEach(rows => rows.forEach(row => mergedMap.set(row.id, row)));
+      setOrganizerEvents(Array.from(mergedMap.values()));
+    };
+
+    const ownedQ = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
+    const collabQ = query(collection(db, "events"), where("coOrganizers", "array-contains", currentUser.uid));
+    const collabEmailQ = query(collection(db, "events"), where("coOrganizerEmails", "array-contains", (currentUser.email || "").toLowerCase()));
+    const inviteEmailQ = query(collection(db, "events"), where("coOrganizerInviteEmails", "array-contains", (currentUser.email || "").toLowerCase()));
+
+    const unsubOwned = onSnapshot(
+      ownedQ,
+      (snapshot) => {
+        bucket.set("owned", snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        mergeRows();
+      },
       (err) => {
-        console.error("Organizer events listener failed:", err);
-        setOrganizerEvents([]);
+        console.error("Organizer owned-events listener failed:", err);
+        bucket.set("owned", []);
+        mergeRows();
       }
     );
-    return () => unsub();
+
+    const unsubCollab = onSnapshot(
+      collabQ,
+      (snapshot) => {
+        bucket.set("collab", snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        mergeRows();
+      },
+      (err) => {
+        console.error("Organizer co-events listener failed:", err);
+        bucket.set("collab", []);
+        mergeRows();
+      }
+    );
+
+    const unsubCollabEmail = onSnapshot(
+      collabEmailQ,
+      (snapshot) => {
+        bucket.set("collabEmail", snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        mergeRows();
+      },
+      (err) => {
+        console.error("Organizer co-email events listener failed:", err);
+        bucket.set("collabEmail", []);
+        mergeRows();
+      }
+    );
+
+    const unsubInviteEmail = onSnapshot(
+      inviteEmailQ,
+      (snapshot) => {
+        bucket.set("inviteEmail", snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        mergeRows();
+      },
+      (err) => {
+        console.error("Organizer invite-email events listener failed:", err);
+        bucket.set("inviteEmail", []);
+        mergeRows();
+      }
+    );
+
+    return () => { unsubOwned(); unsubCollab(); unsubCollabEmail(); unsubInviteEmail(); };
   }, [currentUser]);
 
   useEffect(() => {
@@ -786,9 +860,28 @@ export default function App() {
       const snap = await getDoc(doc(db, "users", res.user.uid));
       const userData = { uid: res.user.uid, ...snap.data() };
       setCurrentUser(userData);
+      await claimCoOrganizerInvites(userData.uid, userData.email);
       notify(`Welcome back, ${userData.name.split(" ")[0]}!`);
       return { ok: true, role: userData.role };
     } catch { return { ok: false }; }
+  };
+
+  const claimCoOrganizerInvites = async (uid, email) => {
+    try {
+      if (!uid || !email) return;
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) return;
+      await fetch("/api/claim-co-organizer-invites", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ uid, email: String(email).trim().toLowerCase() }),
+      });
+    } catch (err) {
+      console.warn("Could not claim co-organizer invites:", err);
+    }
   };
 
   const loginWithGoogle = async (role = "customer") => {
@@ -811,6 +904,7 @@ export default function App() {
         userData = { uid: res.user.uid, ...newUser };
       }
       setCurrentUser(userData);
+      await claimCoOrganizerInvites(userData.uid, userData.email);
       notify(`Welcome, ${userData.name.split(" ")[0]}!`);
       return { ok: true, role: userData.role };
     } catch (err) {
@@ -826,6 +920,7 @@ export default function App() {
       const userData = { name: name.trim(), email: normalizedEmail, role };
       await setDoc(doc(db, "users", res.user.uid), userData);
       setCurrentUser({ uid: res.user.uid, ...userData });
+      await claimCoOrganizerInvites(res.user.uid, normalizedEmail);
       notify(`Account created! Welcome, ${name.split(" ")[0]}!`);
       return { ok: true, role };
     } catch (err) { console.error(err); return { ok: false }; }
@@ -1004,6 +1099,36 @@ export default function App() {
     }
   };
 
+  const resolveCoOrganizerUids = async (emails = []) => {
+    const normalized = emails
+      .map(v => String(v || "").trim().toLowerCase())
+      .filter(Boolean)
+      .filter((v, i, arr) => arr.indexOf(v) === i);
+
+    if (!normalized.length) return { uids: [], foundEmails: [], missing: [] };
+
+    const lookups = await Promise.all(normalized.map(async (email) => {
+      try {
+        const q = query(collection(db, "users"), where("email", "==", email));
+        const snap = await getDocs(q);
+        const docSnap = snap.docs[0];
+        if (!docSnap) return { email, uid: null };
+        return { email, uid: docSnap.id };
+      } catch {
+        return { email, uid: null };
+      }
+    }));
+
+    const uids = lookups
+      .map(item => item.uid)
+      .filter(Boolean)
+      .filter(uid => uid !== currentUser?.uid)
+      .filter((v, i, arr) => arr.indexOf(v) === i);
+    const foundEmails = lookups.filter(item => item.uid && item.uid !== currentUser?.uid).map(item => item.email);
+    const missing = lookups.filter(item => !item.uid).map(item => item.email);
+    return { uids, foundEmails, missing };
+  };
+
   const issueComplimentaryTickets = async ({ eventId, tierId, qty, attendeeName, attendeeEmail }) => {
     try {
       if (currentUser?.role !== "organizer") {
@@ -1018,8 +1143,8 @@ export default function App() {
       const eventSnap = await getDoc(doc(db, "events", eventId));
       if (!eventSnap.exists()) return { ok: false, msg: "Event not found." };
       const event = { id: eventSnap.id, ...eventSnap.data() };
-      if (event.organizer !== currentUser.uid) {
-        return { ok: false, msg: "You can only issue tickets for your own events." };
+      if (!isEventManager(event, currentUser)) {
+        return { ok: false, msg: "You can only issue tickets for events you manage." };
       }
 
       const tier = event.tiers.find(t => t.id === tierId);
@@ -1114,18 +1239,27 @@ export default function App() {
 
   const createEvent = async (eventData) => {
     try {
+      const requestedCoEmails = parseEmailList(eventData.coOrganizerEmailsText || "");
+      const resolved = await resolveCoOrganizerUids(requestedCoEmails);
       const data = {
         ...eventData,
         image: eventData.image || "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=800&q=80",
         organizer: currentUser.uid,
+        coOrganizers: resolved.uids,
+        coOrganizerEmails: requestedCoEmails,
+        coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
         tiers: eventData.tiers.map((t, i) => ({
           id: `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: 0,
         })),
       };
+      delete data.coOrganizerEmailsText;
       const ref = await addDoc(collection(db, "events"), data);
       const newEvent = { id: ref.id, ...data };
       setEvents(prev => [...prev, newEvent]);
+      if (resolved.missing.length > 0) {
+        notify(`Co-organizer invites saved for pending emails: ${resolved.missing.join(", ")}`);
+      }
       notify("Event published!");
       return newEvent;
     } catch (err) {
@@ -1137,15 +1271,24 @@ export default function App() {
 
   const updateEvent = async (eventId, eventData) => {
     try {
+      const requestedCoEmails = parseEmailList(eventData.coOrganizerEmailsText || "");
+      const resolved = await resolveCoOrganizerUids(requestedCoEmails);
       const data = {
         ...eventData,
+        coOrganizers: resolved.uids,
+        coOrganizerEmails: requestedCoEmails,
+        coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
         tiers: eventData.tiers.map((t, i) => ({
           id: t.id || `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: t.sold||0,
         })),
       };
+      delete data.coOrganizerEmailsText;
       await updateDoc(doc(db, "events", eventId), data);
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...data } : e));
+      if (resolved.missing.length > 0) {
+        notify(`Co-organizer invites saved for pending emails: ${resolved.missing.join(", ")}`);
+      }
       notify("Event updated!");
       return true;
     } catch (err) {
@@ -1222,9 +1365,17 @@ export default function App() {
       const snapshot = await getDocs(collection(db, "events"));
       setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
       if (currentUser?.role === "organizer") {
-        const q = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
-        const organizerSnapshot = await getDocs(q);
-        setOrganizerEvents(organizerSnapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        const ownedQ = query(collection(db, "events"), where("organizer", "==", currentUser.uid));
+        const collabQ = query(collection(db, "events"), where("coOrganizers", "array-contains", currentUser.uid));
+        const collabEmailQ = query(collection(db, "events"), where("coOrganizerEmails", "array-contains", (currentUser.email || "").toLowerCase()));
+        const inviteEmailQ = query(collection(db, "events"), where("coOrganizerInviteEmails", "array-contains", (currentUser.email || "").toLowerCase()));
+        const [ownedSnap, collabSnap, collabEmailSnap, inviteEmailSnap] = await Promise.all([getDocs(ownedQ), getDocs(collabQ), getDocs(collabEmailQ), getDocs(inviteEmailQ)]);
+        const mergedMap = new Map();
+        ownedSnap.docs.forEach(d => mergedMap.set(d.id, { id: d.id, ...d.data() }));
+        collabSnap.docs.forEach(d => mergedMap.set(d.id, { id: d.id, ...d.data() }));
+        collabEmailSnap.docs.forEach(d => mergedMap.set(d.id, { id: d.id, ...d.data() }));
+        inviteEmailSnap.docs.forEach(d => mergedMap.set(d.id, { id: d.id, ...d.data() }));
+        setOrganizerEvents(Array.from(mergedMap.values()));
       }
     } catch (err) { console.error(err); }
   };
@@ -3553,6 +3704,19 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           {fieldErr("venue")}
         </div>
 
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>CO-ORGANIZERS (OPTIONAL)</label>
+          <input
+            value={form.coOrganizerEmailsText || ""}
+            onChange={F("coOrganizerEmailsText")}
+            placeholder="organizer2@email.com, organizer3@email.com"
+            style={iStyle("coOrganizerEmailsText", false)}
+          />
+          <div style={{ fontSize:11, color:"var(--muted)", marginTop:6, lineHeight:1.6 }}>
+            Add existing StagePro organizer emails. Co-organizers can manage this event from their own dashboard.
+          </div>
+        </div>
+
         {/* Event Image — URL input */}
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT IMAGE / FLYER</label>
@@ -3702,7 +3866,7 @@ function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
-  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", tiers:[{ name:"General", price:"", total:"" }] };
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
@@ -3728,6 +3892,7 @@ function EditEventPage({ ctx }) {
     description: event.description||"",
     image: event.image||"",
     theme: event.theme||"",
+    coOrganizerEmailsText: Array.isArray(event.coOrganizerEmails) ? event.coOrganizerEmails.join(", ") : "",
     tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold||0, _free: Number(t.price)===0 })),
   };
 
@@ -4020,7 +4185,7 @@ function AnalyticsPage({ ctx }) {
     setCompTierId(prev => (prev && event.tiers.some(t => t.id === prev)) ? prev : event.tiers[0].id);
   }, [event]);
 
-  if (!event || event.organizer !== currentUser.uid) return <Navigate to="/dashboard" />;
+  if (!event || !isEventManager(event, currentUser)) return <Navigate to="/dashboard" />;
 
   const eventTickets = tickets.filter(t => t.eventId === eventId);
   const sold = eventTickets.length;
