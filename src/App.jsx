@@ -801,7 +801,6 @@ export default function App() {
     const q = query(
       collection(db, "organizerNotifications"),
       where("organizerId", "==", currentUser.uid),
-      orderBy("createdAt", "desc"),
       limit(50)
     );
 
@@ -834,7 +833,6 @@ export default function App() {
     const q = query(
       collection(db, "organizerAttendeeFeed"),
       where("organizerId", "==", currentUser.uid),
-      orderBy("createdAt", "desc"),
       limit(80)
     );
 
