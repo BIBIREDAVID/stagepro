@@ -95,6 +95,19 @@ const logToSheets = async (payload) => {
   }
 };
 
+const logOrganizerLiveSheet = async (organizerId, payload) => {
+  if (!organizerId || !payload) return;
+  try {
+    await fetch("/api/auto-payouts-run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ organizerId, payload }),
+    });
+  } catch (err) {
+    console.warn("Organizer live sheet log failed (non-critical):", err);
+  }
+};
+
 // ── CSV Download ───────────────────────────────────────────────────────────
 function downloadCSVWithEmail(event, myTickets) {
   const eventTickets = myTickets.filter(t => t.eventId === event.id);
@@ -1120,6 +1133,22 @@ export default function App() {
                 source: "app_free_ticket",
                 createdAt: new Date().toISOString(),
               });
+              logOrganizerLiveSheet(event.organizer || "", {
+                type: "free_ticket",
+                title: `Free ticket claimed for ${event.title}`,
+                eventId: event.id,
+                eventTitle: event.title,
+                ticketId: ticketRef.id,
+                tierName: tier.name,
+                attendeeName: buyerName,
+                attendeeEmail: buyerEmail || "",
+                attendeePhone: buyerPhone || "",
+                amount: 0,
+                currency: "NGN",
+                paymentReference: "free",
+                paymentProvider: "stagepro",
+                status: "free",
+              });
             } catch (feedErr) {
               console.warn("Could not write free-ticket attendee feed entry:", feedErr);
             }
@@ -1228,6 +1257,18 @@ export default function App() {
       await updateDoc(ref, { used: true });
       setTickets(prev => prev.map(t => t.id === id.trim() ? { ...t, used: true } : t));
       logToSheets({ action: "validate", ticketId: id.trim(), eventTitle: ticket.eventTitle });
+      logOrganizerLiveSheet(ticketEvent?.organizer || "", {
+        type: "ticket_validation",
+        title: `Ticket validated for ${ticket.eventTitle}`,
+        eventId: ticket.eventId,
+        eventTitle: ticket.eventTitle,
+        ticketId: id.trim(),
+        tierName: ticket.tierName || "",
+        attendeeName: ticket.userName || "",
+        attendeeEmail: ticket.userEmail || "",
+        validatedBy: currentUser?.name || "",
+        status: "used",
+      });
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
     } catch {
       return { ok: false, msg: "Error checking ticket" };
@@ -1385,6 +1426,21 @@ export default function App() {
             status: "complimentary",
             source: "app_complimentary_ticket",
             createdAt: new Date().toISOString(),
+          });
+          logOrganizerLiveSheet(currentUser.uid, {
+            type: "complimentary_ticket",
+            title: `Complimentary ticket issued for ${event.title}`,
+            eventId: event.id,
+            eventTitle: event.title,
+            ticketId: ticketRef.id,
+            tierName: tier.name,
+            attendeeName: cleanName,
+            attendeeEmail: cleanEmail || "",
+            amount: 0,
+            currency: "NGN",
+            paymentReference: "complimentary",
+            paymentProvider: "stagepro",
+            status: "complimentary",
           });
         } catch (feedErr) {
           console.warn("Could not write complimentary attendee feed entry:", feedErr);
