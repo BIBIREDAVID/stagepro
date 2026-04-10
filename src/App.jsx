@@ -3120,6 +3120,9 @@ function DashboardPage({ ctx }) {
   const myEvents = activeEvents;
   const myEventIds = new Set(myEvents.map(e => e.id));
   const myTickets = activeTickets.filter(t => myEventIds.has(t.eventId));
+  const attendeePayments = [...myTickets]
+    .sort((a, b) => new Date(b.purchasedAt || 0).getTime() - new Date(a.purchasedAt || 0).getTime())
+    .slice(0, 20);
   const payoutSummary = calculatePayoutSummary(myTickets);
 
   // Use actual ticket documents as the dashboard source of truth so sales stay
@@ -3413,9 +3416,9 @@ function DashboardPage({ ctx }) {
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:"16px 18px", marginBottom:24 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, gap:10, flexWrap:"wrap" }}>
           <div style={{ fontWeight:700, fontSize:14, letterSpacing:1 }}>ATTENDEE PAYMENTS</div>
-          <span style={{ fontSize:11, color:"var(--muted)" }}>Live from webhook, no CSV required</span>
+          <span style={{ fontSize:11, color:"var(--muted)" }}>Live from ticket records</span>
         </div>
-        {activeAttendeeFeed?.length ? (
+        {attendeePayments.length ? (
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead>
@@ -3426,18 +3429,18 @@ function DashboardPage({ ctx }) {
                 </tr>
               </thead>
               <tbody>
-                {activeAttendeeFeed.slice(0, 20).map((row, i) => (
+                {attendeePayments.map((row, i) => (
                   <tr key={row.id} style={{ borderTop:"1px solid var(--border)", background: i % 2 ? "rgba(255,255,255,0.01)" : "transparent" }}>
-                    <td style={{ padding:"10px", fontWeight:600, whiteSpace:"nowrap" }}>{row.attendeeName || "Attendee"}</td>
-                    <td style={{ padding:"10px", color:"var(--muted)", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.attendeeEmail || "-"}</td>
+                    <td style={{ padding:"10px", fontWeight:600, whiteSpace:"nowrap" }}>{row.userName || "Attendee"}</td>
+                    <td style={{ padding:"10px", color:"var(--muted)", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.userEmail || "-"}</td>
                     <td style={{ padding:"10px", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.eventTitle || "-"}</td>
-                    <td style={{ padding:"10px", fontFamily:"IBM Plex Mono", color:"var(--gold)", whiteSpace:"nowrap" }}>{fmt(Number(row.amount || 0))}</td>
+                    <td style={{ padding:"10px", fontFamily:"IBM Plex Mono", color:"var(--gold)", whiteSpace:"nowrap" }}>{fmt(Number(row.price || 0))}</td>
                     <td style={{ padding:"10px", whiteSpace:"nowrap" }}>
-                      <span style={{ background: row.status === "paid" ? "rgba(61,220,132,0.14)" : "rgba(232,64,64,0.12)", color: row.status === "paid" ? "var(--green)" : "var(--red)", borderRadius:100, padding:"2px 8px", fontSize:10, fontWeight:700 }}>
-                        {(row.status || "unknown").toUpperCase()}
+                      <span style={{ background: row.paymentStatus === "paid" ? "rgba(61,220,132,0.14)" : row.paymentStatus === "free" || row.paymentStatus === "complimentary" ? "rgba(245,166,35,0.12)" : "rgba(232,64,64,0.12)", color: row.paymentStatus === "paid" ? "var(--green)" : row.paymentStatus === "free" || row.paymentStatus === "complimentary" ? "var(--gold)" : "var(--red)", borderRadius:100, padding:"2px 8px", fontSize:10, fontWeight:700 }}>
+                        {String(row.paymentStatus || "unknown").toUpperCase()}
                       </span>
                     </td>
-                    <td style={{ padding:"10px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatNotifTime(row.createdAt)}</td>
+                    <td style={{ padding:"10px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatNotifTime(row.purchasedAt)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -5030,9 +5033,6 @@ function AdminPayoutsPage({ ctx }) {
   const [payoutRecords, setPayoutRecords] = useState([]);
   const [drafts, setDrafts] = useState({});
   const [recordingId, setRecordingId] = useState(null);
-  const [togglingAutoId, setTogglingAutoId] = useState(null);
-  const [runningAuto, setRunningAuto] = useState(false);
-  const [runningAutoDry, setRunningAutoDry] = useState(false);
   const [runningBackfill, setRunningBackfill] = useState(false);
 
   useEffect(() => {
@@ -5120,50 +5120,6 @@ function AdminPayoutsPage({ ctx }) {
     setRecordingId(null);
   };
 
-  const toggleAutoPayout = async (card) => {
-    setTogglingAutoId(card.organizer.uid);
-    try {
-      const nextValue = !Boolean(card.organizer.autoPayoutEnabled);
-      await updateDoc(doc(db, "users", card.organizer.uid), { autoPayoutEnabled: nextValue });
-      setOrganizers(prev => prev.map(o => o.uid === card.organizer.uid ? { ...o, autoPayoutEnabled: nextValue } : o));
-      notify(`Auto payout ${nextValue ? "enabled" : "disabled"} for ${card.organizer.name}.`);
-    } catch (err) {
-      console.error("Auto payout toggle failed:", err);
-      notify("Could not update auto payout setting.", "error");
-    }
-    setTogglingAutoId(null);
-  };
-
-  const runAutoPayoutNow = async (dryRun = false) => {
-    if (dryRun) setRunningAutoDry(true);
-    else setRunningAuto(true);
-    try {
-      const token = await auth.currentUser?.getIdToken();
-      if (!token) throw new Error("No admin token available");
-      const res = await fetch("/api/auto-payouts-run", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ dryRun }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        throw new Error(data?.msg || "Auto payout run failed");
-      }
-      const paidCount = (data.results || []).filter(r => r.status === "paid").length;
-      const failedCount = (data.results || []).filter(r => r.status === "failed").length;
-      if (!dryRun) await reloadAdminData();
-      notify(`${dryRun ? "Dry run" : "Auto payout run"} finished: ${paidCount} paid, ${failedCount} failed.`);
-    } catch (err) {
-      console.error("Run auto payout now failed:", err);
-      notify(err?.message || "Could not run auto payouts.", "error");
-    }
-    if (dryRun) setRunningAutoDry(false);
-    else setRunningAuto(false);
-  };
-
   const runTierIdBackfill = async () => {
     setRunningBackfill(true);
     try {
@@ -5200,12 +5156,6 @@ function AdminPayoutsPage({ ctx }) {
           <div style={{ color:"var(--muted)", fontSize:14 }}>Track organizer bank details, outstanding balances, and manual settlements.</div>
         </div>
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-          <button onClick={() => runAutoPayoutNow(false)} disabled={runningAuto || runningAutoDry} style={{ background: runningAuto ? "var(--bg3)" : "var(--green)", color: runningAuto ? "var(--muted)" : "#000", border:"none", borderRadius:12, padding:"12px 16px", cursor: runningAuto ? "not-allowed" : "pointer", fontWeight:700, fontSize:13 }}>
-            {runningAuto ? "RUNNING AUTO PAYOUTS..." : "RUN AUTO PAYOUTS NOW"}
-          </button>
-          <button onClick={() => runAutoPayoutNow(true)} disabled={runningAuto || runningAutoDry} style={{ background: runningAutoDry ? "var(--bg3)" : "var(--bg2)", color: runningAutoDry ? "var(--muted)" : "var(--text)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px", cursor: runningAutoDry ? "not-allowed" : "pointer", fontWeight:700, fontSize:13 }}>
-            {runningAutoDry ? "SIMULATING..." : "DRY RUN"}
-          </button>
           <button onClick={runTierIdBackfill} disabled={runningBackfill} style={{ background: runningBackfill ? "var(--bg3)" : "var(--bg2)", color: runningBackfill ? "var(--muted)" : "var(--text)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 16px", cursor: runningBackfill ? "not-allowed" : "pointer", fontWeight:700, fontSize:13 }}>
             {runningBackfill ? "BACKFILLING..." : "BACKFILL TIER IDS"}
           </button>
@@ -5244,17 +5194,9 @@ function AdminPayoutsPage({ ctx }) {
                         <span style={{ background: hasPayoutDetails ? "rgba(61,220,132,0.14)" : "rgba(244,90,90,0.12)", color: hasPayoutDetails ? "var(--green)" : "var(--red)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
                           {hasPayoutDetails ? "BANK DETAILS READY" : "BANK DETAILS MISSING"}
                         </span>
-                        <button
-                          onClick={() => toggleAutoPayout(card)}
-                          disabled={togglingAutoId === card.organizer.uid}
-                          style={{ background: card.organizer.autoPayoutEnabled ? "rgba(61,220,132,0.14)" : "var(--bg3)", color: card.organizer.autoPayoutEnabled ? "var(--green)" : "var(--muted)", border:"1px solid var(--border)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700, cursor: togglingAutoId === card.organizer.uid ? "not-allowed" : "pointer" }}
-                        >
-                          {togglingAutoId === card.organizer.uid
-                            ? "SAVING..."
-                            : card.organizer.autoPayoutEnabled
-                              ? "AUTO PAYOUT ON"
-                              : "AUTO PAYOUT OFF"}
-                        </button>
+                        <span style={{ background:"rgba(245,166,35,0.12)", color:"var(--gold)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                          MANUAL PAYOUTS ONLY
+                        </span>
                         <span style={{ background:"rgba(245,166,35,0.12)", color:"var(--gold)", padding:"4px 10px", borderRadius:100, fontSize:11, fontWeight:700 }}>
                           {card.ownedEvents.length} EVENT{card.ownedEvents.length !== 1 ? "S" : ""}
                         </span>
