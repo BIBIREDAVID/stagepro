@@ -124,6 +124,7 @@ export default async function handler(req, res) {
 
     await sendOrganizerLiveSheetLog({
       organizerId,
+      eventId: resolvedEventId || "",
       payload: {
         type: "payment_webhook",
         title: `Webhook payment confirmation for ${eventTitle}`,

@@ -188,6 +188,7 @@ export default async function handler(req, res) {
     if (event.organizer) {
       await sendOrganizerLiveSheetLog({
         organizerId: event.organizer,
+        eventId: event.id,
         payload: {
           type: "ticket_purchase",
           title: `New paid order for ${event.title}`,

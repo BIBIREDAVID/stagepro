@@ -5,7 +5,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, msg: "Method not allowed" });
   }
 
-  const { organizerId, payload } = req.body || {};
+  const { organizerId, eventId, payload } = req.body || {};
   if (!organizerId || !payload) {
     return res.status(410).json({
       ok: false,
@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const result = await sendOrganizerLiveSheetLog({ organizerId, payload });
+    const result = await sendOrganizerLiveSheetLog({ organizerId, eventId, payload });
     return res.status(200).json({ ok: true, result });
   } catch (err) {
     console.error("Live sheet logging failed:", err);

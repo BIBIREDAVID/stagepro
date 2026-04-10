@@ -95,13 +95,32 @@ const logToSheets = async (payload) => {
   }
 };
 
-const logOrganizerLiveSheet = async (organizerId, payload) => {
+const normalizeHttpUrl = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+};
+
+const getEventLiveSheetConfig = (event = null) => {
+  const liveSheet = event?.liveSheet || {};
+  return {
+    webhookUrl: normalizeHttpUrl(liveSheet.webhookUrl || event?.liveSheetWebhookUrl || ""),
+    viewUrl: normalizeHttpUrl(liveSheet.viewUrl || event?.liveSheetViewUrl || ""),
+  };
+};
+
+const logOrganizerLiveSheet = async (organizerId, payload, eventId = "") => {
   if (!organizerId || !payload) return;
   try {
     await fetch("/api/auto-payouts-run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ organizerId, payload }),
+      body: JSON.stringify({ organizerId, eventId: String(eventId || payload?.eventId || "").trim(), payload }),
     });
   } catch (err) {
     console.warn("Organizer live sheet log failed (non-critical):", err);
@@ -1148,7 +1167,7 @@ export default function App() {
                 paymentReference: "free",
                 paymentProvider: "stagepro",
                 status: "free",
-              });
+              }, event.id);
             } catch (feedErr) {
               console.warn("Could not write free-ticket attendee feed entry:", feedErr);
             }
@@ -1268,7 +1287,7 @@ export default function App() {
         attendeeEmail: ticket.userEmail || "",
         validatedBy: currentUser?.name || "",
         status: "used",
-      });
+      }, ticket.eventId);
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
     } catch {
       return { ok: false, msg: "Error checking ticket" };
@@ -1441,7 +1460,7 @@ export default function App() {
             paymentReference: "complimentary",
             paymentProvider: "stagepro",
             status: "complimentary",
-          });
+          }, event.id);
         } catch (feedErr) {
           console.warn("Could not write complimentary attendee feed entry:", feedErr);
         }
@@ -1461,6 +1480,10 @@ export default function App() {
       const nowIso = new Date().toISOString();
       const requestedCoEmails = parseEmailList(eventData.coOrganizerEmailsText || "");
       const resolved = await resolveCoOrganizerUids(requestedCoEmails);
+      const eventLiveSheet = {
+        webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
+        viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
+      };
       const data = {
         ...eventData,
         image: normalizeEventImageUrl(eventData.image) || DEFAULT_EVENT_IMAGE,
@@ -1469,6 +1492,7 @@ export default function App() {
         coOrganizerEmails: requestedCoEmails,
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
+        liveSheet: eventLiveSheet,
         createdAt: nowIso,
         updatedAt: nowIso,
         tiers: eventData.tiers.map((t, i) => ({
@@ -1476,6 +1500,8 @@ export default function App() {
         })),
       };
       delete data.coOrganizerEmailsText;
+      delete data.liveSheetWebhookUrl;
+      delete data.liveSheetViewUrl;
       const ref = await addDoc(collection(db, "events"), data);
       const newEvent = { id: ref.id, ...data };
       setEvents(prev => [...prev, newEvent]);
@@ -1509,6 +1535,10 @@ export default function App() {
       const currentEvent = events.find(e => e.id === eventId) || organizerEvents.find(e => e.id === eventId) || null;
       const requestedCoEmails = parseEmailList(eventData.coOrganizerEmailsText || "");
       const resolved = await resolveCoOrganizerUids(requestedCoEmails);
+      const eventLiveSheet = {
+        webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
+        viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
+      };
       const data = {
         ...eventData,
         image: normalizeEventImageUrl(eventData.image),
@@ -1516,12 +1546,15 @@ export default function App() {
         coOrganizerEmails: requestedCoEmails,
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
+        liveSheet: eventLiveSheet,
         updatedAt: new Date().toISOString(),
         tiers: eventData.tiers.map((t, i) => ({
           id: t.id || `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: t.sold||0,
         })),
       };
       delete data.coOrganizerEmailsText;
+      delete data.liveSheetWebhookUrl;
+      delete data.liveSheetViewUrl;
       await updateDoc(doc(db, "events", eventId), data);
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...data } : e));
       if (requestedCoEmails.length > 0) {
@@ -3210,9 +3243,12 @@ function DashboardPage({ ctx }) {
   const totalPaidOut = payoutRecords.filter(p => p.status === "paid").reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const outstandingPayout = Math.max(0, Math.round(netPayout) - totalPaidOut);
   const payoutDetails = activeOrganizer?.payoutDetails || {};
-  const liveSheetConfig = activeOrganizer?.liveSheet || {};
-  const liveSheetViewUrl = String(liveSheetConfig.viewUrl || "").trim();
-  const liveSheetWebhookUrl = String(liveSheetConfig.webhookUrl || "").trim();
+  const organizerLiveSheetConfig = activeOrganizer?.liveSheet || {};
+  const organizerLiveSheetViewUrl = String(organizerLiveSheetConfig.viewUrl || "").trim();
+  const organizerLiveSheetWebhookUrl = String(organizerLiveSheetConfig.webhookUrl || "").trim();
+  const eventsWithLiveSheets = myEvents
+    .map(event => ({ event, config: getEventLiveSheetConfig(event) }))
+    .filter(({ config }) => config.viewUrl || config.webhookUrl);
   const hasPayoutDetails = Boolean(
     payoutDetails.bankName?.trim() &&
     payoutDetails.accountName?.trim() &&
@@ -3437,16 +3473,33 @@ function DashboardPage({ ctx }) {
           <div style={{ fontWeight:700, fontSize:14, letterSpacing:1 }}>LIVE ACTIVITY</div>
           <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
             <span style={{ fontSize:11, color:"var(--muted)" }}>Updates from webhook events</span>
-            {liveSheetViewUrl && (
-              <a href={liveSheetViewUrl} target="_blank" rel="noreferrer" style={{ color:"var(--gold)", fontSize:11, fontWeight:700 }}>
-                OPEN LIVE SHEET
+            {organizerLiveSheetViewUrl && (
+              <a href={organizerLiveSheetViewUrl} target="_blank" rel="noreferrer" style={{ color:"var(--gold)", fontSize:11, fontWeight:700 }}>
+                OPEN DEFAULT SHEET
               </a>
             )}
           </div>
         </div>
-        {canManage && !liveSheetWebhookUrl && (
+        {canManage && !eventsWithLiveSheets.length && !organizerLiveSheetWebhookUrl && (
           <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid var(--gold-dim)", borderRadius:10, padding:"10px 12px", color:"var(--gold)", fontSize:12, marginBottom:12 }}>
-            Add a live sheet webhook in your profile to stream ticket and payout activity into Google Sheets in real time.
+            Add a live sheet webhook inside an event or in your profile fallback to stream ticket activity into Google Sheets in real time.
+          </div>
+        )}
+        {eventsWithLiveSheets.length > 0 && (
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+            {eventsWithLiveSheets.slice(0, 6).map(({ event, config }) => (
+              config.viewUrl ? (
+                <a
+                  key={event.id}
+                  href={config.viewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"8px 12px", borderRadius:999, fontSize:12, fontWeight:700 }}
+                >
+                  {event.title}
+                </a>
+              ) : null
+            ))}
           </div>
         )}
         {activeNotifications?.length ? (
@@ -3761,6 +3814,12 @@ function DashboardPage({ ctx }) {
                   <div style={{ fontSize:12, color:"var(--muted)" }}>revenue</div>
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                  {canManage && getEventLiveSheetConfig(event).viewUrl && (
+                    <a href={getEventLiveSheetConfig(event).viewUrl} target="_blank" rel="noreferrer" style={{ background:"rgba(61,220,132,0.12)", border:"1px solid rgba(61,220,132,0.24)", color:"var(--green)", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700 }}>
+                      <i className="fa-solid fa-table-list" style={{marginRight:5}} />
+                      Sheet
+                    </a>
+                  )}
                   <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
                   {canManage && <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}
                   {canManage && <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
@@ -3951,6 +4010,33 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
           </div>
         </div>
 
+        <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
+          <div style={{ fontFamily:"Oswald", fontSize:20, marginBottom:6 }}>EVENT LIVE SHEET</div>
+          <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.7, marginBottom:14 }}>
+            Add a dedicated Google Apps Script webhook and sheet link for this event. If left blank, StagePro will keep using your organizer-level fallback where available.
+          </div>
+          <div style={{ display:"grid", gap:14 }}>
+            <div>
+              <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>EVENT SHEET WEBHOOK URL</label>
+              <input
+                value={form.liveSheetWebhookUrl || ""}
+                onChange={F("liveSheetWebhookUrl")}
+                placeholder="https://script.google.com/macros/s/..."
+                style={iStyle("liveSheetWebhookUrl", false)}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>EVENT SHEET VIEW URL</label>
+              <input
+                value={form.liveSheetViewUrl || ""}
+                onChange={F("liveSheetViewUrl")}
+                placeholder="https://docs.google.com/spreadsheets/..."
+                style={iStyle("liveSheetViewUrl", false)}
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Event Image — URL input */}
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT IMAGE / FLYER</label>
@@ -4100,7 +4186,7 @@ function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
-  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", liveSheetWebhookUrl:"", liveSheetViewUrl:"", tiers:[{ name:"General", price:"", total:"" }] };
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
@@ -4127,6 +4213,8 @@ function EditEventPage({ ctx }) {
     image: event.image||"",
     theme: event.theme||"",
     coOrganizerEmailsText: Array.isArray(event.coOrganizerEmails) ? event.coOrganizerEmails.join(", ") : "",
+    liveSheetWebhookUrl: event.liveSheet?.webhookUrl || event.liveSheetWebhookUrl || "",
+    liveSheetViewUrl: event.liveSheet?.viewUrl || event.liveSheetViewUrl || "",
     tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold||0, _free: Number(t.price)===0 })),
   };
 
