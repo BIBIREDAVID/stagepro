@@ -4,7 +4,7 @@
 
 StagePro is a Nigeria-focused event ticketing platform built with React, Vite, Firebase, and Vercel. It supports event discovery, organizer event management, paid and free ticket checkout, QR-based ticket validation, email ticket delivery, reviews, waitlists, attendee notifications, and a manual organizer payout workflow.
 
-The product currently operates as a single-page application with most of the frontend logic concentrated in [`src/App.jsx`](/C:/Users/HomePC/Desktop/stagepro%20-%20Copy/src/App.jsx). Payments are handled through Paystack, ticket and app data are stored in Firebase, and transactional email is sent through Vercel serverless functions using Nodemailer.
+The product currently operates as a single-page application with most of the frontend logic concentrated in [`src/App.jsx`](/C:/Users/HomePC/Desktop/stagepro%20-%20Copy/src/App.jsx). Payments are handled through Squad, ticket and app data are stored in Firebase, and transactional email is sent through Vercel serverless functions using Nodemailer.
 
 ## Core Product Areas
 
@@ -33,7 +33,7 @@ The product currently operates as a single-page application with most of the fro
 
 ### Admin / platform operations
 
-- Verify Paystack payments server-side
+- Verify Squad payments server-side
 - Send ticket and notification emails through API routes
 - Review organizer payout readiness
 - Record manual payouts
@@ -55,7 +55,7 @@ The product currently operates as a single-page application with most of the fro
 - Firebase Storage
 - Vercel serverless functions in [`api`](/C:/Users/HomePC/Desktop/stagepro%20-%20Copy/api)
 - Nodemailer for email delivery
-- Paystack for card/bank/USSD checkout
+- Squad for card/bank transfer checkout
 
 ### Deployment
 
@@ -87,7 +87,7 @@ The application’s major pages/components currently include:
 1. User browses events on the home page.
 2. User opens an event page and selects ticket quantities.
 3. Free orders create tickets immediately.
-4. Paid orders open Paystack checkout.
+4. Paid orders open Squad checkout.
 5. After payment, the app verifies the transaction through the backend.
 6. Tickets are created or found.
 7. User is redirected to the ticket page.
@@ -103,7 +103,7 @@ The application’s major pages/components currently include:
 ### Organizer revenue and payout operations
 
 1. Organizer creates and sells tickets for events.
-2. Dashboard calculates gross sales, platform fees, Paystack fees, and net payout.
+2. Dashboard calculates gross sales, platform fees, Squad fees, and net payout.
 3. Organizer adds payout bank details in profile.
 4. Admin reviews organizer status on `/admin/payouts`.
 5. Admin records manual payouts into the `payouts` collection.
@@ -160,13 +160,13 @@ Manual payout records in `payouts` currently store:
 
 ## Payments
 
-Paystack is the active payment provider.
+Squad is the active payment provider.
 
 ### Current flow
 
-- Frontend uses `VITE_PAYSTACK_PUBLIC_KEY`
-- Checkout opens Paystack inline
-- Verification is done through [`api/verify-paystack.js`](/C:/Users/HomePC/Desktop/stagepro%20-%20Copy/api/verify-paystack.js)
+- Frontend uses `VITE_SQUAD_PUBLIC_KEY`
+- Checkout opens Squad inline
+- Verification is done through [`api/finalize-squad-order.js`](/C:/Users/HomePC/Desktop/stagepro%20-%20Copy/api/finalize-squad-order.js)
 - Verification checks:
   - payment reference
   - amount
@@ -177,8 +177,8 @@ Paystack is the active payment provider.
 
 Organizer payouts are manual, not automated.
 
-- Buyers pay through the platform’s Paystack account
-- The app calculates platform fee, Paystack fee, and organizer net
+- Buyers pay through the platform’s Squad account
+- The app calculates platform fee, Squad fee, and organizer net
 - Admin records when organizers have been paid
 - No automated bank transfer or split settlement is implemented yet
 
@@ -198,8 +198,8 @@ In-app notifications are also stored in Firestore and shown to attendees in the 
 
 Important environment variables currently in use include:
 
-- `VITE_PAYSTACK_PUBLIC_KEY`
-- `PAYSTACK_SECRET_KEY`
+- `VITE_SQUAD_PUBLIC_KEY`
+- `SQUAD_SECRET_KEY`
 - `GMAIL_USER`
 - `GMAIL_PASS`
 - `VITE_SHEETS_URL`
@@ -261,7 +261,7 @@ Because payouts are recorded manually:
 
 ### Long term
 
-- Introduce automated Paystack settlement or transfer workflows
+- Introduce automated Squad settlement or transfer workflows
 - Move more sensitive business logic out of the client and into server-side endpoints
 - Add formal testing around checkout, validation, and payout flows
 

@@ -1,29 +1,33 @@
 import nodemailer from "nodemailer";
 import { getAdminAuth, getAdminDb } from "../server/firebaseAdmin.js";
+import { sendOrganizerLiveSheetLog } from "../server/liveSheet.js";
+import {
+  buildSquadTransferReference,
+  resolveSquadBankCode,
+  squadRequest,
+} from "../server/squad.js";
 
-const PAYSTACK_BASE = "https://api.paystack.co";
 const STAGEPRO_FEE = 100;
-const PAYSTACK_RATE = 0.015;
-const PAYSTACK_FLAT = 100;
-const PAYSTACK_CAP = 2000;
-
-const normalize = (value = "") => String(value).trim().toLowerCase().replace(/\s+/g, " ");
+const SQUAD_TRANSFER_FEE_RATE = 0.012;
 
 const hasPayoutDetails = (details = {}) =>
   Boolean(details.bankName?.trim() && details.accountName?.trim() && details.accountNumber?.trim());
 
+function getPaymentReference(ticket = {}) {
+  return String(ticket.paymentReference || ticket.reference || ticket.orderReference || "").trim();
+}
+
+function calculateTransferFee(amount = 0) {
+  return Math.round(Number(amount || 0) * SQUAD_TRANSFER_FEE_RATE);
+}
+
 function calculateNet(tickets = []) {
-  const paidTickets = tickets.filter(t => t.paymentStatus === "paid" && t.paystackRef);
-  const orderRefs = [...new Set(paidTickets.map(t => t.paystackRef))];
+  const paidTickets = tickets.filter(t => t.paymentStatus === "paid" && getPaymentReference(t));
+  const orderRefs = [...new Set(paidTickets.map(getPaymentReference).filter(Boolean))];
   const gross = tickets.reduce((sum, t) => sum + Number(t.price || 0), 0);
   const stagePro = orderRefs.length * STAGEPRO_FEE;
-  const paystack = Math.round(
-    paidTickets.reduce(
-      (sum, t) => sum + Math.min((Number(t.price || 0) * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP),
-      0
-    )
-  );
-  return Math.max(0, Math.round(gross - stagePro - paystack));
+  const squadTransferFee = calculateTransferFee(gross);
+  return Math.max(0, Math.round(gross - stagePro - squadTransferFee));
 }
 
 async function authorize(req, db) {
@@ -48,49 +52,24 @@ async function authorize(req, db) {
   }
 }
 
-async function paystackRequest(path, payload, secretKey) {
-  const res = await fetch(`${PAYSTACK_BASE}${path}`, {
-    method: payload ? "POST" : "GET",
-    headers: {
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/json",
+async function verifyAccountName(details = {}) {
+  const bankCode = resolveSquadBankCode(details.bankName, details.bankCode);
+  if (!bankCode) {
+    throw new Error("Could not match bank name to a Squad bank code");
+  }
+
+  const lookup = await squadRequest("/payout/account/lookup", {
+    method: "POST",
+    payload: {
+      bank_code: bankCode,
+      account_number: String(details.accountNumber || "").trim(),
     },
-    ...(payload ? { body: JSON.stringify(payload) } : {}),
-  });
-  const data = await res.json();
-  if (!res.ok || !data?.status) {
-    throw new Error(data?.message || `Paystack request failed: ${path}`);
-  }
-  return data.data;
-}
-
-async function ensureRecipientCode(db, organizer, secretKey) {
-  const payoutDetails = organizer.payoutDetails || {};
-  if (payoutDetails.recipientCode) {
-    return { recipientCode: payoutDetails.recipientCode, bankCode: payoutDetails.bankCode || "" };
-  }
-  if (!hasPayoutDetails(payoutDetails)) throw new Error("Missing payout details");
-
-  const banks = await paystackRequest("/bank?currency=NGN", null, secretKey);
-  const targetName = normalize(payoutDetails.bankName);
-  const bank = banks.find(b => normalize(b.name) === targetName)
-    || banks.find(b => normalize(b.name).includes(targetName) || targetName.includes(normalize(b.name)));
-  if (!bank?.code) throw new Error("Could not match bank name to Paystack bank code");
-
-  const recipient = await paystackRequest("/transferrecipient", {
-    type: "nuban",
-    name: payoutDetails.accountName.trim(),
-    account_number: payoutDetails.accountNumber.trim(),
-    bank_code: bank.code,
-    currency: "NGN",
-  }, secretKey);
-
-  await db.collection("users").doc(organizer.uid).update({
-    "payoutDetails.recipientCode": recipient.recipient_code,
-    "payoutDetails.bankCode": bank.code,
   });
 
-  return { recipientCode: recipient.recipient_code, bankCode: bank.code };
+  return {
+    bankCode,
+    accountName: String(lookup?.account_name || details.accountName || "").trim(),
+  };
 }
 
 async function sendFailureAlert(summary) {
@@ -140,11 +119,6 @@ export default async function handler(req, res) {
   const authz = await authorize(req, db);
   if (!authz.ok) return res.status(authz.status).json({ ok: false, msg: authz.msg });
 
-  const secretKey = process.env.PAYSTACK_SECRET_KEY;
-  if (!secretKey) {
-    return res.status(500).json({ ok: false, msg: "PAYSTACK_SECRET_KEY is not configured" });
-  }
-
   const body = req.body || {};
   const dryRun = Boolean(body?.dryRun);
   const minAmount = Math.max(0, Number(process.env.AUTO_PAYOUT_MIN_AMOUNT || 1000));
@@ -175,7 +149,6 @@ export default async function handler(req, res) {
     throw err;
   }
 
-  let summary = null;
   try {
     const organizersSnap = await db.collection("users")
       .where("role", "==", "organizer")
@@ -259,14 +232,18 @@ export default async function handler(req, res) {
       if (dryRun) {
         item.status = "dry_run_ready";
         item.amount = outstanding;
+        item.transferFee = calculateTransferFee(outstanding);
         results.push(item);
         continue;
       }
 
+      const verifiedAccount = await verifyAccountName(payoutDetails);
+      const payoutRef = buildSquadTransferReference();
       const payoutDocRef = await db.collection("payouts").add({
         organizerId: organizer.uid,
         organizerName: organizer.name || "",
         amount: outstanding,
+        transferFee: calculateTransferFee(outstanding),
         notes: "Automatic payout",
         status: "processing",
         createdAt: now,
@@ -275,23 +252,48 @@ export default async function handler(req, res) {
         source: "auto",
         runKey,
         attemptKey,
-        bankSnapshot: payoutDetails,
+        bankSnapshot: {
+          ...payoutDetails,
+          bankCode: verifiedAccount.bankCode,
+          accountName: verifiedAccount.accountName,
+        },
+        paymentProvider: "squad",
+        transferReference: payoutRef,
       });
 
       try {
-        const { recipientCode } = await ensureRecipientCode(db, organizer, secretKey);
-        const transfer = await paystackRequest("/transfer", {
-          source: "balance",
-          amount: Math.round(outstanding * 100),
-          recipient: recipientCode,
-          reason: "StagePro automatic organizer payout",
-        }, secretKey);
+        const transfer = await squadRequest("/payout/transfer", {
+          method: "POST",
+          payload: {
+            transaction_reference: payoutRef,
+            amount: String(Math.round(outstanding * 100)),
+            bank_code: verifiedAccount.bankCode,
+            account_number: String(payoutDetails.accountNumber || "").trim(),
+            account_name: verifiedAccount.accountName,
+            currency_id: "NGN",
+            remark: `StagePro automatic organizer payout ${organizer.uid}`,
+          },
+        });
 
         await db.collection("payouts").doc(payoutDocRef.id).update({
           status: "paid",
           paidAt: new Date().toISOString(),
-          paystackTransferCode: transfer.transfer_code || "",
-          paystackReference: transfer.reference || "",
+          transferReference: transfer.transaction_reference || payoutRef,
+          payoutResponse: transfer.response_description || "Success",
+          nipTransactionReference: transfer.nip_transaction_reference || "",
+        });
+
+        await sendOrganizerLiveSheetLog({
+          organizerId: organizer.uid,
+          payload: {
+            type: "payout_paid",
+            title: "Organizer payout completed",
+            amount: outstanding,
+            transferFee: calculateTransferFee(outstanding),
+            transferReference: transfer.transaction_reference || payoutRef,
+            paymentProvider: "squad",
+            notes: "Automatic payout",
+          },
         });
 
         item.status = "paid";
@@ -300,6 +302,18 @@ export default async function handler(req, res) {
         await db.collection("payouts").doc(payoutDocRef.id).update({
           status: "failed",
           failureReason: String(err?.message || "Transfer failed"),
+        });
+        await sendOrganizerLiveSheetLog({
+          organizerId: organizer.uid,
+          payload: {
+            type: "payout_failed",
+            title: "Organizer payout failed",
+            amount: outstanding,
+            transferFee: calculateTransferFee(outstanding),
+            transferReference: payoutRef,
+            paymentProvider: "squad",
+            error: String(err?.message || "Transfer failed"),
+          },
         });
         item.status = "failed";
         item.reason = String(err?.message || "Transfer failed");
@@ -310,7 +324,7 @@ export default async function handler(req, res) {
 
     const paidCount = results.filter(r => r.status === "paid").length;
     const failedCount = results.filter(r => r.status === "failed").length;
-    summary = {
+    const summary = {
       ok: true,
       runKey,
       ranAt: now,

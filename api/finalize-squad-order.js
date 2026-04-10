@@ -1,6 +1,8 @@
 import { getAdminDb } from "../server/firebaseAdmin.js";
 import { sendEmailWithFallback } from "../server/email.js";
+import { sendOrganizerLiveSheetLog } from "../server/liveSheet.js";
 import { buildTicketEmail } from "../server/ticketEmail.js";
+import { squadRequest } from "../server/squad.js";
 
 const SHORT_TICKET_ID_LENGTH = 7;
 const SHORT_TICKET_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -23,32 +25,19 @@ async function createUniqueTicketRef(db) {
   throw new Error("Could not generate a unique ticket ID");
 }
 
-async function verifyPaystackTransaction(reference, expectedAmount, expectedCurrency, email) {
-  const secretKey = process.env.PAYSTACK_SECRET_KEY;
-  if (!secretKey) throw new Error("PAYSTACK_SECRET_KEY is not configured");
-
-  const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/json",
-    },
-  });
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload?.status || !payload?.data) {
-    throw new Error(payload?.message || "Unable to verify transaction");
+async function verifySquadTransaction(reference, expectedAmount, expectedCurrency, email) {
+  const tx = await squadRequest(`/transaction/verify/${encodeURIComponent(reference)}`);
+  if (String(tx?.transaction_status || "").toLowerCase() !== "success") {
+    throw new Error(`Transaction status is ${tx?.transaction_status || "unknown"}`);
   }
 
-  const tx = payload.data;
-  if (tx.status !== "success") throw new Error(`Transaction status is ${tx.status}`);
-  if (Number.isFinite(Number(expectedAmount)) && Number(tx.amount) !== Number(expectedAmount)) {
+  if (Number.isFinite(Number(expectedAmount)) && Number(tx.transaction_amount) !== Number(expectedAmount)) {
     throw new Error("Verified amount does not match checkout amount");
   }
-  if (expectedCurrency && tx.currency !== expectedCurrency) {
+  if (expectedCurrency && tx.transaction_currency_id !== expectedCurrency) {
     throw new Error("Verified currency does not match checkout currency");
   }
-  if (email && tx.customer?.email && tx.customer.email.toLowerCase() !== String(email).toLowerCase()) {
+  if (email && tx.email && String(tx.email).toLowerCase() !== String(email).toLowerCase()) {
     throw new Error("Verified email does not match checkout email");
   }
 
@@ -93,10 +82,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    const tx = await verifyPaystackTransaction(reference, expectedAmount, expectedCurrency, buyerEmail);
-
+    const tx = await verifySquadTransaction(reference, expectedAmount, expectedCurrency, buyerEmail);
     const db = getAdminDb();
-    const existingSnap = await db.collection("tickets").where("paystackRef", "==", String(reference)).get();
+
+    const existingSnap = await db.collection("tickets").where("paymentReference", "==", String(reference)).get();
     const existingTickets = existingSnap.docs
       .map((doc) => ({ id: doc.id, ...doc.data() }))
       .filter((ticket) => ticket.eventId === eventId && String(ticket.userEmail || "").trim().toLowerCase() === buyerEmail);
@@ -132,8 +121,8 @@ export default async function handler(req, res) {
     }
 
     const now = new Date().toISOString();
-    const finalizationRef = db.collection("paymentFinalizations").doc(`paystack_${String(reference)}`);
-    const orderRef = db.collection("orders").doc(`paystack_${String(reference)}`);
+    const finalizationRef = db.collection("paymentFinalizations").doc(`squad_${String(reference)}`);
+    const orderRef = db.collection("orders").doc(`squad_${String(reference)}`);
     const batch = db.batch();
     const newTickets = [];
 
@@ -156,7 +145,8 @@ export default async function handler(req, res) {
           isGuest,
           used: false,
           purchasedAt: now,
-          paystackRef: String(reference),
+          paymentProvider: "squad",
+          paymentReference: String(reference),
           paymentStatus: "paid",
         };
         batch.set(ticketRef, ticketData);
@@ -170,7 +160,7 @@ export default async function handler(req, res) {
       updatedAt: now,
     });
     batch.set(finalizationRef, {
-      provider: "paystack",
+      provider: "squad",
       reference: String(reference),
       eventId: event.id,
       buyerEmail,
@@ -180,13 +170,13 @@ export default async function handler(req, res) {
       updatedAt: now,
     }, { merge: true });
     batch.set(orderRef, {
-      provider: "paystack",
+      provider: "squad",
       reference: String(reference),
       eventId: event.id,
       buyerEmail,
       totalTickets: newTickets.length,
-      amount: Number(tx.amount || 0) / 100,
-      currency: tx.currency || expectedCurrency,
+      amount: Number(tx.transaction_amount || 0) / 100,
+      currency: tx.transaction_currency_id || expectedCurrency,
       status: "completed",
       createdAt: now,
       updatedAt: now,
@@ -194,6 +184,31 @@ export default async function handler(req, res) {
     }, { merge: true });
 
     await batch.commit();
+
+    if (event.organizer) {
+      await sendOrganizerLiveSheetLog({
+        organizerId: event.organizer,
+        payload: {
+          type: "ticket_purchase",
+          title: `New paid order for ${event.title}`,
+          eventId: event.id,
+          eventTitle: event.title,
+          ticketCount: newTickets.length,
+          buyerName,
+          buyerEmail,
+          buyerPhone,
+          amount: Number(tx.transaction_amount || 0) / 100,
+          currency: tx.transaction_currency_id || expectedCurrency,
+          paymentReference: String(reference),
+          paymentProvider: "squad",
+          tickets: newTickets.map((ticket) => ({
+            ticketId: ticket.id,
+            tierName: ticket.tierName,
+            price: ticket.price,
+          })),
+        },
+      });
+    }
 
     let organizerName = "StagePro";
     if (event.organizer) {
@@ -249,7 +264,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ ok: true, tickets: newTickets, existing: false });
   } catch (err) {
-    console.error("Finalize paystack order failed:", err);
+    console.error("Finalize Squad order failed:", err);
     return res.status(500).json({ ok: false, msg: String(err?.message || "Could not finalize order") });
   }
 }

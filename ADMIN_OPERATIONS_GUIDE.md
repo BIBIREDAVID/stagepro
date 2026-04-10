@@ -6,7 +6,7 @@ This guide explains how the StagePro admin should run day-to-day platform operat
 
 StagePro currently uses:
 
-- Paystack for customer payments
+- Squad for customer payments
 - manual organizer payouts
 - admin-side payout tracking inside the app
 
@@ -41,8 +41,8 @@ If admin access does not appear:
 
 Current flow:
 
-1. A buyer pays for a ticket through Paystack.
-2. The payment is collected into the StagePro/owner Paystack account.
+1. A buyer pays for a ticket through Squad.
+2. The payment is collected into the StagePro/owner Squad account.
 3. Tickets are created after successful verification.
 4. StagePro calculates what each organizer is owed after fees.
 5. The admin manually sends money to the organizer.
@@ -50,7 +50,7 @@ Current flow:
 
 This means:
 
-- the money comes from your business funds or Paystack balance
+- the money comes from your business funds or Squad balance
 - StagePro only tracks payouts
 - StagePro does not automatically send bank transfers yet
 
@@ -93,7 +93,7 @@ If details are missing:
 Send the payout from:
 
 - your business bank account
-- or your Paystack/business funds
+- or your Squad/business funds
 
 StagePro does not execute this transfer for you.
 
@@ -165,7 +165,7 @@ Admin check:
 For paid events, confirm this full flow works:
 
 1. customer starts checkout
-2. Paystack payment succeeds
+2. Squad payment succeeds
 3. payment is verified
 4. ticket is created
 5. ticket page opens
@@ -175,7 +175,7 @@ If a customer says payment succeeded but no ticket appeared:
 
 Check:
 
-- Paystack callback/verification path
+- Squad callback/verification path
 - Firestore `tickets` collection
 - payment reference
 - confirmation email status
@@ -184,7 +184,7 @@ Check:
 
 Before launch, confirm:
 
-- Paystack live/test environment is correct
+- Squad live/test environment is correct
 - email env vars are set
 - `TICKET_ACCESS_SECRET` is set
 - admin account can access `/admin`
@@ -196,8 +196,8 @@ Before launch, confirm:
 
 StagePro currently relies on these important env vars:
 
-- `VITE_PAYSTACK_PUBLIC_KEY`
-- `PAYSTACK_SECRET_KEY`
+- `VITE_SQUAD_PUBLIC_KEY`
+- `SQUAD_SECRET_KEY`
 - `GMAIL_USER`
 - `GMAIL_PASS`
 - `TICKET_ACCESS_SECRET`
@@ -247,7 +247,7 @@ After launch, prioritize:
 1. move ticket creation fully to a trusted backend flow
 2. tighten Firestore rules further
 3. make ticket recovery links single-use
-4. automate payouts through Paystack transfers or subaccounts
+4. automate payouts through Squad transfers or subaccounts
 5. split `src/App.jsx` into smaller modules
 
 ## Short Admin Summary

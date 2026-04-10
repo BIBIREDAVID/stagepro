@@ -7,8 +7,8 @@
   ],
   "rewrites": [
     {
-      "source": "/webhooks/paystack",
-      "destination": "/api/paystack-webhook"
+      "source": "/webhooks/squad",
+      "destination": "/api/squad-webhook"
     },
     {
       "source": "/api/(.*)",

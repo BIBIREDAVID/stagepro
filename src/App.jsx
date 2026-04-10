@@ -406,20 +406,21 @@ function generateShortTicketId(length = SHORT_TICKET_ID_LENGTH) {
   return value;
 }
 
+const getPaymentReference = (ticket = {}) =>
+  String(ticket.paymentReference || ticket.reference || "").trim();
+
+const calculateSquadTransferFee = (amount = 0) =>
+  Math.round(Number(amount || 0) * 0.012);
+
 const calculatePayoutSummary = (tickets) => {
   const STAGEPRO_FEE = 100;
-  const PAYSTACK_RATE = 0.015;
-  const PAYSTACK_FLAT = 100;
-  const PAYSTACK_CAP = 2000;
-  const paidTickets = tickets.filter(t => t.paymentStatus === "paid" && t.paystackRef);
-  const orderRefs = [...new Set(paidTickets.map(t => t.paystackRef))];
+  const paidTickets = tickets.filter(t => t.paymentStatus === "paid" && getPaymentReference(t));
+  const orderRefs = [...new Set(paidTickets.map(getPaymentReference).filter(Boolean))];
   const gross = tickets.reduce((s, t) => s + (t.price || 0), 0);
   const stagePro = orderRefs.length * STAGEPRO_FEE;
-  const paystack = Math.round(
-    paidTickets.reduce((s, t) => s + Math.min((t.price * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP), 0)
-  );
-  const net = Math.max(0, Math.round(gross - stagePro - paystack));
-  return { gross, stagePro, paystack, net, orderCount: orderRefs.length, paidTickets };
+  const squad = calculateSquadTransferFee(gross);
+  const net = Math.max(0, Math.round(gross - stagePro - squad));
+  return { gross, stagePro, squad, net, orderCount: orderRefs.length, paidTickets };
 };
 
 
@@ -1043,7 +1044,7 @@ export default function App() {
 
   const logout = async () => { await signOut(auth); setCurrentUser(null); };
 
-  const purchaseTickets = async (eventId, cartSelections, paystackRef = null, buyer = null) => {
+  const purchaseTickets = async (eventId, cartSelections, paymentReference = null, buyer = null) => {
     // Always fetch event fresh from Firestore — avoids stale closure issues
     let event;
     try {
@@ -1083,7 +1084,9 @@ export default function App() {
             userPhone: buyerPhone,
             isGuest: isGuest || false,
             used: false, purchasedAt: new Date().toISOString(),
-            ...(paystackRef ? { paystackRef, paymentStatus: "paid" } : { paymentStatus: "free" }),
+            ...(paymentReference
+              ? { paymentReference, paymentProvider: "squad", paymentStatus: "paid" }
+              : { paymentStatus: "free" }),
           };
           let ticketRef = null;
           for (let attempt = 0; attempt < 8; attempt++) {
@@ -1100,13 +1103,14 @@ export default function App() {
           const newTicket = { id: ticketRef.id, ...ticketData };
           newTickets.push(newTicket);
 
-          if (!paystackRef) {
+          if (!paymentReference) {
             try {
               await addDoc(collection(db, "organizerAttendeeFeed"), {
                 organizerId: event.organizer || "",
                 eventId: event.id,
                 eventTitle: event.title || "",
-                paystackReference: "free",
+                paymentReference: "free",
+                paymentProvider: "stagepro",
                 amount: 0,
                 currency: "NGN",
                 attendeeName: buyerName,
@@ -1153,7 +1157,8 @@ export default function App() {
             price: Number(tier.price),
             serviceFee: isFreeOrder ? 0 : SERVICE_FEE,
             purchasedAt: new Date().toLocaleString("en-NG"),
-            paystackRef: paystackRef || "free",
+            paymentReference: paymentReference || "free",
+            paymentProvider: paymentReference ? "squad" : "stagepro",
             buyerType: isGuest ? "guest" : "registered",
           });
         }
@@ -1202,6 +1207,7 @@ export default function App() {
       const snap = await getDoc(ref);
       if (!snap.exists()) return { ok: false, msg: "Ticket not found" };
       const ticket = { id: snap.id, ...snap.data() };
+      let ticketEvent = null;
       if (!currentUser || !["organizer", "admin"].includes(currentUser.role)) {
         return { ok: false, msg: "Only approved organizers can validate tickets" };
       }
@@ -1210,10 +1216,13 @@ export default function App() {
         if (!eventSnap.exists()) {
           return { ok: false, msg: "Event not found for this ticket" };
         }
-        const ticketEvent = { id: eventSnap.id, ...eventSnap.data() };
+        ticketEvent = { id: eventSnap.id, ...eventSnap.data() };
         if (!isEventManager(ticketEvent, currentUser)) {
           return { ok: false, msg: "You can't validate tickets for another organizer's event" };
         }
+      } else {
+        const eventSnap = await getDoc(doc(db, "events", ticket.eventId));
+        if (eventSnap.exists()) ticketEvent = { id: eventSnap.id, ...eventSnap.data() };
       }
       if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
       await updateDoc(ref, { used: true });
@@ -1367,7 +1376,8 @@ export default function App() {
             organizerId: currentUser.uid,
             eventId: event.id,
             eventTitle: event.title || "",
-            paystackReference: "complimentary",
+            paymentReference: "complimentary",
+            paymentProvider: "stagepro",
             amount: 0,
             currency: "NGN",
             attendeeName: cleanName,
@@ -1500,6 +1510,7 @@ export default function App() {
 
   const transferTicket = async (ticketId, toEmail) => {
     try {
+      const currentTicket = tickets.find(t => t.id === ticketId) || null;
       const normalizedEmail = toEmail.trim().toLowerCase();
 
       // Prevent self-transfer early (no Firestore call needed)
@@ -1532,6 +1543,13 @@ export default function App() {
         userId: recipient.id,
         userName: recipient.name,
       });
+
+      if (currentTicket?.eventId) {
+        const eventSnap = await getDoc(doc(db, "events", currentTicket.eventId));
+        if (eventSnap.exists()) {
+          const event = { id: eventSnap.id, ...eventSnap.data() };
+        }
+      }
 
       setTickets(prev => prev.filter(t => t.id !== ticketId));
       notify(`Ticket transferred to ${recipient.name}!`);
@@ -1567,12 +1585,13 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  const updateProfile = async ({ name, phone, payoutDetails }) => {
+  const updateProfile = async ({ name, phone, payoutDetails, liveSheet }) => {
     try {
       const updates = {};
       if (typeof name === "string") updates.name = name.trim();
       if (typeof phone === "string") updates.phone = normalizePhone(phone);
       if (payoutDetails) updates.payoutDetails = payoutDetails;
+      if (liveSheet) updates.liveSheet = liveSheet;
       await updateDoc(doc(db, "users", currentUser.uid), updates);
       setCurrentUser(prev => ({ ...prev, ...updates }));
       notify("Profile updated!");
@@ -2549,8 +2568,8 @@ function PaymentVerificationPage({ ctx }) {
 
     const run = async () => {
       const params = new URLSearchParams(window.location.search);
-      const reference = params.get("reference");
-      const pendingRaw = sessionStorage.getItem("pendingPaystackCheckout");
+      const reference = params.get("reference") || params.get("transaction_ref");
+      const pendingRaw = sessionStorage.getItem("pendingSquadCheckout");
 
       if (!reference || !pendingRaw) {
         setStatus("failed");
@@ -2568,7 +2587,7 @@ function PaymentVerificationPage({ ctx }) {
       }
 
       try {
-        const finalizeRes = await fetch("/api/finalize-paystack-order", {
+        const finalizeRes = await fetch("/api/finalize-squad-order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2593,7 +2612,7 @@ function PaymentVerificationPage({ ctx }) {
         if (finalizedTickets.length > 0) {
           sessionStorage.removeItem("cart");
           sessionStorage.removeItem("guestInfo");
-          sessionStorage.removeItem("pendingPaystackCheckout");
+          sessionStorage.removeItem("pendingSquadCheckout");
           navigate(`/ticket/${finalizedTickets[0].id}`, { replace: true });
           return;
         }
@@ -2607,7 +2626,7 @@ function PaymentVerificationPage({ ctx }) {
     };
 
     run();
-  }, [navigate, notify, purchaseTickets]);
+  }, [navigate, notify]);
 
   return (
     <div style={{ maxWidth:560, margin:"0 auto", padding:"64px 24px 80px", animation:"fadeUp 0.4s ease" }}>
@@ -2644,7 +2663,6 @@ function CheckoutPage({ ctx }) {
   const [agreed, setAgreed] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [payError, setPayError] = useState("");
-  const [paystackReady, setPaystackReady] = useState(() => Boolean(window.PaystackPop));
 
   const [cart] = useState(() => JSON.parse(sessionStorage.getItem("cart") || "{}"));
   const [guestInfo] = useState(() => JSON.parse(sessionStorage.getItem("guestInfo") || "null"));
@@ -2661,53 +2679,6 @@ function CheckoutPage({ ctx }) {
   const SERVICE_FEE = 100; // ₦100 flat per order
   const isFree = subtotal === 0;
   const total = isFree ? 0 : subtotal + SERVICE_FEE;
-  const paystackKey = (import.meta.env.VITE_PAYSTACK_PUBLIC_KEY || "").trim();
-  const loadPaystack = () => new Promise(resolve => {
-    if (window.PaystackPop) {
-      setPaystackReady(true);
-      return resolve(true);
-    }
-
-    if (window.__paystackLoader) {
-      window.__paystackLoader.then(resolve);
-      return;
-    }
-
-    window.__paystackLoader = new Promise((loaderResolve) => {
-      const existing = document.querySelector('script[src="https://js.paystack.co/v1/inline.js"]');
-      let settled = false;
-      const finish = (ok) => {
-        if (settled) return;
-        settled = true;
-        if (ok) setPaystackReady(true);
-        loaderResolve(ok);
-      };
-
-      if (existing) {
-        existing.addEventListener("load", () => finish(Boolean(window.PaystackPop)), { once: true });
-        existing.addEventListener("error", () => finish(false), { once: true });
-        setTimeout(() => finish(Boolean(window.PaystackPop)), 5000);
-        return;
-      }
-
-      const s = document.createElement("script");
-      s.src = "https://js.paystack.co/v1/inline.js";
-      s.async = true;
-      s.onload = () => finish(Boolean(window.PaystackPop));
-      s.onerror = () => finish(false);
-      document.head.appendChild(s);
-      setTimeout(() => finish(Boolean(window.PaystackPop)), 5000);
-    });
-
-    window.__paystackLoader.then(resolve);
-  });
-
-  useEffect(() => {
-    if (isFree) return;
-    loadPaystack().then((ok) => {
-      if (!ok) setPayError("Could not load Paystack. Check your connection and try again.");
-    });
-  }, [isFree]);
 
   // ── Free tickets — confirm directly ───────────────────────────────────
   const handleFree = async () => {
@@ -2727,54 +2698,45 @@ function CheckoutPage({ ctx }) {
   };
 
   const handlePay = async () => {
-
-    const reference = `SPRO-${Date.now()}-${Math.random().toString(36).substr(2,6).toUpperCase()}`;
     setPayError("");
-
-    if (!paystackKey) {
-      notify("Missing Paystack public key.", "error");
-      return;
-    }
-
     setProcessing(true);
-    const loaded = await loadPaystack();
-    if (!loaded || !window.PaystackPop) {
-      setPayError("Paystack could not open. Disable blockers and try again.");
+    try {
+      const initRes = await fetch("/api/initialize-squad-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: buyer.email,
+          amount: total,
+          currency: "NGN",
+          callbackUrl: `${window.location.origin}/payment/verify`,
+          customerName: buyer.name,
+          customerPhone: buyer.phone || "",
+          eventTitle: event.title,
+          eventId: event.id,
+          organizerId: event.organizer || "",
+        }),
+      });
+
+      const initData = await initRes.json().catch(() => ({}));
+      if (!initRes.ok || !initData?.ok || !initData?.checkoutUrl) {
+        throw new Error(initData?.msg || "Could not open Squad checkout.");
+      }
+
+      sessionStorage.setItem("pendingSquadCheckout", JSON.stringify({
+        eventId,
+        cart,
+        buyer,
+        total,
+        reference: initData.reference,
+      }));
+
+      window.location.assign(initData.checkoutUrl);
+    } catch (err) {
+      console.error("Squad checkout init failed:", err);
+      setPayError(err?.message || "Could not open Squad checkout. Please try again.");
+      notify(err?.message || "Could not open Squad checkout.", "error");
       setProcessing(false);
-      return;
     }
-
-    sessionStorage.setItem("pendingPaystackCheckout", JSON.stringify({
-      eventId,
-      cart,
-      buyer,
-      total,
-    }));
-
-    const handler = window.PaystackPop.setup({
-      key: paystackKey,
-      email: buyer.email,
-      amount: total * 100,
-      currency: "NGN",
-      ref: reference,
-      metadata: {
-        custom_fields: [
-          { display_name:"Customer", variable_name:"customer", value: buyer.name },
-          { display_name:"Phone", variable_name:"phone", value: buyer.phone || "" },
-          { display_name:"Event", variable_name:"event", value: event.title },
-          { display_name:"Event ID", variable_name:"event_id", value: event.id },
-          { display_name:"Organizer ID", variable_name:"organizer_id", value: event.organizer || "" },
-        ]
-      },
-      callback: (response) => {
-        navigate(`/payment/verify?reference=${encodeURIComponent(response.reference)}`, { replace: true });
-      },
-      onClose: () => {
-        setProcessing(false);
-      },
-    });
-
-    handler.openIframe();
   };
 
   const handleConfirm = isFree ? handleFree : handlePay;
@@ -2865,17 +2827,15 @@ function CheckoutPage({ ctx }) {
 
       {/* Confirm button */}
       <button
-        disabled={!agreed || processing || (!isFree && !paystackReady)}
+        disabled={!agreed || processing}
         onClick={handleConfirm}
-        style={{ width:"100%", padding:16, background: agreed ? (isFree?"var(--green)":"var(--gold)") : "var(--bg3)", color: agreed ? "#000" : "var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:2, cursor: (agreed && (isFree || paystackReady))?"pointer":"not-allowed", opacity: processing || (!isFree && !paystackReady)?0.7:1 }}
+        style={{ width:"100%", padding:16, background: agreed ? (isFree?"var(--green)":"var(--gold)") : "var(--bg3)", color: agreed ? "#000" : "var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}
       >
         {processing
           ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")
-          : (!isFree && !paystackReady)
-            ? "LOADING PAYSTACK..."
           : isFree
-            ? "CONFIRM REGISTRATION →"
-            : `PAY ${fmt(total)} WITH PAYSTACK â†’`
+            ? "CONFIRM REGISTRATION ->"
+            : `PAY ${fmt(total)} WITH SQUAD ->`
         }
       </button>
 
@@ -2883,7 +2843,7 @@ function CheckoutPage({ ctx }) {
       {!isFree && (
         <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginTop:14, color:"var(--muted)", fontSize:12 }}>
           <i className="fa-solid fa-lock" style={{ fontSize:11 }} />
-          <span>Secured by Paystack Â· Cards, Bank Transfer & USSD accepted</span>
+          <span>Secured by Squad - Card and bank transfer accepted</span>
         </div>
       )}
     </div>
@@ -3171,34 +3131,28 @@ function DashboardPage({ ctx }) {
   const totalOrders = payoutSummary.orderCount;
 
   // Payout calculations
-  const STAGEPRO_FEE = 100; // ₦100 per paid order
-  const PAYSTACK_RATE = 0.015; // 1.5%
-  const PAYSTACK_FLAT = 100;   // ₦100
-  const PAYSTACK_CAP  = 2000;  // ₦2,000 cap
-
-  // Group tickets by paystackRef to get orders (one fee per order)
-  const paidTickets = myTickets.filter(t => t.paymentStatus === "paid" && t.paystackRef);
+  const paidTickets = myTickets.filter(t => t.paymentStatus === "paid" && getPaymentReference(t));
 
   // Per-event payout data
   const payoutByEvent = myEvents.map(e => {
     const eTickets = myTickets.filter(t => t.eventId === e.id);
     const eGross = eTickets.reduce((s,t) => s + (t.price||0), 0);
-    const ePaidOrders = [...new Set(eTickets.filter(t=>t.paystackRef).map(t=>t.paystackRef))].length;
+    const ePaidOrders = [...new Set(eTickets.map(getPaymentReference).filter(Boolean))].length;
     const eStagePro = ePaidOrders * STAGEPRO_FEE;
-    const ePaystack = eTickets.filter(t=>t.paymentStatus==="paid").reduce((s,t) => {
-      const fee = Math.min((t.price * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP);
-      return s + fee;
-    }, 0);
-    const eNet = eGross - eStagePro - ePaystack;
-    return { event:e, gross:eGross, stagepro:eStagePro, paystack:Math.round(ePaystack), net:Math.round(eNet), orders:ePaidOrders };
+    const eSquad = calculateSquadTransferFee(eGross);
+    const eNet = eGross - eStagePro - eSquad;
+    return { event:e, gross:eGross, stagepro:eStagePro, squad:eSquad, net:Math.round(eNet), orders:ePaidOrders };
   }).filter(p => p.gross > 0);
 
   const totalStagePro = totalOrders * STAGEPRO_FEE;
-  const totalPaystack = Math.round(paidTickets.reduce((s,t) => s + Math.min((t.price * PAYSTACK_RATE) + PAYSTACK_FLAT, PAYSTACK_CAP), 0));
-  const netPayout = revenue - totalStagePro - totalPaystack;
+  const totalSquad = calculateSquadTransferFee(revenue);
+  const netPayout = revenue - totalStagePro - totalSquad;
   const totalPaidOut = payoutRecords.filter(p => p.status === "paid").reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const outstandingPayout = Math.max(0, Math.round(netPayout) - totalPaidOut);
   const payoutDetails = activeOrganizer?.payoutDetails || {};
+  const liveSheetConfig = activeOrganizer?.liveSheet || {};
+  const liveSheetViewUrl = String(liveSheetConfig.viewUrl || "").trim();
+  const liveSheetWebhookUrl = String(liveSheetConfig.webhookUrl || "").trim();
   const hasPayoutDetails = Boolean(
     payoutDetails.bankName?.trim() &&
     payoutDetails.accountName?.trim() &&
@@ -3254,7 +3208,7 @@ function DashboardPage({ ctx }) {
       setCompStatus({ type: "error", msg: res.msg || "Could not issue complimentary tickets." });
     }
   };
-  const webhookUrl = `${window.location.origin}/webhooks/paystack`;
+  const webhookUrl = `${window.location.origin}/webhooks/squad`;
   const copyWebhookUrl = async () => {
     try {
       await navigator.clipboard.writeText(webhookUrl);
@@ -3408,12 +3362,12 @@ function DashboardPage({ ctx }) {
             {webhookCopyState === "copied" ? "COPIED" : webhookCopyState === "error" ? "COPY FAILED" : "COPY WEBHOOK URL"}
           </button>
           <a
-            href="https://dashboard.paystack.com/#/settings/developer"
+            href="https://merchant.squadco.com/settings"
             target="_blank"
             rel="noreferrer"
             style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"9px 14px", borderRadius:8, fontSize:12, fontWeight:700, letterSpacing:1, textDecoration:"none" }}
           >
-            OPEN PAYSTACK SETTINGS
+            OPEN SQUAD SETTINGS
           </a>
         </div>
       </div>
@@ -3421,8 +3375,20 @@ function DashboardPage({ ctx }) {
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:"16px 18px", marginBottom:24 }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, gap:10, flexWrap:"wrap" }}>
           <div style={{ fontWeight:700, fontSize:14, letterSpacing:1 }}>LIVE ACTIVITY</div>
-          <span style={{ fontSize:11, color:"var(--muted)" }}>Updates from webhook events</span>
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+            <span style={{ fontSize:11, color:"var(--muted)" }}>Updates from webhook events</span>
+            {liveSheetViewUrl && (
+              <a href={liveSheetViewUrl} target="_blank" rel="noreferrer" style={{ color:"var(--gold)", fontSize:11, fontWeight:700 }}>
+                OPEN LIVE SHEET
+              </a>
+            )}
+          </div>
         </div>
+        {canManage && !liveSheetWebhookUrl && (
+          <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid var(--gold-dim)", borderRadius:10, padding:"10px 12px", color:"var(--gold)", fontSize:12, marginBottom:12 }}>
+            Add a live sheet webhook in your profile to stream ticket and payout activity into Google Sheets in real time.
+          </div>
+        )}
         {activeNotifications?.length ? (
           <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
             {activeNotifications.slice(0, 5).map(item => {
@@ -3558,8 +3524,8 @@ function DashboardPage({ ctx }) {
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:16, marginBottom:32 }}>
             {[
               { label:"Gross Revenue", value:fmt(revenue), icon:"fa-solid fa-naira-sign", color:"var(--gold)", sub:"Total ticket sales" },
-              { label:"StagePro Fees", value:fmt(totalStagePro), icon:"fa-solid fa-receipt", color:"var(--muted)", sub:`₦100 × ${totalOrders} orders` },
-              { label:"Paystack Fees", value:fmt(totalPaystack), icon:"fa-solid fa-credit-card", color:"var(--muted)", sub:"1.5% + ₦100 per ticket" },
+              { label:"StagePro Fees", value:fmt(totalStagePro), icon:"fa-solid fa-receipt", color:"var(--muted)", sub:`N100 x ${totalOrders} orders` },
+              { label:"Squad Transfer Fee", value:fmt(totalSquad), icon:"fa-solid fa-credit-card", color:"var(--muted)", sub:"1.2% of paid volume" },
               { label:"Available for Payout", value:fmt(outstandingPayout), icon:"fa-solid fa-wallet", color:"var(--green)", sub:"Net sales less recorded payouts" },
               { label:"Already Paid Out", value:fmt(totalPaidOut), icon:"fa-solid fa-money-bill-transfer", color:"var(--muted)", sub:`${payoutRecords.filter(p => p.status === "paid").length} recorded payout${payoutRecords.filter(p => p.status === "paid").length !== 1 ? "s" : ""}` },
             ].map(s => (
@@ -3574,8 +3540,7 @@ function DashboardPage({ ctx }) {
 
           {/* Fee explanation */}
           <div style={{ background:"rgba(245,166,35,0.06)", border:"1px solid var(--gold-dim)", borderRadius:12, padding:"16px 20px", marginBottom:24, fontSize:13, color:"var(--muted)", lineHeight:1.8 }}>
-            <i className="fa-solid fa-circle-info" style={{ color:"var(--gold)", marginRight:8 }} />
-            <strong style={{ color:"var(--text)" }}>How fees work:</strong> StagePro charges ₦100 per paid order. Paystack charges 1.5% + ₦100 per ticket (capped at ₦2,000). Free events have no fees.
+            <strong style={{ color:"var(--text)" }}>How fees work:</strong> StagePro charges N100 per paid order. Squad transfer fees are calculated at 1.2% of paid volume. Free events have no fees.
           </div>
 
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:16, marginBottom:24 }}>
@@ -3641,7 +3606,7 @@ function DashboardPage({ ctx }) {
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
                   <thead>
                     <tr style={{ background:"var(--bg3)" }}>
-                      {["Event","Gross","StagePro Fee","Paystack Fee","Net Payout"].map(h => (
+                      {["Event","Gross","StagePro Fee","Squad Fee","Net Payout"].map(h => (
                         <th key={h} style={{ padding:"10px 16px", textAlign:"left", color:"var(--muted)", fontWeight:600, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{h.toUpperCase()}</th>
                       ))}
                     </tr>
@@ -3651,8 +3616,7 @@ function DashboardPage({ ctx }) {
                       <tr key={p.event.id} style={{ borderTop:"1px solid var(--border)", background: i%2===0?"transparent":"rgba(255,255,255,0.01)" }}>
                         <td style={{ padding:"12px 16px", fontWeight:600 }}>{p.event.title}</td>
                         <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--gold)" }}>{fmt(p.gross)}</td>
-                        <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.stagepro)}</td>
-                        <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--muted)" }}>−{fmt(p.paystack)}</td>
+                        <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--muted)" }}>-{fmt(p.squad)}</td>
                         <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:12, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, p.net))}</td>
                       </tr>
                     ))}
@@ -3660,8 +3624,7 @@ function DashboardPage({ ctx }) {
                     <tr style={{ borderTop:"2px solid var(--gold-dim)", background:"rgba(245,166,35,0.05)" }}>
                       <td style={{ padding:"12px 16px", fontWeight:700, fontSize:13 }}>TOTAL</td>
                       <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--gold)", fontWeight:700 }}>{fmt(revenue)}</td>
-                      <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalStagePro)}</td>
-                      <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>−{fmt(totalPaystack)}</td>
+                      <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--muted)", fontWeight:700 }}>-{fmt(totalSquad)}</td>
                       <td style={{ padding:"12px 16px", fontFamily:"IBM Plex Mono", fontSize:13, color:"var(--green)", fontWeight:700 }}>{fmt(Math.max(0, netPayout))}</td>
                     </tr>
                   </tbody>
@@ -5404,6 +5367,8 @@ function ProfilePage({ ctx }) {
   const [accountName, setAccountName] = useState(currentUser.payoutDetails?.accountName || "");
   const [accountNumber, setAccountNumber] = useState(currentUser.payoutDetails?.accountNumber || "");
   const [payoutNotes, setPayoutNotes] = useState(currentUser.payoutDetails?.notes || "");
+  const [liveSheetWebhookUrl, setLiveSheetWebhookUrl] = useState(currentUser.liveSheet?.webhookUrl || "");
+  const [liveSheetViewUrl, setLiveSheetViewUrl] = useState(currentUser.liveSheet?.viewUrl || "");
 
   const myTickets = tickets.filter(t => t.userId === currentUser.uid || currentUser.role === "customer");
   const totalSpent = myTickets.reduce((s,t) => s + (t.price||0), 0);
@@ -5413,6 +5378,7 @@ function ProfilePage({ ctx }) {
     : [];
   const payoutSummary = currentUser.role === "organizer" ? calculatePayoutSummary(organizerTickets) : null;
   const hasPayoutDetails = Boolean(bankName.trim() && accountName.trim() && accountNumber.trim());
+  const hasLiveSheetConfig = Boolean(liveSheetWebhookUrl.trim() || liveSheetViewUrl.trim());
   const phoneRequired = searchParams.get("complete") === "phone" && !String(currentUser.phone || "").trim();
   const roleMeta = currentUser.role === "admin"
     ? {
@@ -5453,6 +5419,20 @@ function ProfilePage({ ctx }) {
         accountName: accountName.trim(),
         accountNumber: accountNumber.trim(),
         notes: payoutNotes.trim(),
+      },
+    });
+    setSaving(false);
+  };
+
+  const handleLiveSheetSave = async () => {
+    if (!name.trim() || !normalizePhone(phone)) return;
+    setSaving(true);
+    await updateProfile({
+      name,
+      phone,
+      liveSheet: {
+        webhookUrl: liveSheetWebhookUrl.trim(),
+        viewUrl: liveSheetViewUrl.trim(),
       },
     });
     setSaving(false);
@@ -5537,6 +5517,42 @@ function ProfilePage({ ctx }) {
                 <div style={{ color:"var(--muted)", fontSize:13 }}>{roleMeta.description}</div>
               </div>
             </div>
+            {currentUser.role === "organizer" && (
+              <div style={{ marginTop:20, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
+                <div style={{ fontFamily:"Oswald", fontSize:22, marginBottom:6 }}>LIVE SHEET</div>
+                <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:14 }}>
+                  Add your Google Apps Script webhook URL to stream organizer activity into a live sheet. You can also save the sheet link so it opens directly from your dashboard.
+                </div>
+                <div style={{ display:"grid", gap:14 }}>
+                  <div>
+                    <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET WEBHOOK URL</label>
+                    <input value={liveSheetWebhookUrl} onChange={e => setLiveSheetWebhookUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..."
+                      style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET VIEW URL</label>
+                    <input value={liveSheetViewUrl} onChange={e => setLiveSheetViewUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/..."
+                      style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+                    <span style={{ background: hasLiveSheetConfig ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasLiveSheetConfig ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                      {hasLiveSheetConfig ? "LIVE SHEET CONNECTED" : "LIVE SHEET NOT SET"}
+                    </span>
+                    <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                      {liveSheetViewUrl.trim() && (
+                        <a href={liveSheetViewUrl.trim()} target="_blank" rel="noreferrer" style={{ background:"var(--bg2)", color:"var(--text)", border:"1px solid var(--border)", padding:"12px 16px", borderRadius:10, fontWeight:700, fontSize:13 }}>
+                          Open live sheet
+                        </a>
+                      )}
+                      <button onClick={handleLiveSheetSave} disabled={saving}
+                        style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 20px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
+                        {saving ? "Saving..." : "Save live sheet"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             {currentUser.role === "admin" && (
               <div style={{ marginTop:16 }}>
                 <Link to="/admin" style={{ display:"inline-flex", alignItems:"center", gap:8, background:"var(--gold)", color:"#000", padding:"10px 14px", borderRadius:10, fontWeight:700, fontSize:13 }}>
@@ -6230,7 +6246,7 @@ function HelpPage() {
         },
         {
           q: "What payment methods are accepted?",
-          a: "StagePro processes payments securely via Paystack. You can pay with debit/credit cards (Visa, Mastercard, Verve), bank transfer, or USSD. Free events require no payment at all."
+          a: "StagePro processes payments securely via Squad. You can pay with debit or credit cards and bank transfer. Free events require no payment at all."
         },
         {
           q: "Is it safe to buy tickets on StagePro?",
@@ -6750,11 +6766,3 @@ function GuestTicketLookupPage() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
