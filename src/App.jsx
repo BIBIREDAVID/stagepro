@@ -3131,6 +3131,7 @@ function DashboardPage({ ctx }) {
   const totalOrders = payoutSummary.orderCount;
 
   // Payout calculations
+  const STAGEPRO_FEE = 100;
   const paidTickets = myTickets.filter(t => t.paymentStatus === "paid" && getPaymentReference(t));
 
   // Per-event payout data
