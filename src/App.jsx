@@ -69,32 +69,6 @@ const db = getFirestore(app);
 const storage = getStorage(app);
 
 // ── Google Sheets logger (non-blocking) ────────────────────────────────────
-const getSheetsEndpoint = () => {
-  const raw = String(import.meta.env.VITE_SHEETS_URL || "").trim();
-  if (!raw) return "";
-  try {
-    const parsed = new URL(raw);
-    return ["http:", "https:"].includes(parsed.protocol) ? parsed.toString() : "";
-  } catch {
-    return "";
-  }
-};
-
-const logToSheets = async (payload) => {
-  const sheetsUrl = getSheetsEndpoint();
-  if (!sheetsUrl) return;
-  try {
-    await fetch(sheetsUrl, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    console.warn("Sheets log failed (non-critical):", err);
-  }
-};
-
 const normalizeHttpUrl = (value = "") => {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1197,18 +1171,6 @@ export default function App() {
             themeColor,
             organizerName,
           });
-          logToSheets({
-            action: "purchase", ticketId: ticketRef.id,
-            eventTitle: event.title, tierName: tier.name,
-            userName: buyerName, email: buyerEmail,
-            phone: buyerPhone,
-            price: Number(tier.price),
-            serviceFee: isFreeOrder ? 0 : SERVICE_FEE,
-            purchasedAt: new Date().toLocaleString("en-NG"),
-            paymentReference: paymentReference || "free",
-            paymentProvider: paymentReference ? "squad" : "stagepro",
-            buyerType: isGuest ? "guest" : "registered",
-          });
         }
       }
     } catch (err) {
@@ -1275,7 +1237,6 @@ export default function App() {
       if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
       await updateDoc(ref, { used: true });
       setTickets(prev => prev.map(t => t.id === id.trim() ? { ...t, used: true } : t));
-      logToSheets({ action: "validate", ticketId: id.trim(), eventTitle: ticket.eventTitle });
       logOrganizerLiveSheet(ticketEvent?.organizer || "", {
         type: "ticket_validation",
         title: `Ticket validated for ${ticket.eventTitle}`,
@@ -1735,7 +1696,63 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, publicSoldCounts, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist };
+  const syncEventLiveSheet = async (eventId) => {
+    try {
+      const event = organizerEvents.find(e => e.id === eventId) || events.find(e => e.id === eventId) || null;
+      if (!event) return { ok: false, msg: "Event not found." };
+
+      const eventConfig = getEventLiveSheetConfig(event);
+      const organizerFallbackWebhook = normalizeHttpUrl(currentUser?.liveSheet?.webhookUrl || currentUser?.liveSheetWebhookUrl || "");
+      if (!eventConfig.webhookUrl && !organizerFallbackWebhook) {
+        return { ok: false, msg: "Add an event sheet webhook or organizer fallback first." };
+      }
+
+      const eventTickets = tickets
+        .filter(ticket => ticket.eventId === eventId)
+        .sort((a, b) => new Date(a.purchasedAt || 0).getTime() - new Date(b.purchasedAt || 0).getTime());
+
+      if (!eventTickets.length) {
+        return { ok: false, msg: "No tickets found for this event yet." };
+      }
+
+      let sent = 0;
+      const chunkSize = 20;
+      for (let i = 0; i < eventTickets.length; i += chunkSize) {
+        const chunk = eventTickets.slice(i, i + chunkSize);
+        const results = await Promise.allSettled(
+          chunk.map((ticket) =>
+            logOrganizerLiveSheet(event.organizer || currentUser.uid, {
+              type: "ticket_sync",
+              title: `Ticket synced for ${event.title}`,
+              eventId: event.id,
+              eventTitle: event.title,
+              ticketId: ticket.id,
+              tierName: ticket.tierName || "",
+              attendeeName: ticket.userName || "",
+              attendeeEmail: ticket.userEmail || "",
+              attendeePhone: ticket.userPhone || "",
+              amount: Number(ticket.price || 0),
+              currency: ticket.currency || "NGN",
+              status: ticket.used ? "used" : (ticket.paymentStatus || (Number(ticket.price || 0) > 0 ? "paid" : "free")),
+              paymentReference: ticket.paymentReference || "",
+              paymentProvider: ticket.paymentProvider || "stagepro",
+              purchasedAt: ticket.purchasedAt || "",
+              validatedBy: ticket.used ? "historical_sync" : "",
+              source: "tickets_collection_sync",
+            }, event.id)
+          )
+        );
+        sent += results.filter(result => result.status === "fulfilled").length;
+      }
+
+      return { ok: true, count: sent };
+    } catch (err) {
+      console.error("Live sheet sync failed:", err);
+      return { ok: false, msg: "Could not sync this event to the live sheet." };
+    }
+  };
+
+  const ctx = { currentUser, events, publicSoldCounts, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist, syncEventLiveSheet };
 
   return (
     <BrowserRouter>
@@ -3056,7 +3073,7 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, deleteEvent, refreshEvents } = ctx;
+  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, deleteEvent, refreshEvents, notify, syncEventLiveSheet } = ctx;
   const [searchParams] = useSearchParams();
   const adminOrganizerId = currentUser?.role === "admin" ? (searchParams.get("organizerId") || "").trim() : "";
   const isAdminView = currentUser?.role === "admin" && Boolean(adminOrganizerId);
@@ -3073,6 +3090,7 @@ function DashboardPage({ ctx }) {
   const [compName, setCompName] = useState("");
   const [compEmail, setCompEmail] = useState("");
   const [compStatus, setCompStatus] = useState({ type: "idle", msg: "" });
+  const [syncingEventId, setSyncingEventId] = useState("");
   const [view, setView] = useState("list"); // list | calendar | payouts
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const [payoutRecords, setPayoutRecords] = useState([]);
@@ -3285,6 +3303,14 @@ function DashboardPage({ ctx }) {
   const closeCompModal = () => {
     setCompModalEvent(null);
     setCompStatus({ type: "idle", msg: "" });
+  };
+  const handleSyncEventSheet = async (event) => {
+    if (!canManage || !event?.id) return;
+    setSyncingEventId(event.id);
+    const result = await syncEventLiveSheet(event.id);
+    if (result?.ok) notify(`Live sheet synced with ${result.count} ticket record${result.count === 1 ? "" : "s"} for ${event.title}.`);
+    else notify(result?.msg || "Could not sync this event to the live sheet.", "error");
+    setSyncingEventId("");
   };
   const submitCompFromDashboard = async () => {
     if (!canManage) return;
@@ -3819,6 +3845,16 @@ function DashboardPage({ ctx }) {
                       <i className="fa-solid fa-table-list" style={{marginRight:5}} />
                       Sheet
                     </a>
+                  )}
+                  {canManage && (getEventLiveSheetConfig(event).webhookUrl || organizerLiveSheetWebhookUrl) && (
+                    <button
+                      onClick={() => handleSyncEventSheet(event)}
+                      disabled={syncingEventId === event.id}
+                      style={{ background:"rgba(245,166,35,0.12)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor: syncingEventId === event.id ? "wait" : "pointer" }}
+                    >
+                      <i className="fa-solid fa-arrows-rotate" style={{marginRight:5}} />
+                      {syncingEventId === event.id ? "Syncing..." : "Sync Sheet"}
+                    </button>
                   )}
                   <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
                   {canManage && <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}

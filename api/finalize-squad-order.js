@@ -186,29 +186,32 @@ export default async function handler(req, res) {
     await batch.commit();
 
     if (event.organizer) {
-      await sendOrganizerLiveSheetLog({
-        organizerId: event.organizer,
-        eventId: event.id,
-        payload: {
-          type: "ticket_purchase",
-          title: `New paid order for ${event.title}`,
-          eventId: event.id,
-          eventTitle: event.title,
-          ticketCount: newTickets.length,
-          buyerName,
-          buyerEmail,
-          buyerPhone,
-          amount: Number(tx.transaction_amount || 0) / 100,
-          currency: tx.transaction_currency_id || expectedCurrency,
-          paymentReference: String(reference),
-          paymentProvider: "squad",
-          tickets: newTickets.map((ticket) => ({
-            ticketId: ticket.id,
-            tierName: ticket.tierName,
-            price: ticket.price,
-          })),
-        },
-      });
+      await Promise.allSettled(
+        newTickets.map((ticket) =>
+          sendOrganizerLiveSheetLog({
+            organizerId: event.organizer,
+            eventId: event.id,
+            payload: {
+              type: "ticket_purchase",
+              title: `Paid ticket purchased for ${event.title}`,
+              eventId: event.id,
+              eventTitle: event.title,
+              ticketId: ticket.id,
+              tierName: ticket.tierName,
+              attendeeName: buyerName,
+              attendeeEmail: buyerEmail,
+              attendeePhone: buyerPhone,
+              amount: ticket.price,
+              currency: tx.transaction_currency_id || expectedCurrency,
+              paymentReference: String(reference),
+              paymentProvider: "squad",
+              status: "paid",
+              purchasedAt: now,
+              source: "tickets_collection",
+            },
+          })
+        )
+      );
     }
 
     let organizerName = "StagePro";
