@@ -17,6 +17,9 @@ export function buildTicketEmail({
   const orgName = organizerName || "StagePro";
   const appBaseUrl = (process.env.PUBLIC_APP_URL || "https://stagepro-phi.vercel.app").replace(/\/+$/, "");
   const headerImage = String(eventImage || "").trim() || process.env.EMAIL_HEADER_URL || `${appBaseUrl}/email-header-motion-2026.jpg`;
+  const qrUrl = ticketUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(ticketUrl)}&margin=12`
+    : "";
 
   const subject = `Your ticket for ${eventTitle} - StagePro`;
   const html = `<!DOCTYPE html>
@@ -62,6 +65,16 @@ export function buildTicketEmail({
             </td></tr>
           </table>
         </td></tr>
+        ${qrUrl ? `
+        <tr><td align="center" style="padding:0 40px 24px;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a1a;border-radius:14px;border:1px solid #2a2a2a;">
+            <tr><td align="center" style="padding:24px 24px 10px;">
+              <p style="margin:0 0 14px;font-size:11px;color:#666;letter-spacing:2px;">ENTRY QR CODE</p>
+              <img src="${qrUrl}" alt="QR code for ticket ${ticketId || ""}" width="220" height="220" style="display:block;width:220px;height:220px;max-width:100%;border-radius:12px;background:#ffffff;padding:10px;margin:0 auto;" />
+              <p style="margin:14px 0 0;font-size:12px;color:#777;line-height:1.7;">Present this QR code at the entrance for scanning.</p>
+            </td></tr>
+          </table>
+        </td></tr>` : ""}
         <tr><td align="center" style="padding:0 40px 32px;">
           <a href="${ticketUrl}" style="display:inline-block;background:${accent};color:#000000;text-decoration:none;padding:16px 48px;border-radius:12px;font-weight:800;font-size:16px;letter-spacing:2px;">VIEW MY TICKET</a>
           <p style="margin:14px 0 0;font-size:11px;color:#444;line-height:1.6;">Or open: <a href="${ticketUrl}" style="color:${accent};word-break:break-all;">${ticketUrl}</a></p>
