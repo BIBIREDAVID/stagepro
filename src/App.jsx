@@ -324,6 +324,18 @@ const getLiveSold = (event, tierId, liveSoldCounts = {}) => {
   return getSold(event, tierId);
 };
 
+const buildTicketSoldCounts = (tickets = []) => {
+  const soldCounts = {};
+  tickets.forEach((ticket) => {
+    const eventId = String(ticket?.eventId || "").trim();
+    const tierId = String(ticket?.tierId || "").trim();
+    if (!eventId || !tierId) return;
+    if (!soldCounts[eventId]) soldCounts[eventId] = {};
+    soldCounts[eventId][tierId] = Number(soldCounts[eventId][tierId] || 0) + 1;
+  });
+  return soldCounts;
+};
+
 // ── Banner themes ──────────────────────────────────────────────────────────
 const THEMES = {
   purple:   "linear-gradient(135deg,#6a11cb,#2575fc)",
@@ -2046,7 +2058,7 @@ function TicketPage({ ctx }) {
 
 // ── Home Page ──────────────────────────────────────────────────────────────
 function HomePage({ ctx }) {
-  const { events, publicSoldCounts, eventsLoading } = ctx;
+  const { events, publicSoldCounts, tickets, eventsLoading } = ctx;
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -2211,16 +2223,17 @@ function HomePage({ ctx }) {
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
-          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} publicSoldCounts={publicSoldCounts} />)}
+          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} publicSoldCounts={publicSoldCounts} ticketSoldCounts={buildTicketSoldCounts(tickets)} />)}
         </div>
       )}
     </div>
   );
 }
 
-function EventCard({ event, index, publicSoldCounts }) {
+function EventCard({ event, index, publicSoldCounts, ticketSoldCounts }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
-  const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, publicSoldCounts), 0);
+  const liveCounts = ticketSoldCounts?.[event.id] ? { ...publicSoldCounts, [event.id]: ticketSoldCounts[event.id] } : publicSoldCounts;
+  const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, liveCounts), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
   const hasImage = !!event.image;
@@ -2447,6 +2460,8 @@ function EventPage({ ctx }) {
   if (loading) return <Spinner />;
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
 
+  const ticketSoldCounts = buildTicketSoldCounts(tickets);
+  const liveCounts = ticketSoldCounts?.[event.id] ? { ...publicSoldCounts, [event.id]: ticketSoldCounts[event.id] } : publicSoldCounts;
   const totalItems = Object.values(cart).reduce((s,q) => s+q, 0);
   const totalPrice = event.tiers.reduce((s,t) => s+(cart[t.id]||0)*t.price, 0);
 
@@ -2455,7 +2470,7 @@ function EventPage({ ctx }) {
       const tier = event.tiers.find(t => t.id===tierId);
       const draft = { ...prev };
       draft[tierId] = Math.max(0, (draft[tierId] || 0) + delta);
-      const inventoryCap = tier.total - getLiveSold(event, tier.id, publicSoldCounts);
+      const inventoryCap = tier.total - getLiveSold(event, tier.id, liveCounts);
       draft[tierId] = Math.min(draft[tierId], inventoryCap);
       return draft;
     });
@@ -2543,7 +2558,7 @@ function EventPage({ ctx }) {
             <h3 style={{ fontSize:20, marginBottom:20 }}>SELECT TICKETS</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:20 }}>
               {event.tiers.map(tier => {
-                const available = tier.total - getLiveSold(event, tier.id, publicSoldCounts);
+                const available = tier.total - getLiveSold(event, tier.id, liveCounts);
                 const qty = cart[tier.id]||0;
                 const wStatus = waitlistStatus[tier.id];
                 return (
