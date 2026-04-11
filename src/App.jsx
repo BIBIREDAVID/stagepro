@@ -3091,6 +3091,7 @@ function DashboardPage({ ctx }) {
   const [compEmail, setCompEmail] = useState("");
   const [compStatus, setCompStatus] = useState({ type: "idle", msg: "" });
   const [syncingEventId, setSyncingEventId] = useState("");
+  const [resendingEventId, setResendingEventId] = useState("");
   const [view, setView] = useState("list"); // list | calendar | payouts
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const [payoutRecords, setPayoutRecords] = useState([]);
@@ -3311,6 +3312,49 @@ function DashboardPage({ ctx }) {
     if (result?.ok) notify(`Live sheet synced with ${result.count} ticket record${result.count === 1 ? "" : "s"} for ${event.title}.`);
     else notify(result?.msg || "Could not sync this event to the live sheet.", "error");
     setSyncingEventId("");
+  };
+  const handleBulkResendEmails = async (event, eventTickets) => {
+    if (!canManage || !event?.id) return;
+    const resendableTickets = eventTickets.filter(ticket => String(ticket.userEmail || "").trim());
+    if (!resendableTickets.length) {
+      notify(`No ticket emails found for ${event.title}.`, "error");
+      return;
+    }
+
+    setResendingEventId(event.id);
+    let successCount = 0;
+    let failCount = 0;
+    const chunkSize = 8;
+
+    for (let i = 0; i < resendableTickets.length; i += chunkSize) {
+      const chunk = resendableTickets.slice(i, i + chunkSize);
+      const results = await Promise.allSettled(
+        chunk.map(async (ticket) => {
+          const response = await fetch("/api/resend-ticket-email", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ticketId: ticket.id }),
+          });
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload?.error || "Email resend failed");
+          }
+          return response.json().catch(() => ({}));
+        })
+      );
+
+      results.forEach((result) => {
+        if (result.status === "fulfilled") successCount += 1;
+        else failCount += 1;
+      });
+    }
+
+    if (successCount > 0) {
+      notify(`Resent ${successCount} unique QR email${successCount === 1 ? "" : "s"} for ${event.title}.${failCount ? ` ${failCount} failed.` : ""}`);
+    } else {
+      notify(`Could not resend ticket emails for ${event.title}.`, "error");
+    }
+    setResendingEventId("");
   };
   const submitCompFromDashboard = async () => {
     if (!canManage) return;
@@ -3861,6 +3905,16 @@ function DashboardPage({ ctx }) {
                   {canManage && <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
                   {canManage && <button onClick={() => openCompModal(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-gift" style={{marginRight:5}} />Issue Comp</button>}
                   {canManage && <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>}
+                  {canManage && (
+                    <button
+                      onClick={() => handleBulkResendEmails(event, eventTickets)}
+                      disabled={resendingEventId === event.id || eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0}
+                      style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor: resendingEventId === event.id ? "wait" : "pointer", opacity: eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0 ? 0.5 : 1 }}
+                    >
+                      <i className="fa-solid fa-envelope" style={{marginRight:5}} />
+                      {resendingEventId === event.id ? "Sending..." : "Resend All Ticket Emails"}
+                    </button>
+                  )}
                   <button onClick={() => downloadCSVWithEmail(event, myTickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
                     <i className="fa-solid fa-download" style={{marginRight:5}} />{eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
                   </button>
