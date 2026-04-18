@@ -101,24 +101,6 @@ const logOrganizerLiveSheet = async (organizerId, payload, eventId = "") => {
   }
 };
 
-const logHarpeninTicketingEvent = async ({ organizerId, eventId = "", eventType, payload }) => {
-  if (!organizerId || !eventType || !payload) return;
-  try {
-    await fetch("/api/harpenin-dispatch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        organizerId,
-        eventId: String(eventId || payload?.eventId || "").trim(),
-        eventType,
-        payload,
-      }),
-    });
-  } catch (err) {
-    console.warn("Harpenin webhook dispatch failed (non-critical):", err);
-  }
-};
-
 // ── CSV Download ───────────────────────────────────────────────────────────
 function downloadCSVWithEmail(event, myTickets) {
   const eventTickets = myTickets.filter(t => t.eventId === event.id);
@@ -1252,39 +1234,6 @@ export default function App() {
       }));
     }
     notify(`${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
-    if (event.organizer && newTickets.length > 0) {
-      const externalOrderId = paymentReference
-        ? String(paymentReference)
-        : `free_${event.id}_${buyerEmail || buyerUid}_${newTickets[0]?.purchasedAt || new Date().toISOString()}`;
-      await logHarpeninTicketingEvent({
-        organizerId: event.organizer,
-        eventId: event.id,
-        eventType: "ticket.purchase",
-        payload: {
-          eventId: event.id,
-          eventTitle: event.title,
-          externalOrderId,
-          purchasedAt: newTickets[0]?.purchasedAt || new Date().toISOString(),
-          currency: "NGN",
-          totalAmount: newTickets.reduce((sum, ticket) => sum + Number(ticket.price || 0), 0),
-          buyer: {
-            name: buyerName,
-            email: buyerEmail,
-            phone: buyerPhone,
-          },
-          recipients: newTickets.map((ticket) => ({
-            name: ticket.userName || buyerName,
-            email: ticket.userEmail || buyerEmail,
-            phone: ticket.userPhone || buyerPhone,
-            ticketId: ticket.id,
-            ticketType: ticket.tierName,
-            designationName: ticket.tierName,
-            price: Number(ticket.price || 0),
-            status: ticket.paymentStatus || "free",
-          })),
-        },
-      });
-    }
     // Store guest tickets in session so they can view them
     if (isGuest && newTickets.length > 0) {
       sessionStorage.setItem("guestTickets", JSON.stringify(newTickets.map(t => t.id)));
@@ -1331,41 +1280,6 @@ export default function App() {
         validatedBy: currentUser?.name || "",
         status: "used",
       }, ticket.eventId);
-      await logHarpeninTicketingEvent({
-        organizerId: ticketEvent?.organizer || "",
-        eventId: ticket.eventId,
-        eventType: "ticket.validation",
-        payload: {
-          eventId: ticket.eventId,
-          eventTitle: ticket.eventTitle,
-          externalOrderId: `validation_${ticket.id}_${Date.now()}`,
-          purchasedAt: ticket.purchasedAt || new Date().toISOString(),
-          currency: "NGN",
-          totalAmount: Number(ticket.price || 0),
-          buyer: {
-            name: ticket.userName || "",
-            email: ticket.userEmail || "",
-            phone: ticket.userPhone || "",
-          },
-          recipient: {
-            name: ticket.userName || "",
-            email: ticket.userEmail || "",
-            phone: ticket.userPhone || "",
-          },
-          ticket: {
-            id: ticket.id,
-            type: ticket.tierName || "",
-            designationName: ticket.tierName || "",
-            price: Number(ticket.price || 0),
-            status: "used",
-          },
-          validation: {
-            validatedAt: new Date().toISOString(),
-            validatedBy: currentUser?.name || "",
-            validatedById: currentUser?.uid || "",
-          },
-        },
-      });
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
     } catch {
       return { ok: false, msg: "Error checking ticket" };
