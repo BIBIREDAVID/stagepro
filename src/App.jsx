@@ -355,6 +355,25 @@ const buildTicketSoldCounts = (tickets = []) => {
   return soldCounts;
 };
 
+const mergeEventTiersWithSoldCounts = (event = {}, soldCounts = null) => {
+  const resolvedSoldCounts = soldCounts && typeof soldCounts === "object"
+    ? soldCounts
+    : (event?.soldCounts && typeof event.soldCounts === "object" ? event.soldCounts : null);
+
+  if (!event || !Array.isArray(event.tiers)) return event;
+
+  return {
+    ...event,
+    ...(resolvedSoldCounts ? { soldCounts: resolvedSoldCounts } : {}),
+    tiers: event.tiers.map((tier) => ({
+      ...tier,
+      sold: resolvedSoldCounts && resolvedSoldCounts[tier.id] !== undefined
+        ? Number(resolvedSoldCounts[tier.id] || 0)
+        : Number(tier?.sold || 0),
+    })),
+  };
+};
+
 // ── Banner themes ──────────────────────────────────────────────────────────
 const THEMES = {
   purple:   "linear-gradient(135deg,#6a11cb,#2575fc)",
@@ -747,6 +766,7 @@ export default function App() {
   const [organizerAttendeeFeed, setOrganizerAttendeeFeed] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [notification, setNotification] = useState(null);
+  const soldCountRepairRef = useRef(new Set());
 
   const notify = (msg, type = "success") => {
     setNotification({ msg, type });
@@ -767,45 +787,29 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const init = async () => {
-      setEventsLoading(true);
-      try {
-        const snapshot = await getDocs(collection(db, "events"));
-        setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) { console.error("Events fetch failed:", err); }
-      setEventsLoading(false);
-    };
-    init();
-  }, []);
-
-  useEffect(() => {
-    const eventIds = events.map((event) => event.id).filter(Boolean);
-    if (eventIds.length === 0) {
-      setPublicSoldCounts({});
-      return;
-    }
-
-    let active = true;
-    const loadSoldCounts = async () => {
-      try {
-        const res = await fetch("/api/public-event-sold-counts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ eventIds }),
-        });
-        const payload = await res.json().catch(() => ({}));
-        if (!active) return;
-        if (res.ok && payload?.ok) {
-          setPublicSoldCounts(payload.soldCounts || {});
-        }
-      } catch (err) {
-        console.warn("Could not load public sold counts:", err);
+    setEventsLoading(true);
+    const unsub = onSnapshot(
+      collection(db, "events"),
+      (snapshot) => {
+        const nextEvents = snapshot.docs.map(d => mergeEventTiersWithSoldCounts({ id: d.id, ...d.data() }));
+        setEvents(nextEvents);
+        setPublicSoldCounts(
+          nextEvents.reduce((acc, event) => {
+            if (event?.id && event?.soldCounts && typeof event.soldCounts === "object") {
+              acc[event.id] = event.soldCounts;
+            }
+            return acc;
+          }, {})
+        );
+        setEventsLoading(false);
+      },
+      (err) => {
+        console.error("Events fetch failed:", err);
+        setEventsLoading(false);
       }
-    };
-
-    loadSoldCounts();
-    return () => { active = false; };
-  }, [events]);
+    );
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     if (currentUser?.role !== "organizer") {
@@ -893,7 +897,7 @@ export default function App() {
       }
 
       const chunks = [];
-      for (let i = 0; i < myEventIds.length; i += 30) chunks.push(myEventIds.slice(i, i + 30));
+      for (let i = 0; i < myEventIds.length; i += 10) chunks.push(myEventIds.slice(i, i + 10));
 
       const bucket = new Map();
       const unsubs = chunks.map((chunk, idx) => {
@@ -991,6 +995,31 @@ export default function App() {
     return () => unsub();
   }, [currentUser]);
 
+  useEffect(() => {
+    if (currentUser?.role !== "organizer" || organizerEvents.length === 0) return;
+
+    const computedByEvent = buildTicketSoldCounts(tickets);
+    organizerEvents.forEach((event) => {
+      const computed = computedByEvent[event.id] || {};
+      const stored = event?.soldCounts && typeof event.soldCounts === "object" ? event.soldCounts : {};
+      const tierIds = (event.tiers || []).map((tier) => tier.id).filter(Boolean);
+      const hasMismatch = tierIds.some((tierId) => Number(stored[tierId] || 0) !== Number(computed[tierId] || 0));
+      if (!hasMismatch || soldCountRepairRef.current.has(event.id)) return;
+
+      soldCountRepairRef.current.add(event.id);
+      updateDoc(doc(db, "events", event.id), {
+        soldCounts: computed,
+        updatedAt: new Date().toISOString(),
+      })
+        .catch((err) => {
+          console.warn(`Could not repair soldCounts for ${event.id}:`, err);
+        })
+        .finally(() => {
+          soldCountRepairRef.current.delete(event.id);
+        });
+    });
+  }, [currentUser, organizerEvents, tickets]);
+
   const login = async (email, password) => {
     try {
       const res = await signInWithEmailAndPassword(auth, email, password);
@@ -1080,6 +1109,27 @@ export default function App() {
   };
 
   const logout = async () => { await signOut(auth); setCurrentUser(null); };
+
+  const syncEventSoldCounts = async (eventId) => {
+    const cleanEventId = String(eventId || "").trim();
+    if (!cleanEventId) return null;
+
+    const ticketSnap = await getDocs(query(collection(db, "tickets"), where("eventId", "==", cleanEventId)));
+    const soldCounts = buildTicketSoldCounts(
+      ticketSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+    )[cleanEventId] || {};
+
+    await updateDoc(doc(db, "events", cleanEventId), {
+      soldCounts,
+      updatedAt: new Date().toISOString(),
+    });
+
+    setEvents((prev) => prev.map((event) => (
+      event.id === cleanEventId ? mergeEventTiersWithSoldCounts(event, soldCounts) : event
+    )));
+    setPublicSoldCounts((prev) => ({ ...prev, [cleanEventId]: soldCounts }));
+    return soldCounts;
+  };
 
   const purchaseTickets = async (eventId, cartSelections, paymentReference = null, buyer = null) => {
     // Always fetch event fresh from Firestore — avoids stale closure issues
@@ -1209,29 +1259,21 @@ export default function App() {
       notify("Purchase failed. Please try again.", "error");
       return false;
     }
-    // Step 2 — atomically increment soldCounts.{tierId} on the event doc
     try {
-      const soldUpdate = {};
-      for (const tier of event.tiers) {
-        const qty = cartSelections[tier.id] || 0;
-        if (!qty) continue;
-        soldUpdate[`soldCounts.${tier.id}`] = increment(qty);
-      }
-      await updateDoc(doc(db, "events", eventId), soldUpdate);
+      await syncEventSoldCounts(eventId);
     } catch (err) {
-      console.warn("Could not update soldCounts:", err.code, err.message);
-    }
-    // Step 3 — re-fetch event to sync local state with Firestore
-    try {
-      const freshSnap = await getDoc(doc(db, "events", eventId));
-      if (freshSnap.exists()) {
-        setEvents(prev => prev.map(e => e.id !== eventId ? e : { id: freshSnap.id, ...freshSnap.data() }));
+      console.warn("Could not sync soldCounts:", err.code || "", err.message || err);
+      try {
+        const soldUpdate = {};
+        for (const tier of event.tiers) {
+          const qty = cartSelections[tier.id] || 0;
+          if (!qty) continue;
+          soldUpdate[`soldCounts.${tier.id}`] = increment(qty);
+        }
+        await updateDoc(doc(db, "events", eventId), soldUpdate);
+      } catch (incrementErr) {
+        console.warn("Could not update soldCounts:", incrementErr.code, incrementErr.message);
       }
-    } catch {
-      // fallback: optimistic local update
-      setEvents(prev => prev.map(e => e.id !== eventId ? e : {
-        ...e, tiers: e.tiers.map(t => ({ ...t, sold: (t.sold || 0) + (cartSelections[t.id] || 0) })),
-      }));
     }
     notify(`${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
     // Store guest tickets in session so they can view them
@@ -1459,6 +1501,11 @@ export default function App() {
       }
 
       setTickets(prev => [...created, ...prev]);
+      try {
+        await syncEventSoldCounts(event.id);
+      } catch (syncErr) {
+        console.warn("Could not sync complimentary soldCounts:", syncErr);
+      }
 
       return { ok: true, count: created.length };
     } catch (err) {
@@ -2080,7 +2127,7 @@ function TicketPage({ ctx }) {
 
 // ── Home Page ──────────────────────────────────────────────────────────────
 function HomePage({ ctx }) {
-  const { events, publicSoldCounts, tickets, eventsLoading } = ctx;
+  const { events, publicSoldCounts, eventsLoading } = ctx;
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -2245,17 +2292,16 @@ function HomePage({ ctx }) {
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
-          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} publicSoldCounts={publicSoldCounts} ticketSoldCounts={buildTicketSoldCounts(tickets)} />)}
+          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} publicSoldCounts={publicSoldCounts} />)}
         </div>
       )}
     </div>
   );
 }
 
-function EventCard({ event, index, publicSoldCounts, ticketSoldCounts }) {
+function EventCard({ event, index, publicSoldCounts }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
-  const liveCounts = ticketSoldCounts?.[event.id] ? { ...publicSoldCounts, [event.id]: ticketSoldCounts[event.id] } : publicSoldCounts;
-  const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, liveCounts), 0);
+  const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, publicSoldCounts), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
   const hasImage = !!event.image;
@@ -2460,7 +2506,7 @@ function AuthPage({ mode, ctx }) {
 function EventPage({ ctx }) {
   const { eventId: eventRouteParam } = useParams();
   const eventId = resolveEventIdFromParam(eventRouteParam);
-  const { events, eventsLoading, publicSoldCounts, currentUser, tickets, joinWaitlist } = ctx;
+  const { events, eventsLoading, publicSoldCounts, currentUser, joinWaitlist } = ctx;
   const navigate = useNavigate();
   const [cart, setCart] = useState({});
   const [event, setEvent] = useState(null);
@@ -2486,7 +2532,7 @@ function EventPage({ ctx }) {
       if (looksLikeLegacyId || /^[A-Za-z0-9]{16,}$/.test(routeKey)) {
         const snap = await getDoc(doc(db, "events", eventId));
         if (snap.exists()) {
-          setEvent({ id: snap.id, ...snap.data() });
+          setEvent(mergeEventTiersWithSoldCounts({ id: snap.id, ...snap.data() }));
           setLoading(false);
           return;
         }
@@ -2495,7 +2541,7 @@ function EventPage({ ctx }) {
       const slugSnap = await getDocs(query(collection(db, "events"), where("slug", "==", routeKey), limit(1)));
       if (!slugSnap.empty) {
         const match = slugSnap.docs[0];
-        setEvent({ id: match.id, ...match.data() });
+        setEvent(mergeEventTiersWithSoldCounts({ id: match.id, ...match.data() }));
       }
       setLoading(false);
     };
@@ -2513,8 +2559,7 @@ function EventPage({ ctx }) {
   if (loading) return <Spinner />;
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
 
-  const ticketSoldCounts = buildTicketSoldCounts(tickets);
-  const liveCounts = ticketSoldCounts?.[event.id] ? { ...publicSoldCounts, [event.id]: ticketSoldCounts[event.id] } : publicSoldCounts;
+  const liveCounts = publicSoldCounts;
   const totalItems = Object.values(cart).reduce((s,q) => s+q, 0);
   const totalPrice = event.tiers.reduce((s,t) => s+(cart[t.id]||0)*t.price, 0);
 
