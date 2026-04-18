@@ -45,6 +45,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, soldCounts });
   } catch (err) {
     console.error("Public sold-count fetch failed:", err);
-    return res.status(500).json({ ok: false, msg: "Could not load sold counts" });
+    return res.status(200).json({ ok: true, soldCounts: {}, degraded: true });
   }
 }
