@@ -2911,7 +2911,7 @@ function CheckoutPage({ ctx }) {
   const handleFree = async () => {
 
     setProcessing(true);
-    const result = await purchaseTickets(eventId, cart, null, buyer);
+    const result = await purchaseTickets(event.id, cart, null, buyer);
     if (result) {
       sessionStorage.removeItem("cart");
       sessionStorage.removeItem("guestInfo");
@@ -2950,7 +2950,7 @@ function CheckoutPage({ ctx }) {
       }
 
       sessionStorage.setItem("pendingSquadCheckout", JSON.stringify({
-        eventId,
+        eventId: event.id,
         cart,
         buyer,
         total,
