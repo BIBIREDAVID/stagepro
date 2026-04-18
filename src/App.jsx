@@ -277,14 +277,22 @@ const slugify = (value = "") =>
 
 const buildEventRouteId = (eventOrId, fallbackTitle = "") => {
   if (!eventOrId) return "";
-  if (typeof eventOrId === "string") return eventOrId;
-  const id = eventOrId.id || "";
-  if (!id) return "";
-  const titleSlug = slugify(eventOrId.slug || eventOrId.title || fallbackTitle || "event");
-  return titleSlug ? `${titleSlug}-${id}` : id;
+  if (typeof eventOrId === "string") {
+    const raw = String(eventOrId || "").trim();
+    if (!raw) return "";
+    const legacyId = resolveEventIdFromParam(raw);
+    if (legacyId !== raw && raw.endsWith(`-${legacyId}`)) {
+      return slugify(raw.slice(0, -(legacyId.length + 1)));
+    }
+    return slugify(fallbackTitle || raw) || raw;
+  }
+  return slugify(eventOrId.slug || eventOrId.title || fallbackTitle || "event");
 };
 
-const eventPath = (eventOrId, fallbackTitle = "") => `/event/${buildEventRouteId(eventOrId, fallbackTitle)}`;
+const eventPath = (eventOrId, fallbackTitle = "") => {
+  const routeId = buildEventRouteId(eventOrId, fallbackTitle);
+  return routeId ? `/event/${routeId}` : "/event";
+};
 
 const resolveEventIdFromParam = (param = "") => {
   const raw = String(param || "");
@@ -292,6 +300,17 @@ const resolveEventIdFromParam = (param = "") => {
   const parts = raw.split("-");
   const maybeId = parts[parts.length - 1];
   return /^[A-Za-z0-9]{16,}$/.test(maybeId) ? maybeId : raw;
+};
+
+const findEventByRouteParam = (events = [], param = "") => {
+  const raw = String(param || "").trim();
+  if (!raw) return null;
+  const legacyId = resolveEventIdFromParam(raw);
+  return (
+    events.find((event) => event.id === raw || event.id === legacyId) ||
+    events.find((event) => buildEventRouteId(event) === raw) ||
+    null
+  );
 };
 // ── Sold count for a tier ─────────────────────────────────────────────────
 // Sold count for a tier — reads from event.soldCounts map (atomic increments)
@@ -1459,6 +1478,7 @@ export default function App() {
       };
       const data = {
         ...eventData,
+        slug: slugify(eventData.slug || eventData.title || ""),
         image: normalizeEventImageUrl(eventData.image) || DEFAULT_EVENT_IMAGE,
         organizer: currentUser.uid,
         coOrganizers: resolved.uids,
@@ -1514,6 +1534,7 @@ export default function App() {
       };
       const data = {
         ...eventData,
+        slug: slugify(eventData.slug || eventData.title || currentEvent?.title || ""),
         image: normalizeEventImageUrl(eventData.image),
         coOrganizers: resolved.uids,
         coOrganizerEmails: requestedCoEmails,
@@ -2438,7 +2459,7 @@ function AuthPage({ mode, ctx }) {
 function EventPage({ ctx }) {
   const { eventId: eventRouteParam } = useParams();
   const eventId = resolveEventIdFromParam(eventRouteParam);
-  const { events, publicSoldCounts, currentUser, tickets, joinWaitlist } = ctx;
+  const { events, eventsLoading, publicSoldCounts, currentUser, tickets, joinWaitlist } = ctx;
   const navigate = useNavigate();
   const [cart, setCart] = useState({});
   const [event, setEvent] = useState(null);
@@ -2447,15 +2468,46 @@ function EventPage({ ctx }) {
   const [guestModal, setGuestModal] = useState(false);
 
   useEffect(() => {
-    const local = events.find(e => e.id === eventId);
-    if (local) { setEvent(local); setLoading(false); return; }
+    const local = findEventByRouteParam(events, eventRouteParam);
+    if (local) {
+      setEvent(local);
+      setLoading(false);
+      return;
+    }
+    if (eventsLoading) {
+      setLoading(true);
+      return;
+    }
     const fetchEvent = async () => {
-      const snap = await getDoc(doc(db, "events", eventId));
-      if (snap.exists()) setEvent({ id: snap.id, ...snap.data() });
+      const routeKey = String(eventRouteParam || "").trim();
+      const looksLikeLegacyId = eventId && eventId !== routeKey;
+
+      if (looksLikeLegacyId || /^[A-Za-z0-9]{16,}$/.test(routeKey)) {
+        const snap = await getDoc(doc(db, "events", eventId));
+        if (snap.exists()) {
+          setEvent({ id: snap.id, ...snap.data() });
+          setLoading(false);
+          return;
+        }
+      }
+
+      const slugSnap = await getDocs(query(collection(db, "events"), where("slug", "==", routeKey), limit(1)));
+      if (!slugSnap.empty) {
+        const match = slugSnap.docs[0];
+        setEvent({ id: match.id, ...match.data() });
+      }
       setLoading(false);
     };
     fetchEvent();
-  }, [eventId, events]);
+  }, [eventId, eventRouteParam, events, eventsLoading]);
+
+  useEffect(() => {
+    if (!event) return;
+    const canonicalPath = eventPath(event);
+    if (canonicalPath !== `/event/${eventRouteParam}`) {
+      navigate(canonicalPath, { replace: true });
+    }
+  }, [event, eventRouteParam, navigate]);
 
   if (loading) return <Spinner />;
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
@@ -2789,8 +2841,16 @@ function CheckoutPage({ ctx }) {
   const [guestInfo] = useState(() => JSON.parse(sessionStorage.getItem("guestInfo") || "null"));
   const buyer = currentUser || guestInfo;
 
-  const event = events.find(e => e.id === eventId);
+  const event = findEventByRouteParam(events, eventRouteParam);
   const eventDetailsPath = event ? eventPath(event) : eventPath(eventRouteParam || eventId);
+
+  useEffect(() => {
+    if (!event) return;
+    const canonicalPath = `${eventPath(event)}/checkout`;
+    if (canonicalPath !== `/event/${eventRouteParam}/checkout`) {
+      navigate(canonicalPath, { replace: true });
+    }
+  }, [event, eventRouteParam, navigate]);
 
   if (!buyer) return <Navigate to={eventDetailsPath} />;
   if (!event || Object.keys(cart).length === 0) return <Navigate to={eventDetailsPath} />;
@@ -5972,7 +6032,7 @@ function ReviewsPage({ ctx }) {
   const eventId = resolveEventIdFromParam(eventRouteParam);
   const { events, currentUser, tickets, submitReview } = ctx;
   const navigate = useNavigate();
-  const event = events.find(e => e.id === eventId);
+  const event = findEventByRouteParam(events, eventRouteParam);
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(0); // 0 = all
@@ -5988,6 +6048,14 @@ function ReviewsPage({ ctx }) {
     };
     load();
   }, [eventId]);
+
+  useEffect(() => {
+    if (!event) return;
+    const canonicalPath = `${eventPath(event)}/reviews`;
+    if (canonicalPath !== `/event/${eventRouteParam}/reviews`) {
+      navigate(canonicalPath, { replace: true });
+    }
+  }, [event, eventRouteParam, navigate]);
 
   if (!event) return <Navigate to="/" />;
 
