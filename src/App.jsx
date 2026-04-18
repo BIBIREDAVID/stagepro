@@ -812,6 +812,35 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const eventIds = events.map((event) => event.id).filter(Boolean);
+    if (eventIds.length === 0) {
+      setPublicSoldCounts({});
+      return;
+    }
+
+    let active = true;
+    const loadSoldCounts = async () => {
+      try {
+        const res = await fetch("/api/public-event-sold-counts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventIds }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!active) return;
+        if (res.ok && payload?.ok) {
+          setPublicSoldCounts(payload.soldCounts || {});
+        }
+      } catch (err) {
+        console.warn("Could not load public sold counts:", err);
+      }
+    };
+
+    loadSoldCounts();
+    return () => { active = false; };
+  }, [events]);
+
+  useEffect(() => {
     if (currentUser?.role !== "organizer") {
       setOrganizerEvents([]);
       return;
