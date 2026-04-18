@@ -4100,7 +4100,15 @@ function LiveUpdatesPage({ ctx }) {
   const checkedIn = eventTickets.filter(ticket => ticket.used).length;
   const pending = Math.max(0, sold - checkedIn);
   const revenue = eventTickets.reduce((sum, ticket) => sum + Number(ticket.price || 0), 0);
-  const latestCheckins = eventTickets.filter(ticket => ticket.used).slice(0, 12);
+  const attendeeRows = eventTickets.map((ticket) => {
+    const lastActivity = feed.find((entry) => entry.ticketId === ticket.id || entry.attendeeEmail === ticket.userEmail || entry.attendeeName === ticket.userName);
+    return {
+      ...ticket,
+      lastActivityAt: lastActivity?.createdAt || ticket.purchasedAt || "",
+      activityLabel: ticket.used ? "Checked In" : "Pending",
+    };
+  });
+  const latestCheckedInRows = attendeeRows.filter((ticket) => ticket.used).slice(0, 12);
 
   const activityMeta = (entry) => {
     if (entry.type === "ticket_validation" || entry.status === "used") return { label: "Check-in", color: "var(--green)", icon: "fa-solid fa-user-check" };
@@ -4144,77 +4152,130 @@ function LiveUpdatesPage({ ctx }) {
         ))}
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1.3fr 0.9fr", gap:18, alignItems:"start" }}>
+      <div style={{ display:"grid", gap:18 }}>
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
           <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
             <div>
-              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ACTIVITY FEED</div>
-              <div style={{ color:"var(--muted)", fontSize:12 }}>Real-time purchases, comps, and check-ins</div>
+              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>LIVE ATTENDEE SHEET</div>
+              <div style={{ color:"var(--muted)", fontSize:12 }}>Detailed attendee rows with status and latest activity</div>
             </div>
-            <span style={{ color:"var(--muted)", fontSize:11 }}>{feed.length} entries</span>
+            <span style={{ color:"var(--muted)", fontSize:11 }}>{attendeeRows.length} rows</span>
           </div>
-          {feed.length ? (
-            <div style={{ display:"flex", flexDirection:"column" }}>
-              {feed.map((entry, index) => {
-                const meta = activityMeta(entry);
-                return (
-                  <div key={entry.id || `${entry.ticketId || "entry"}-${index}`} style={{ padding:"14px 18px", borderTop: index ? "1px solid var(--border)" : "none", display:"grid", gridTemplateColumns:"auto 1fr auto", gap:12, alignItems:"center" }}>
-                    <div style={{ width:34, height:34, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(245,166,35,0.08)", color:meta.color }}>
-                      <i className={meta.icon} />
-                    </div>
-                    <div style={{ minWidth:0 }}>
-                      <div style={{ fontSize:14, color:"var(--text)", fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{entry.attendeeName || "Attendee"}</div>
-                      <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.6 }}>
-                        {entry.tierName || "Ticket"}{entry.attendeeEmail ? ` • ${entry.attendeeEmail}` : ""}{entry.title ? ` • ${entry.title}` : ""}
-                      </div>
-                    </div>
-                    <div style={{ textAlign:"right" }}>
-                      <div style={{ color:meta.color, fontSize:11, fontWeight:700 }}>{meta.label.toUpperCase()}</div>
-                      <div style={{ color:"var(--muted)", fontSize:11 }}>{formatTime(entry.createdAt || entry.purchasedAt)}</div>
-                    </div>
-                  </div>
-                );
-              })}
+          {attendeeRows.length ? (
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:980 }}>
+                <thead>
+                  <tr style={{ background:"var(--bg3)" }}>
+                    {["Attendee", "Email", "Phone", "Tier", "Amount", "Ticket ID", "Status", "Last Activity", "Purchased"].map((heading) => (
+                      <th key={heading} style={{ padding:"10px 12px", textAlign:"left", color:"var(--muted)", fontWeight:700, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{heading.toUpperCase()}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendeeRows.map((ticket, index) => (
+                    <tr key={ticket.id} style={{ borderTop:"1px solid var(--border)", background:index % 2 ? "rgba(255,255,255,0.01)" : "transparent" }}>
+                      <td style={{ padding:"10px 12px", fontWeight:600, whiteSpace:"nowrap" }}>{ticket.userName || "Attendee"}</td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ticket.userEmail || "-"}</td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{ticket.userPhone || "-"}</td>
+                      <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>{ticket.tierName || "-"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"IBM Plex Mono", color:"var(--gold)", whiteSpace:"nowrap" }}>{fmt(Number(ticket.price || 0))}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"IBM Plex Mono", color:"var(--muted)", whiteSpace:"nowrap" }}>{ticket.id}</td>
+                      <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                        <span style={{ background: ticket.used ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: ticket.used ? "var(--green)" : "var(--gold)", padding:"3px 8px", borderRadius:100, fontSize:10, fontWeight:700 }}>
+                          {ticket.used ? "CHECKED IN" : "PENDING"}
+                        </span>
+                      </td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.lastActivityAt)}</td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.purchasedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : (
-            <div style={{ padding:28, color:"var(--muted)", fontSize:13 }}>No live activity yet for this event.</div>
+            <div style={{ padding:28, color:"var(--muted)", fontSize:13 }}>No attendee records yet for this event.</div>
           )}
         </div>
 
-        <div style={{ display:"grid", gap:18 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1.1fr 0.9fr", gap:18, alignItems:"start" }}>
           <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
-            <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
-              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>LATEST CHECK-INS</div>
+            <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <div>
+                <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ACTIVITY LOG</div>
+                <div style={{ color:"var(--muted)", fontSize:12 }}>Detailed event stream in time order</div>
+              </div>
+              <span style={{ color:"var(--muted)", fontSize:11 }}>{feed.length} entries</span>
             </div>
-            {latestCheckins.length ? (
-              latestCheckins.map((ticket, index) => (
-                <div key={ticket.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none", display:"flex", justifyContent:"space-between", gap:10 }}>
-                  <div>
-                    <div style={{ fontSize:14, fontWeight:600 }}>{ticket.userName || "Attendee"}</div>
-                    <div style={{ fontSize:12, color:"var(--muted)" }}>{ticket.tierName || "Ticket"}{ticket.userEmail ? ` • ${ticket.userEmail}` : ""}</div>
-                  </div>
-                  <div style={{ fontSize:11, color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.purchasedAt)}</div>
-                </div>
-              ))
+            {feed.length ? (
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:760 }}>
+                  <thead>
+                    <tr style={{ background:"var(--bg3)" }}>
+                      {["Time", "Type", "Attendee", "Email", "Tier", "Amount", "Details"].map((heading) => (
+                        <th key={heading} style={{ padding:"10px 12px", textAlign:"left", color:"var(--muted)", fontWeight:700, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{heading.toUpperCase()}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {feed.map((entry, index) => {
+                      const meta = activityMeta(entry);
+                      return (
+                        <tr key={entry.id || `${entry.ticketId || "entry"}-${index}`} style={{ borderTop:"1px solid var(--border)", background:index % 2 ? "rgba(255,255,255,0.01)" : "transparent" }}>
+                          <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(entry.createdAt || entry.purchasedAt)}</td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                            <span style={{ color:meta.color, fontWeight:700 }}>{meta.label.toUpperCase()}</span>
+                          </td>
+                          <td style={{ padding:"10px 12px", fontWeight:600, whiteSpace:"nowrap" }}>{entry.attendeeName || "-"}</td>
+                          <td style={{ padding:"10px 12px", color:"var(--muted)", maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{entry.attendeeEmail || "-"}</td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>{entry.tierName || "-"}</td>
+                          <td style={{ padding:"10px 12px", fontFamily:"IBM Plex Mono", color:"var(--gold)", whiteSpace:"nowrap" }}>{entry.amount !== undefined ? fmt(Number(entry.amount || 0)) : "-"}</td>
+                          <td style={{ padding:"10px 12px", color:"var(--muted)", minWidth:220 }}>{entry.title || entry.status || "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             ) : (
-              <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No one has checked in yet.</div>
+              <div style={{ padding:28, color:"var(--muted)", fontSize:13 }}>No live activity yet for this event.</div>
             )}
           </div>
 
-          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
-            <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
-              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ALERTS</div>
+          <div style={{ display:"grid", gap:18 }}>
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+              <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
+                <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>LATEST CHECK-INS</div>
+              </div>
+              {latestCheckedInRows.length ? (
+                latestCheckedInRows.map((ticket, index) => (
+                  <div key={ticket.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none", display:"flex", justifyContent:"space-between", gap:10 }}>
+                    <div>
+                      <div style={{ fontSize:14, fontWeight:600 }}>{ticket.userName || "Attendee"}</div>
+                      <div style={{ fontSize:12, color:"var(--muted)" }}>{ticket.tierName || "Ticket"}{ticket.userEmail ? ` • ${ticket.userEmail}` : ""}</div>
+                    </div>
+                    <div style={{ fontSize:11, color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.lastActivityAt || ticket.purchasedAt)}</div>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No one has checked in yet.</div>
+              )}
             </div>
-            {notifications.length ? (
-              notifications.slice(0, 10).map((item, index) => (
-                <div key={item.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none" }}>
-                  <div style={{ fontSize:13, color:"var(--text)" }}>{item.title || "Activity update"}</div>
-                  <div style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>{formatTime(item.createdAt)}</div>
-                </div>
-              ))
-            ) : (
-              <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No alerts for this event yet.</div>
-            )}
+
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+              <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
+                <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ALERTS</div>
+              </div>
+              {notifications.length ? (
+                notifications.slice(0, 10).map((item, index) => (
+                  <div key={item.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none" }}>
+                    <div style={{ fontSize:13, color:"var(--text)" }}>{item.title || "Activity update"}</div>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>{formatTime(item.createdAt)}</div>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No alerts for this event yet.</div>
+              )}
+            </div>
           </div>
         </div>
       </div>
