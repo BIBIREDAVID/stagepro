@@ -1,5 +1,6 @@
 import { getAdminDb } from "../server/firebaseAdmin.js";
 import { sendEmailWithFallback } from "../server/email.js";
+import { sendHarpeninTicketingEvent } from "../server/harpenin.js";
 import { sendOrganizerLiveSheetLog } from "../server/liveSheet.js";
 import { buildTicketEmail } from "../server/ticketEmail.js";
 import { squadRequest } from "../server/squad.js";
@@ -212,6 +213,34 @@ export default async function handler(req, res) {
           })
         )
       );
+      await sendHarpeninTicketingEvent({
+        organizerId: event.organizer,
+        eventId: event.id,
+        eventType: "ticket.purchase",
+        payload: {
+          eventId: event.id,
+          eventTitle: event.title,
+          externalOrderId: String(reference),
+          purchasedAt: now,
+          currency: tx.transaction_currency_id || expectedCurrency,
+          totalAmount: Number(tx.transaction_amount || 0) / 100,
+          buyer: {
+            name: buyerName,
+            email: buyerEmail,
+            phone: buyerPhone,
+          },
+          recipients: newTickets.map((ticket) => ({
+            name: ticket.userName || buyerName,
+            email: ticket.userEmail || buyerEmail,
+            phone: ticket.userPhone || buyerPhone,
+            ticketId: ticket.id,
+            ticketType: ticket.tierName,
+            designationName: ticket.tierName,
+            price: Number(ticket.price || 0),
+            status: "paid",
+          })),
+        },
+      });
     }
 
     let organizerName = "StagePro";

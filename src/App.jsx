@@ -101,6 +101,24 @@ const logOrganizerLiveSheet = async (organizerId, payload, eventId = "") => {
   }
 };
 
+const logHarpeninTicketingEvent = async ({ organizerId, eventId = "", eventType, payload }) => {
+  if (!organizerId || !eventType || !payload) return;
+  try {
+    await fetch("/api/harpenin-dispatch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        organizerId,
+        eventId: String(eventId || payload?.eventId || "").trim(),
+        eventType,
+        payload,
+      }),
+    });
+  } catch (err) {
+    console.warn("Harpenin webhook dispatch failed (non-critical):", err);
+  }
+};
+
 // ── CSV Download ───────────────────────────────────────────────────────────
 function downloadCSVWithEmail(event, myTickets) {
   const eventTickets = myTickets.filter(t => t.eventId === event.id);
@@ -1234,6 +1252,39 @@ export default function App() {
       }));
     }
     notify(`${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
+    if (event.organizer && newTickets.length > 0) {
+      const externalOrderId = paymentReference
+        ? String(paymentReference)
+        : `free_${event.id}_${buyerEmail || buyerUid}_${newTickets[0]?.purchasedAt || new Date().toISOString()}`;
+      await logHarpeninTicketingEvent({
+        organizerId: event.organizer,
+        eventId: event.id,
+        eventType: "ticket.purchase",
+        payload: {
+          eventId: event.id,
+          eventTitle: event.title,
+          externalOrderId,
+          purchasedAt: newTickets[0]?.purchasedAt || new Date().toISOString(),
+          currency: "NGN",
+          totalAmount: newTickets.reduce((sum, ticket) => sum + Number(ticket.price || 0), 0),
+          buyer: {
+            name: buyerName,
+            email: buyerEmail,
+            phone: buyerPhone,
+          },
+          recipients: newTickets.map((ticket) => ({
+            name: ticket.userName || buyerName,
+            email: ticket.userEmail || buyerEmail,
+            phone: ticket.userPhone || buyerPhone,
+            ticketId: ticket.id,
+            ticketType: ticket.tierName,
+            designationName: ticket.tierName,
+            price: Number(ticket.price || 0),
+            status: ticket.paymentStatus || "free",
+          })),
+        },
+      });
+    }
     // Store guest tickets in session so they can view them
     if (isGuest && newTickets.length > 0) {
       sessionStorage.setItem("guestTickets", JSON.stringify(newTickets.map(t => t.id)));
@@ -1280,6 +1331,41 @@ export default function App() {
         validatedBy: currentUser?.name || "",
         status: "used",
       }, ticket.eventId);
+      await logHarpeninTicketingEvent({
+        organizerId: ticketEvent?.organizer || "",
+        eventId: ticket.eventId,
+        eventType: "ticket.validation",
+        payload: {
+          eventId: ticket.eventId,
+          eventTitle: ticket.eventTitle,
+          externalOrderId: `validation_${ticket.id}_${Date.now()}`,
+          purchasedAt: ticket.purchasedAt || new Date().toISOString(),
+          currency: "NGN",
+          totalAmount: Number(ticket.price || 0),
+          buyer: {
+            name: ticket.userName || "",
+            email: ticket.userEmail || "",
+            phone: ticket.userPhone || "",
+          },
+          recipient: {
+            name: ticket.userName || "",
+            email: ticket.userEmail || "",
+            phone: ticket.userPhone || "",
+          },
+          ticket: {
+            id: ticket.id,
+            type: ticket.tierName || "",
+            designationName: ticket.tierName || "",
+            price: Number(ticket.price || 0),
+            status: "used",
+          },
+          validation: {
+            validatedAt: new Date().toISOString(),
+            validatedBy: currentUser?.name || "",
+            validatedById: currentUser?.uid || "",
+          },
+        },
+      });
       return { ok: true, msg: "Valid! Entry granted", ticket: { ...ticket, used: true } };
     } catch {
       return { ok: false, msg: "Error checking ticket" };
@@ -1476,6 +1562,11 @@ export default function App() {
         webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
         viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
       };
+      const eventHarpenin = {
+        webhookUrl: normalizeHttpUrl(eventData.harpenin?.webhookUrl || eventData.harpeninWebhookUrl || ""),
+        keyId: String(eventData.harpenin?.keyId || eventData.harpeninKeyId || "").trim(),
+        secret: String(eventData.harpenin?.secret || eventData.harpeninSecret || "").trim(),
+      };
       const data = {
         ...eventData,
         slug: slugify(eventData.slug || eventData.title || ""),
@@ -1486,6 +1577,7 @@ export default function App() {
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
         liveSheet: eventLiveSheet,
+        harpenin: eventHarpenin,
         createdAt: nowIso,
         updatedAt: nowIso,
         tiers: eventData.tiers.map((t, i) => ({
@@ -1495,6 +1587,9 @@ export default function App() {
       delete data.coOrganizerEmailsText;
       delete data.liveSheetWebhookUrl;
       delete data.liveSheetViewUrl;
+      delete data.harpeninWebhookUrl;
+      delete data.harpeninKeyId;
+      delete data.harpeninSecret;
       const ref = await addDoc(collection(db, "events"), data);
       const newEvent = { id: ref.id, ...data };
       setEvents(prev => [...prev, newEvent]);
@@ -1532,6 +1627,11 @@ export default function App() {
         webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
         viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
       };
+      const eventHarpenin = {
+        webhookUrl: normalizeHttpUrl(eventData.harpenin?.webhookUrl || eventData.harpeninWebhookUrl || ""),
+        keyId: String(eventData.harpenin?.keyId || eventData.harpeninKeyId || "").trim(),
+        secret: String(eventData.harpenin?.secret || eventData.harpeninSecret || "").trim(),
+      };
       const data = {
         ...eventData,
         slug: slugify(eventData.slug || eventData.title || currentEvent?.title || ""),
@@ -1541,6 +1641,7 @@ export default function App() {
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
         liveSheet: eventLiveSheet,
+        harpenin: eventHarpenin,
         updatedAt: new Date().toISOString(),
         tiers: eventData.tiers.map((t, i) => ({
           id: t.id || `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: t.sold||0,
@@ -1549,6 +1650,9 @@ export default function App() {
       delete data.coOrganizerEmailsText;
       delete data.liveSheetWebhookUrl;
       delete data.liveSheetViewUrl;
+      delete data.harpeninWebhookUrl;
+      delete data.harpeninKeyId;
+      delete data.harpeninSecret;
       await updateDoc(doc(db, "events", eventId), data);
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...data } : e));
       if (requestedCoEmails.length > 0) {
@@ -1668,13 +1772,14 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  const updateProfile = async ({ name, phone, payoutDetails, liveSheet }) => {
+  const updateProfile = async ({ name, phone, payoutDetails, liveSheet, harpenin }) => {
     try {
       const updates = {};
       if (typeof name === "string") updates.name = name.trim();
       if (typeof phone === "string") updates.phone = normalizePhone(phone);
       if (payoutDetails) updates.payoutDetails = payoutDetails;
       if (liveSheet) updates.liveSheet = liveSheet;
+      if (harpenin) updates.harpenin = harpenin;
       await updateDoc(doc(db, "users", currentUser.uid), updates);
       setCurrentUser(prev => ({ ...prev, ...updates }));
       notify("Profile updated!");
@@ -4204,6 +4309,43 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
 
         {/* Event Image — URL input */}
         <div>
+          <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18, marginBottom:20 }}>
+            <div style={{ fontFamily:"Oswald", fontSize:20, marginBottom:6 }}>EVENT HARPENIN</div>
+            <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.7, marginBottom:14 }}>
+              Add event-specific Harpenin credentials if this event should push ticket purchases and validations to a dedicated Harpenin endpoint instead of the organizer-level fallback.
+            </div>
+            <div style={{ display:"grid", gap:14 }}>
+              <div>
+                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN WEBHOOK URL</label>
+                <input
+                  value={form.harpeninWebhookUrl || ""}
+                  onChange={F("harpeninWebhookUrl")}
+                  placeholder="https://studio.harpenin.com/api/webhooks/ticketing/v1/..."
+                  style={iStyle("harpeninWebhookUrl", false)}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN KEY ID</label>
+                <input
+                  value={form.harpeninKeyId || ""}
+                  onChange={F("harpeninKeyId")}
+                  placeholder="hk_..."
+                  style={iStyle("harpeninKeyId", false)}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN SIGNING SECRET</label>
+                <input
+                  type="password"
+                  value={form.harpeninSecret || ""}
+                  onChange={F("harpeninSecret")}
+                  placeholder="Paste Harpenin webhook secret"
+                  style={iStyle("harpeninSecret", false)}
+                />
+              </div>
+            </div>
+          </div>
+
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT IMAGE / FLYER</label>
 
           {/* URL input row */}
@@ -4351,7 +4493,7 @@ function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
-  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", liveSheetWebhookUrl:"", liveSheetViewUrl:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", liveSheetWebhookUrl:"", liveSheetViewUrl:"", harpeninWebhookUrl:"", harpeninKeyId:"", harpeninSecret:"", tiers:[{ name:"General", price:"", total:"" }] };
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
@@ -4380,6 +4522,9 @@ function EditEventPage({ ctx }) {
     coOrganizerEmailsText: Array.isArray(event.coOrganizerEmails) ? event.coOrganizerEmails.join(", ") : "",
     liveSheetWebhookUrl: event.liveSheet?.webhookUrl || event.liveSheetWebhookUrl || "",
     liveSheetViewUrl: event.liveSheet?.viewUrl || event.liveSheetViewUrl || "",
+    harpeninWebhookUrl: event.harpenin?.webhookUrl || event.harpeninWebhookUrl || "",
+    harpeninKeyId: event.harpenin?.keyId || event.harpeninKeyId || "",
+    harpeninSecret: event.harpenin?.secret || event.harpeninSecret || "",
     tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold||0, _free: Number(t.price)===0 })),
   };
 
@@ -5621,6 +5766,9 @@ function ProfilePage({ ctx }) {
   const [payoutNotes, setPayoutNotes] = useState(currentUser.payoutDetails?.notes || "");
   const [liveSheetWebhookUrl, setLiveSheetWebhookUrl] = useState(currentUser.liveSheet?.webhookUrl || "");
   const [liveSheetViewUrl, setLiveSheetViewUrl] = useState(currentUser.liveSheet?.viewUrl || "");
+  const [harpeninWebhookUrl, setHarpeninWebhookUrl] = useState(currentUser.harpenin?.webhookUrl || "");
+  const [harpeninKeyId, setHarpeninKeyId] = useState(currentUser.harpenin?.keyId || "");
+  const [harpeninSecret, setHarpeninSecret] = useState(currentUser.harpenin?.secret || "");
 
   const myTickets = tickets.filter(t => t.userId === currentUser.uid || currentUser.role === "customer");
   const totalSpent = myTickets.reduce((s,t) => s + (t.price||0), 0);
@@ -5631,6 +5779,7 @@ function ProfilePage({ ctx }) {
   const payoutSummary = currentUser.role === "organizer" ? calculatePayoutSummary(organizerTickets) : null;
   const hasPayoutDetails = Boolean(bankName.trim() && accountName.trim() && accountNumber.trim());
   const hasLiveSheetConfig = Boolean(liveSheetWebhookUrl.trim() || liveSheetViewUrl.trim());
+  const hasHarpeninConfig = Boolean(harpeninWebhookUrl.trim() && harpeninKeyId.trim() && harpeninSecret.trim());
   const phoneRequired = searchParams.get("complete") === "phone" && !String(currentUser.phone || "").trim();
   const roleMeta = currentUser.role === "admin"
     ? {
@@ -5685,6 +5834,21 @@ function ProfilePage({ ctx }) {
       liveSheet: {
         webhookUrl: liveSheetWebhookUrl.trim(),
         viewUrl: liveSheetViewUrl.trim(),
+      },
+    });
+    setSaving(false);
+  };
+
+  const handleHarpeninSave = async () => {
+    if (!name.trim() || !normalizePhone(phone)) return;
+    setSaving(true);
+    await updateProfile({
+      name,
+      phone,
+      harpenin: {
+        webhookUrl: harpeninWebhookUrl.trim(),
+        keyId: harpeninKeyId.trim(),
+        secret: harpeninSecret.trim(),
       },
     });
     setSaving(false);
@@ -5770,35 +5934,69 @@ function ProfilePage({ ctx }) {
               </div>
             </div>
             {currentUser.role === "organizer" && (
-              <div style={{ marginTop:20, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
-                <div style={{ fontFamily:"Oswald", fontSize:22, marginBottom:6 }}>LIVE SHEET</div>
-                <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:14 }}>
-                  Add your Google Apps Script webhook URL to stream organizer activity into a live sheet. You can also save the sheet link so it opens directly from your dashboard.
+              <div style={{ display:"grid", gap:16, marginTop:20 }}>
+                <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
+                  <div style={{ fontFamily:"Oswald", fontSize:22, marginBottom:6 }}>LIVE SHEET</div>
+                  <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:14 }}>
+                    Add your Google Apps Script webhook URL to stream organizer activity into a live sheet. You can also save the sheet link so it opens directly from your dashboard.
+                  </div>
+                  <div style={{ display:"grid", gap:14 }}>
+                    <div>
+                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET WEBHOOK URL</label>
+                      <input value={liveSheetWebhookUrl} onChange={e => setLiveSheetWebhookUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..."
+                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET VIEW URL</label>
+                      <input value={liveSheetViewUrl} onChange={e => setLiveSheetViewUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/..."
+                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                    </div>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+                      <span style={{ background: hasLiveSheetConfig ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasLiveSheetConfig ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                        {hasLiveSheetConfig ? "LIVE SHEET CONNECTED" : "LIVE SHEET NOT SET"}
+                      </span>
+                      <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                        {liveSheetViewUrl.trim() && (
+                          <a href={liveSheetViewUrl.trim()} target="_blank" rel="noreferrer" style={{ background:"var(--bg2)", color:"var(--text)", border:"1px solid var(--border)", padding:"12px 16px", borderRadius:10, fontWeight:700, fontSize:13 }}>
+                            Open live sheet
+                          </a>
+                        )}
+                        <button onClick={handleLiveSheetSave} disabled={saving}
+                          style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 20px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
+                          {saving ? "Saving..." : "Save live sheet"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div style={{ display:"grid", gap:14 }}>
-                  <div>
-                    <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET WEBHOOK URL</label>
-                    <input value={liveSheetWebhookUrl} onChange={e => setLiveSheetWebhookUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..."
-                      style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
+                  <div style={{ fontFamily:"Oswald", fontSize:22, marginBottom:6 }}>HARPENIN TICKETING</div>
+                  <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:14 }}>
+                    Add your Harpenin live webhook URL plus the webhook key id and secret used to sign server-to-server ticket purchase and validation payloads.
                   </div>
-                  <div>
-                    <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET VIEW URL</label>
-                    <input value={liveSheetViewUrl} onChange={e => setLiveSheetViewUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/..."
-                      style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
-                  </div>
-                  <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
-                    <span style={{ background: hasLiveSheetConfig ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasLiveSheetConfig ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
-                      {hasLiveSheetConfig ? "LIVE SHEET CONNECTED" : "LIVE SHEET NOT SET"}
-                    </span>
-                    <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-                      {liveSheetViewUrl.trim() && (
-                        <a href={liveSheetViewUrl.trim()} target="_blank" rel="noreferrer" style={{ background:"var(--bg2)", color:"var(--text)", border:"1px solid var(--border)", padding:"12px 16px", borderRadius:10, fontWeight:700, fontSize:13 }}>
-                          Open live sheet
-                        </a>
-                      )}
-                      <button onClick={handleLiveSheetSave} disabled={saving}
+                  <div style={{ display:"grid", gap:14 }}>
+                    <div>
+                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN WEBHOOK URL</label>
+                      <input value={harpeninWebhookUrl} onChange={e => setHarpeninWebhookUrl(e.target.value)} placeholder="https://studio.harpenin.com/api/webhooks/ticketing/v1/..."
+                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN KEY ID</label>
+                      <input value={harpeninKeyId} onChange={e => setHarpeninKeyId(e.target.value)} placeholder="hk_..."
+                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN SIGNING SECRET</label>
+                      <input type="password" value={harpeninSecret} onChange={e => setHarpeninSecret(e.target.value)} placeholder="Paste Harpenin webhook secret"
+                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                    </div>
+                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+                      <span style={{ background: hasHarpeninConfig ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasHarpeninConfig ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                        {hasHarpeninConfig ? "HARPENIN CONNECTED" : "HARPENIN NOT SET"}
+                      </span>
+                      <button onClick={handleHarpeninSave} disabled={saving}
                         style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 20px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
-                        {saving ? "Saving..." : "Save live sheet"}
+                        {saving ? "Saving..." : "Save Harpenin"}
                       </button>
                     </div>
                   </div>
