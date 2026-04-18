@@ -1803,9 +1803,9 @@ export default function App() {
           <Route path="/find-tickets" element={<GuestTicketLookupPage />} />
           <Route path="/dashboard" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
-          <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
-          <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
-          <Route path="/dashboard/live/:eventId" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <LiveUpdatesPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/edit/:eventRoute" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/analytics/:eventRoute" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/live/:eventRoute" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <LiveUpdatesPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin" element={currentUser?.role === "admin" ? <AdminHomePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin/payouts" element={currentUser?.role === "admin" ? <AdminPayoutsPage ctx={ctx} /> : <Navigate to="/" />} />
@@ -3976,13 +3976,13 @@ function DashboardPage({ ctx }) {
                       {syncingEventId === event.id ? "Syncing..." : "Sync Sheet"}
                     </button>
                   )}
-                  <Link to={`/dashboard/live/${event.id}${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`} style={{ background:"rgba(61,220,132,0.12)", border:"1px solid rgba(61,220,132,0.24)", color:"var(--green)", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700 }}>
+                  <Link to={`/dashboard/live/${buildEventRouteId(event)}${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`} style={{ background:"rgba(61,220,132,0.12)", border:"1px solid rgba(61,220,132,0.24)", color:"var(--green)", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700 }}>
                     <i className="fa-solid fa-wave-square" style={{marginRight:5}} />
                     Live
                   </Link>
                   <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
-                  {canManage && <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}
-                  {canManage && <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
+                  {canManage && <Link to={`/dashboard/edit/${buildEventRouteId(event)}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}
+                  {canManage && <Link to={`/dashboard/analytics/${buildEventRouteId(event)}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
                   {canManage && <button onClick={() => openCompModal(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-gift" style={{marginRight:5}} />Issue Comp</button>}
                   {canManage && <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>}
                   {canManage && (
@@ -4010,8 +4010,9 @@ function DashboardPage({ ctx }) {
 }
 
 function LiveUpdatesPage({ ctx }) {
-  const { eventId } = useParams();
+  const { eventRoute } = useParams();
   const { currentUser, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed } = ctx;
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const adminOrganizerId = currentUser?.role === "admin" ? (searchParams.get("organizerId") || "").trim() : "";
   const isAdminView = currentUser?.role === "admin" && Boolean(adminOrganizerId);
@@ -4019,22 +4020,76 @@ function LiveUpdatesPage({ ctx }) {
   const [adminTickets, setAdminTickets] = useState([]);
   const [adminFeed, setAdminFeed] = useState([]);
   const [adminNotifications, setAdminNotifications] = useState([]);
+  const organizerEvent = findEventByRouteParam(organizerEvents, eventRoute);
+  const legacyEventId = resolveEventIdFromParam(eventRoute);
 
   useEffect(() => {
     if (!isAdminView) {
       setAdminEvent(null);
       return;
     }
-    const unsub = onSnapshot(
-      doc(db, "events", eventId),
-      (snap) => setAdminEvent(snap.exists() ? { id: snap.id, ...snap.data() } : null),
-      () => setAdminEvent(null)
-    );
-    return () => unsub();
-  }, [eventId, isAdminView]);
+    let active = true;
+    let unsub = () => {};
+    const routeKey = String(eventRoute || "").trim();
+    const looksLikeLegacyId = legacyEventId && (legacyEventId !== routeKey || /^[A-Za-z0-9]{16,}$/.test(routeKey));
+
+    const attachById = (docId) => {
+      unsub = onSnapshot(
+        doc(db, "events", docId),
+        (snap) => {
+          if (!active) return;
+          setAdminEvent(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+        },
+        () => {
+          if (active) setAdminEvent(null);
+        }
+      );
+    };
+
+    const fetchAdminEvent = async () => {
+      if (!routeKey) {
+        setAdminEvent(null);
+        return;
+      }
+      if (looksLikeLegacyId) {
+        const snap = await getDoc(doc(db, "events", legacyEventId));
+        if (snap.exists()) {
+          if (!active) return;
+          setAdminEvent({ id: snap.id, ...snap.data() });
+          attachById(snap.id);
+          return;
+        }
+      }
+      const slugSnap = await getDocs(query(collection(db, "events"), where("slug", "==", routeKey), limit(1)));
+      if (!active) return;
+      if (!slugSnap.empty) {
+        const match = slugSnap.docs[0];
+        setAdminEvent({ id: match.id, ...match.data() });
+        attachById(match.id);
+        return;
+      }
+      setAdminEvent(null);
+    };
+
+    fetchAdminEvent();
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, [eventRoute, isAdminView, legacyEventId]);
+
+  const event = isAdminView ? adminEvent : organizerEvent;
+  const eventId = event?.id || (isAdminView ? "" : legacyEventId);
 
   useEffect(() => {
-    if (!isAdminView) {
+    if (!event || !eventRoute) return;
+    const canonicalRoute = buildEventRouteId(event);
+    if (!canonicalRoute || canonicalRoute === eventRoute) return;
+    navigate(`/dashboard/live/${canonicalRoute}${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`, { replace: true });
+  }, [adminOrganizerId, event, eventRoute, isAdminView, navigate]);
+
+  useEffect(() => {
+    if (!isAdminView || !eventId) {
       setAdminTickets([]);
       return;
     }
@@ -4048,7 +4103,7 @@ function LiveUpdatesPage({ ctx }) {
   }, [eventId, isAdminView]);
 
   useEffect(() => {
-    if (!isAdminView) {
+    if (!isAdminView || !eventId) {
       setAdminFeed([]);
       return;
     }
@@ -4066,7 +4121,7 @@ function LiveUpdatesPage({ ctx }) {
   }, [adminOrganizerId, eventId, isAdminView]);
 
   useEffect(() => {
-    if (!isAdminView) {
+    if (!isAdminView || !eventId) {
       setAdminNotifications([]);
       return;
     }
@@ -4082,8 +4137,6 @@ function LiveUpdatesPage({ ctx }) {
     );
     return () => unsub();
   }, [adminOrganizerId, eventId, isAdminView]);
-
-  const event = isAdminView ? adminEvent : organizerEvents.find(e => e.id === eventId);
   const eventTickets = (isAdminView ? adminTickets : tickets.filter(t => t.eventId === eventId))
     .slice()
     .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
@@ -4643,10 +4696,17 @@ function CreateEventPage({ ctx }) {
 // ── Edit Event Page ────────────────────────────────────────────────────────
 function EditEventPage({ ctx }) {
   const { organizerEvents, updateEvent } = ctx;
-  const { eventId } = useParams();
+  const { eventRoute } = useParams();
   const navigate = useNavigate();
-  const event = organizerEvents.find(e => e.id === eventId);
+  const event = findEventByRouteParam(organizerEvents, eventRoute);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!event || !eventRoute) return;
+    const canonicalRoute = buildEventRouteId(event);
+    if (!canonicalRoute || canonicalRoute === eventRoute) return;
+    navigate(`/dashboard/edit/${canonicalRoute}`, { replace: true });
+  }, [event, eventRoute, navigate]);
 
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
 
@@ -4664,7 +4724,7 @@ function EditEventPage({ ctx }) {
 
   const handle = async (form) => {
     setSaving(true);
-    const ok = await updateEvent(eventId, form);
+    const ok = await updateEvent(event.id, form);
     if (ok) navigate("/dashboard");
     setSaving(false);
   };
@@ -4935,16 +4995,24 @@ function ValidatePage({ ctx }) {
 
 // ── Analytics Page (/dashboard/analytics/:eventId) ────────────────────────
 function AnalyticsPage({ ctx }) {
-  const { eventId } = useParams();
+  const { eventRoute } = useParams();
   const { organizerEvents, tickets, currentUser, issueComplimentaryTickets } = ctx;
   const navigate = useNavigate();
-  const event = organizerEvents.find(e => e.id === eventId);
+  const event = findEventByRouteParam(organizerEvents, eventRoute);
+  const eventId = event?.id || resolveEventIdFromParam(eventRoute);
   const [notifStatus, setNotifStatus] = useState("idle"); // idle | sending | sent | error
   const [compTierId, setCompTierId] = useState("");
   const [compQty, setCompQty] = useState("1");
   const [compName, setCompName] = useState("");
   const [compEmail, setCompEmail] = useState("");
   const [compStatus, setCompStatus] = useState({ type: "idle", msg: "" });
+
+  useEffect(() => {
+    if (!event || !eventRoute) return;
+    const canonicalRoute = buildEventRouteId(event);
+    if (!canonicalRoute || canonicalRoute === eventRoute) return;
+    navigate(`/dashboard/analytics/${canonicalRoute}`, { replace: true });
+  }, [event, eventRoute, navigate]);
 
   useEffect(() => {
     if (!event?.tiers?.length) return;
