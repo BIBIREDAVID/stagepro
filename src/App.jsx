@@ -1476,11 +1476,6 @@ export default function App() {
         webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
         viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
       };
-      const eventHarpenin = {
-        webhookUrl: normalizeHttpUrl(eventData.harpenin?.webhookUrl || eventData.harpeninWebhookUrl || ""),
-        keyId: String(eventData.harpenin?.keyId || eventData.harpeninKeyId || "").trim(),
-        secret: String(eventData.harpenin?.secret || eventData.harpeninSecret || "").trim(),
-      };
       const data = {
         ...eventData,
         slug: slugify(eventData.slug || eventData.title || ""),
@@ -1491,7 +1486,6 @@ export default function App() {
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
         liveSheet: eventLiveSheet,
-        harpenin: eventHarpenin,
         createdAt: nowIso,
         updatedAt: nowIso,
         tiers: eventData.tiers.map((t, i) => ({
@@ -1501,9 +1495,6 @@ export default function App() {
       delete data.coOrganizerEmailsText;
       delete data.liveSheetWebhookUrl;
       delete data.liveSheetViewUrl;
-      delete data.harpeninWebhookUrl;
-      delete data.harpeninKeyId;
-      delete data.harpeninSecret;
       const ref = await addDoc(collection(db, "events"), data);
       const newEvent = { id: ref.id, ...data };
       setEvents(prev => [...prev, newEvent]);
@@ -1541,11 +1532,6 @@ export default function App() {
         webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
         viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
       };
-      const eventHarpenin = {
-        webhookUrl: normalizeHttpUrl(eventData.harpenin?.webhookUrl || eventData.harpeninWebhookUrl || ""),
-        keyId: String(eventData.harpenin?.keyId || eventData.harpeninKeyId || "").trim(),
-        secret: String(eventData.harpenin?.secret || eventData.harpeninSecret || "").trim(),
-      };
       const data = {
         ...eventData,
         slug: slugify(eventData.slug || eventData.title || currentEvent?.title || ""),
@@ -1555,7 +1541,6 @@ export default function App() {
         coOrganizerInviteEmails: resolved.missing,
         visibility: eventData.visibility || "public",
         liveSheet: eventLiveSheet,
-        harpenin: eventHarpenin,
         updatedAt: new Date().toISOString(),
         tiers: eventData.tiers.map((t, i) => ({
           id: t.id || `t${i+1}`, name: t.name, price: Number(t.price), total: Number(t.total), sold: t.sold||0,
@@ -1564,9 +1549,6 @@ export default function App() {
       delete data.coOrganizerEmailsText;
       delete data.liveSheetWebhookUrl;
       delete data.liveSheetViewUrl;
-      delete data.harpeninWebhookUrl;
-      delete data.harpeninKeyId;
-      delete data.harpeninSecret;
       await updateDoc(doc(db, "events", eventId), data);
       setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...data } : e));
       if (requestedCoEmails.length > 0) {
@@ -1686,14 +1668,13 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  const updateProfile = async ({ name, phone, payoutDetails, liveSheet, harpenin }) => {
+  const updateProfile = async ({ name, phone, payoutDetails, liveSheet }) => {
     try {
       const updates = {};
       if (typeof name === "string") updates.name = name.trim();
       if (typeof phone === "string") updates.phone = normalizePhone(phone);
       if (payoutDetails) updates.payoutDetails = payoutDetails;
       if (liveSheet) updates.liveSheet = liveSheet;
-      if (harpenin) updates.harpenin = harpenin;
       await updateDoc(doc(db, "users", currentUser.uid), updates);
       setCurrentUser(prev => ({ ...prev, ...updates }));
       notify("Profile updated!");
@@ -1824,6 +1805,7 @@ export default function App() {
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/live/:eventId" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <LiveUpdatesPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin" element={currentUser?.role === "admin" ? <AdminHomePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin/payouts" element={currentUser?.role === "admin" ? <AdminPayoutsPage ctx={ctx} /> : <Navigate to="/" />} />
@@ -3994,6 +3976,10 @@ function DashboardPage({ ctx }) {
                       {syncingEventId === event.id ? "Syncing..." : "Sync Sheet"}
                     </button>
                   )}
+                  <Link to={`/dashboard/live/${event.id}${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`} style={{ background:"rgba(61,220,132,0.12)", border:"1px solid rgba(61,220,132,0.24)", color:"var(--green)", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700 }}>
+                    <i className="fa-solid fa-wave-square" style={{marginRight:5}} />
+                    Live
+                  </Link>
                   <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
                   {canManage && <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}
                   {canManage && <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
@@ -4018,6 +4004,219 @@ function DashboardPage({ ctx }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function LiveUpdatesPage({ ctx }) {
+  const { eventId } = useParams();
+  const { currentUser, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed } = ctx;
+  const [searchParams] = useSearchParams();
+  const adminOrganizerId = currentUser?.role === "admin" ? (searchParams.get("organizerId") || "").trim() : "";
+  const isAdminView = currentUser?.role === "admin" && Boolean(adminOrganizerId);
+  const [adminEvent, setAdminEvent] = useState(null);
+  const [adminTickets, setAdminTickets] = useState([]);
+  const [adminFeed, setAdminFeed] = useState([]);
+  const [adminNotifications, setAdminNotifications] = useState([]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminEvent(null);
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(db, "events", eventId),
+      (snap) => setAdminEvent(snap.exists() ? { id: snap.id, ...snap.data() } : null),
+      () => setAdminEvent(null)
+    );
+    return () => unsub();
+  }, [eventId, isAdminView]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminTickets([]);
+      return;
+    }
+    const q = query(collection(db, "tickets"), where("eventId", "==", eventId));
+    const unsub = onSnapshot(
+      q,
+      (snap) => setAdminTickets(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      () => setAdminTickets([])
+    );
+    return () => unsub();
+  }, [eventId, isAdminView]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminFeed([]);
+      return;
+    }
+    const q = query(collection(db, "organizerAttendeeFeed"), where("organizerId", "==", adminOrganizerId), where("eventId", "==", eventId), limit(100));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        setAdminFeed(rows);
+      },
+      () => setAdminFeed([])
+    );
+    return () => unsub();
+  }, [adminOrganizerId, eventId, isAdminView]);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminNotifications([]);
+      return;
+    }
+    const q = query(collection(db, "organizerNotifications"), where("organizerId", "==", adminOrganizerId), where("eventId", "==", eventId), limit(50));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        setAdminNotifications(rows);
+      },
+      () => setAdminNotifications([])
+    );
+    return () => unsub();
+  }, [adminOrganizerId, eventId, isAdminView]);
+
+  const event = isAdminView ? adminEvent : organizerEvents.find(e => e.id === eventId);
+  const eventTickets = (isAdminView ? adminTickets : tickets.filter(t => t.eventId === eventId))
+    .slice()
+    .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
+  const feed = (isAdminView ? adminFeed : organizerAttendeeFeed.filter(item => item.eventId === eventId))
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const notifications = (isAdminView ? adminNotifications : organizerNotifications.filter(item => item.eventId === eventId))
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  if (!event) return <div style={{ maxWidth:1100, margin:"0 auto", padding:"56px 24px", color:"var(--muted)" }}>Event not found.</div>;
+
+  const sold = eventTickets.length;
+  const checkedIn = eventTickets.filter(ticket => ticket.used).length;
+  const pending = Math.max(0, sold - checkedIn);
+  const revenue = eventTickets.reduce((sum, ticket) => sum + Number(ticket.price || 0), 0);
+  const latestCheckins = eventTickets.filter(ticket => ticket.used).slice(0, 12);
+
+  const activityMeta = (entry) => {
+    if (entry.type === "ticket_validation" || entry.status === "used") return { label: "Check-in", color: "var(--green)", icon: "fa-solid fa-user-check" };
+    if (entry.type === "complimentary_ticket" || entry.status === "complimentary") return { label: "Complimentary", color: "var(--gold)", icon: "fa-solid fa-gift" };
+    if (entry.type === "free_ticket" || entry.status === "free") return { label: "Free", color: "var(--gold)", icon: "fa-solid fa-ticket" };
+    return { label: "Purchase", color: "var(--green)", icon: "fa-solid fa-ticket" };
+  };
+
+  const formatTime = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString("en-NG", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+  };
+
+  return (
+    <div style={{ maxWidth:1100, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.35s ease" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, flexWrap:"wrap", marginBottom:28 }}>
+        <div>
+          <Link to={`/dashboard${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`} style={{ color:"var(--muted)", fontSize:13 }}>← Back to Dashboard</Link>
+          <h1 style={{ fontSize:"clamp(34px,6vw,56px)", lineHeight:0.95, margin:"10px 0 6px" }}>LIVE UPDATES</h1>
+          <div style={{ color:"var(--muted)", fontSize:14 }}>{event.title}</div>
+        </div>
+        <Link to="/validate" style={{ background:"var(--gold)", color:"#000", padding:"12px 18px", borderRadius:10, fontWeight:700, fontSize:13 }}>
+          Open Scanner
+        </Link>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:14, marginBottom:24 }}>
+        {[
+          { label:"Tickets Sold", value:sold, color:"var(--gold)", icon:"fa-solid fa-ticket" },
+          { label:"Checked In", value:checkedIn, color:"var(--green)", icon:"fa-solid fa-user-check" },
+          { label:"Pending Entry", value:pending, color:"var(--text)", icon:"fa-solid fa-hourglass-half" },
+          { label:"Revenue", value:fmt(revenue), color:"var(--gold)", icon:"fa-solid fa-naira-sign" },
+        ].map((card) => (
+          <div key={card.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:20 }}>
+            <div style={{ color:card.color, fontSize:20, marginBottom:10 }}><i className={card.icon} /></div>
+            <div style={{ fontFamily:"Oswald", fontSize:30, color:card.color }}>{card.value}</div>
+            <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>{card.label.toUpperCase()}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1.3fr 0.9fr", gap:18, alignItems:"start" }}>
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+          <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+            <div>
+              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ACTIVITY FEED</div>
+              <div style={{ color:"var(--muted)", fontSize:12 }}>Real-time purchases, comps, and check-ins</div>
+            </div>
+            <span style={{ color:"var(--muted)", fontSize:11 }}>{feed.length} entries</span>
+          </div>
+          {feed.length ? (
+            <div style={{ display:"flex", flexDirection:"column" }}>
+              {feed.map((entry, index) => {
+                const meta = activityMeta(entry);
+                return (
+                  <div key={entry.id || `${entry.ticketId || "entry"}-${index}`} style={{ padding:"14px 18px", borderTop: index ? "1px solid var(--border)" : "none", display:"grid", gridTemplateColumns:"auto 1fr auto", gap:12, alignItems:"center" }}>
+                    <div style={{ width:34, height:34, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(245,166,35,0.08)", color:meta.color }}>
+                      <i className={meta.icon} />
+                    </div>
+                    <div style={{ minWidth:0 }}>
+                      <div style={{ fontSize:14, color:"var(--text)", fontWeight:600, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{entry.attendeeName || "Attendee"}</div>
+                      <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.6 }}>
+                        {entry.tierName || "Ticket"}{entry.attendeeEmail ? ` • ${entry.attendeeEmail}` : ""}{entry.title ? ` • ${entry.title}` : ""}
+                      </div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ color:meta.color, fontSize:11, fontWeight:700 }}>{meta.label.toUpperCase()}</div>
+                      <div style={{ color:"var(--muted)", fontSize:11 }}>{formatTime(entry.createdAt || entry.purchasedAt)}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ padding:28, color:"var(--muted)", fontSize:13 }}>No live activity yet for this event.</div>
+          )}
+        </div>
+
+        <div style={{ display:"grid", gap:18 }}>
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+            <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
+              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>LATEST CHECK-INS</div>
+            </div>
+            {latestCheckins.length ? (
+              latestCheckins.map((ticket, index) => (
+                <div key={ticket.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none", display:"flex", justifyContent:"space-between", gap:10 }}>
+                  <div>
+                    <div style={{ fontSize:14, fontWeight:600 }}>{ticket.userName || "Attendee"}</div>
+                    <div style={{ fontSize:12, color:"var(--muted)" }}>{ticket.tierName || "Ticket"}{ticket.userEmail ? ` • ${ticket.userEmail}` : ""}</div>
+                  </div>
+                  <div style={{ fontSize:11, color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.purchasedAt)}</div>
+                </div>
+              ))
+            ) : (
+              <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No one has checked in yet.</div>
+            )}
+          </div>
+
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+            <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
+              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ALERTS</div>
+            </div>
+            {notifications.length ? (
+              notifications.slice(0, 10).map((item, index) => (
+                <div key={item.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none" }}>
+                  <div style={{ fontSize:13, color:"var(--text)" }}>{item.title || "Activity update"}</div>
+                  <div style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>{formatTime(item.createdAt)}</div>
+                </div>
+              ))
+            ) : (
+              <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No alerts for this event yet.</div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -4223,43 +4422,6 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
 
         {/* Event Image — URL input */}
         <div>
-          <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18, marginBottom:20 }}>
-            <div style={{ fontFamily:"Oswald", fontSize:20, marginBottom:6 }}>EVENT HARPENIN</div>
-            <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.7, marginBottom:14 }}>
-              Add event-specific Harpenin credentials if this event should push ticket purchases and validations to a dedicated Harpenin endpoint instead of the organizer-level fallback.
-            </div>
-            <div style={{ display:"grid", gap:14 }}>
-              <div>
-                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN WEBHOOK URL</label>
-                <input
-                  value={form.harpeninWebhookUrl || ""}
-                  onChange={F("harpeninWebhookUrl")}
-                  placeholder="https://studio.harpenin.com/api/webhooks/ticketing/v1/..."
-                  style={iStyle("harpeninWebhookUrl", false)}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN KEY ID</label>
-                <input
-                  value={form.harpeninKeyId || ""}
-                  onChange={F("harpeninKeyId")}
-                  placeholder="hk_..."
-                  style={iStyle("harpeninKeyId", false)}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN SIGNING SECRET</label>
-                <input
-                  type="password"
-                  value={form.harpeninSecret || ""}
-                  onChange={F("harpeninSecret")}
-                  placeholder="Paste Harpenin webhook secret"
-                  style={iStyle("harpeninSecret", false)}
-                />
-              </div>
-            </div>
-          </div>
-
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT IMAGE / FLYER</label>
 
           {/* URL input row */}
@@ -4407,7 +4569,7 @@ function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
-  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", liveSheetWebhookUrl:"", liveSheetViewUrl:"", harpeninWebhookUrl:"", harpeninKeyId:"", harpeninSecret:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", liveSheetWebhookUrl:"", liveSheetViewUrl:"", tiers:[{ name:"General", price:"", total:"" }] };
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
@@ -4436,9 +4598,6 @@ function EditEventPage({ ctx }) {
     coOrganizerEmailsText: Array.isArray(event.coOrganizerEmails) ? event.coOrganizerEmails.join(", ") : "",
     liveSheetWebhookUrl: event.liveSheet?.webhookUrl || event.liveSheetWebhookUrl || "",
     liveSheetViewUrl: event.liveSheet?.viewUrl || event.liveSheetViewUrl || "",
-    harpeninWebhookUrl: event.harpenin?.webhookUrl || event.harpeninWebhookUrl || "",
-    harpeninKeyId: event.harpenin?.keyId || event.harpeninKeyId || "",
-    harpeninSecret: event.harpenin?.secret || event.harpeninSecret || "",
     tiers: event.tiers.map(t => ({ id:t.id, name:t.name, price:String(t.price), total:String(t.total), sold:t.sold||0, _free: Number(t.price)===0 })),
   };
 
@@ -5680,9 +5839,6 @@ function ProfilePage({ ctx }) {
   const [payoutNotes, setPayoutNotes] = useState(currentUser.payoutDetails?.notes || "");
   const [liveSheetWebhookUrl, setLiveSheetWebhookUrl] = useState(currentUser.liveSheet?.webhookUrl || "");
   const [liveSheetViewUrl, setLiveSheetViewUrl] = useState(currentUser.liveSheet?.viewUrl || "");
-  const [harpeninWebhookUrl, setHarpeninWebhookUrl] = useState(currentUser.harpenin?.webhookUrl || "");
-  const [harpeninKeyId, setHarpeninKeyId] = useState(currentUser.harpenin?.keyId || "");
-  const [harpeninSecret, setHarpeninSecret] = useState(currentUser.harpenin?.secret || "");
 
   const myTickets = tickets.filter(t => t.userId === currentUser.uid || currentUser.role === "customer");
   const totalSpent = myTickets.reduce((s,t) => s + (t.price||0), 0);
@@ -5693,7 +5849,6 @@ function ProfilePage({ ctx }) {
   const payoutSummary = currentUser.role === "organizer" ? calculatePayoutSummary(organizerTickets) : null;
   const hasPayoutDetails = Boolean(bankName.trim() && accountName.trim() && accountNumber.trim());
   const hasLiveSheetConfig = Boolean(liveSheetWebhookUrl.trim() || liveSheetViewUrl.trim());
-  const hasHarpeninConfig = Boolean(harpeninWebhookUrl.trim() && harpeninKeyId.trim() && harpeninSecret.trim());
   const phoneRequired = searchParams.get("complete") === "phone" && !String(currentUser.phone || "").trim();
   const roleMeta = currentUser.role === "admin"
     ? {
@@ -5748,21 +5903,6 @@ function ProfilePage({ ctx }) {
       liveSheet: {
         webhookUrl: liveSheetWebhookUrl.trim(),
         viewUrl: liveSheetViewUrl.trim(),
-      },
-    });
-    setSaving(false);
-  };
-
-  const handleHarpeninSave = async () => {
-    if (!name.trim() || !normalizePhone(phone)) return;
-    setSaving(true);
-    await updateProfile({
-      name,
-      phone,
-      harpenin: {
-        webhookUrl: harpeninWebhookUrl.trim(),
-        keyId: harpeninKeyId.trim(),
-        secret: harpeninSecret.trim(),
       },
     });
     setSaving(false);
@@ -5848,69 +5988,35 @@ function ProfilePage({ ctx }) {
               </div>
             </div>
             {currentUser.role === "organizer" && (
-              <div style={{ display:"grid", gap:16, marginTop:20 }}>
-                <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
-                  <div style={{ fontFamily:"Oswald", fontSize:22, marginBottom:6 }}>LIVE SHEET</div>
-                  <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:14 }}>
-                    Add your Google Apps Script webhook URL to stream organizer activity into a live sheet. You can also save the sheet link so it opens directly from your dashboard.
-                  </div>
-                  <div style={{ display:"grid", gap:14 }}>
-                    <div>
-                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET WEBHOOK URL</label>
-                      <input value={liveSheetWebhookUrl} onChange={e => setLiveSheetWebhookUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..."
-                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET VIEW URL</label>
-                      <input value={liveSheetViewUrl} onChange={e => setLiveSheetViewUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/..."
-                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
-                    </div>
-                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
-                      <span style={{ background: hasLiveSheetConfig ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasLiveSheetConfig ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
-                        {hasLiveSheetConfig ? "LIVE SHEET CONNECTED" : "LIVE SHEET NOT SET"}
-                      </span>
-                      <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-                        {liveSheetViewUrl.trim() && (
-                          <a href={liveSheetViewUrl.trim()} target="_blank" rel="noreferrer" style={{ background:"var(--bg2)", color:"var(--text)", border:"1px solid var(--border)", padding:"12px 16px", borderRadius:10, fontWeight:700, fontSize:13 }}>
-                            Open live sheet
-                          </a>
-                        )}
-                        <button onClick={handleLiveSheetSave} disabled={saving}
-                          style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 20px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
-                          {saving ? "Saving..." : "Save live sheet"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+              <div style={{ marginTop:20, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
+                <div style={{ fontFamily:"Oswald", fontSize:22, marginBottom:6 }}>LIVE SHEET</div>
+                <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:14 }}>
+                  Add your Google Apps Script webhook URL to stream organizer activity into a live sheet. You can also save the sheet link so it opens directly from your dashboard.
                 </div>
-                <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
-                  <div style={{ fontFamily:"Oswald", fontSize:22, marginBottom:6 }}>HARPENIN TICKETING</div>
-                  <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.7, marginBottom:14 }}>
-                    Add your Harpenin live webhook URL plus the webhook key id and secret used to sign server-to-server ticket purchase and validation payloads.
+                <div style={{ display:"grid", gap:14 }}>
+                  <div>
+                    <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET WEBHOOK URL</label>
+                    <input value={liveSheetWebhookUrl} onChange={e => setLiveSheetWebhookUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..."
+                      style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
                   </div>
-                  <div style={{ display:"grid", gap:14 }}>
-                    <div>
-                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN WEBHOOK URL</label>
-                      <input value={harpeninWebhookUrl} onChange={e => setHarpeninWebhookUrl(e.target.value)} placeholder="https://studio.harpenin.com/api/webhooks/ticketing/v1/..."
-                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN KEY ID</label>
-                      <input value={harpeninKeyId} onChange={e => setHarpeninKeyId(e.target.value)} placeholder="hk_..."
-                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>HARPENIN SIGNING SECRET</label>
-                      <input type="password" value={harpeninSecret} onChange={e => setHarpeninSecret(e.target.value)} placeholder="Paste Harpenin webhook secret"
-                        style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
-                    </div>
-                    <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
-                      <span style={{ background: hasHarpeninConfig ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasHarpeninConfig ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
-                        {hasHarpeninConfig ? "HARPENIN CONNECTED" : "HARPENIN NOT SET"}
-                      </span>
-                      <button onClick={handleHarpeninSave} disabled={saving}
+                  <div>
+                    <label style={{ fontSize:12, color:"var(--muted)", letterSpacing:1, marginBottom:8, display:"block" }}>SHEET VIEW URL</label>
+                    <input value={liveSheetViewUrl} onChange={e => setLiveSheetViewUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/..."
+                      style={{ width:"100%", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:8, padding:"12px 14px", color:"var(--text)", fontSize:14, outline:"none" }} />
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"space-between", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+                    <span style={{ background: hasLiveSheetConfig ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: hasLiveSheetConfig ? "var(--green)" : "var(--gold)", padding:"5px 12px", borderRadius:100, fontSize:11, fontWeight:700 }}>
+                      {hasLiveSheetConfig ? "LIVE SHEET CONNECTED" : "LIVE SHEET NOT SET"}
+                    </span>
+                    <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+                      {liveSheetViewUrl.trim() && (
+                        <a href={liveSheetViewUrl.trim()} target="_blank" rel="noreferrer" style={{ background:"var(--bg2)", color:"var(--text)", border:"1px solid var(--border)", padding:"12px 16px", borderRadius:10, fontWeight:700, fontSize:13 }}>
+                          Open live sheet
+                        </a>
+                      )}
+                      <button onClick={handleLiveSheetSave} disabled={saving}
                         style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 20px", borderRadius:10, cursor:"pointer", fontWeight:700, fontSize:13, whiteSpace:"nowrap" }}>
-                        {saving ? "Saving..." : "Save Harpenin"}
+                        {saving ? "Saving..." : "Save live sheet"}
                       </button>
                     </div>
                   </div>
