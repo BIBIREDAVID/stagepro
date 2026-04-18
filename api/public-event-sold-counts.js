@@ -5,8 +5,18 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, msg: "Method not allowed" });
   }
 
-  const eventIds = Array.isArray(req.body?.eventIds)
-    ? req.body.eventIds.map((id) => String(id || "").trim()).filter(Boolean)
+  const body = typeof req.body === "string"
+    ? (() => {
+        try {
+          return JSON.parse(req.body);
+        } catch {
+          return {};
+        }
+      })()
+    : (req.body || {});
+
+  const eventIds = Array.isArray(body?.eventIds)
+    ? body.eventIds.map((id) => String(id || "").trim()).filter(Boolean)
     : [];
 
   if (eventIds.length === 0) {
@@ -17,7 +27,8 @@ export default async function handler(req, res) {
     const db = getAdminDb();
     const soldCounts = {};
     const chunks = [];
-    for (let i = 0; i < eventIds.length; i += 30) chunks.push(eventIds.slice(i, i + 30));
+    // Keep batches conservative so the endpoint works across Firestore runtimes.
+    for (let i = 0; i < eventIds.length; i += 10) chunks.push(eventIds.slice(i, i + 10));
 
     for (const chunk of chunks) {
       const snap = await db.collection("tickets").where("eventId", "in", chunk).get();
