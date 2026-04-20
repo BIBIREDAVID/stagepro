@@ -748,15 +748,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const init = async () => {
-      setEventsLoading(true);
-      try {
-        const snapshot = await getDocs(collection(db, "events"));
+    setEventsLoading(true);
+    const unsub = onSnapshot(
+      collection(db, "events"),
+      (snapshot) => {
         setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-      } catch (err) { console.error("Events fetch failed:", err); }
-      setEventsLoading(false);
-    };
-    init();
+        setEventsLoading(false);
+      },
+      (err) => {
+        console.error("Events fetch failed:", err);
+        setEventsLoading(false);
+      }
+    );
+    return () => unsub();
   }, []);
 
   useEffect(() => {
