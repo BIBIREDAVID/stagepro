@@ -1,58 +1,29 @@
-import crypto from "crypto";
 import { getAdminDb } from "../server/firebaseAdmin.js";
-
-function verifyToken(token, secret) {
-  const [body, signature] = String(token || "").split(".");
-  if (!body || !signature) return null;
-  const expected = crypto.createHmac("sha256", secret).update(body).digest("base64url");
-  const sigBuf = Buffer.from(signature);
-  const expBuf = Buffer.from(expected);
-  if (sigBuf.length !== expBuf.length) return null;
-  const isValid = crypto.timingSafeEqual(sigBuf, expBuf);
-  if (!isValid) return null;
-  let payload = null;
-  try {
-    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-  } catch {
-    return null;
-  }
-  if (!payload?.email || !payload?.exp || Date.now() > Number(payload.exp)) return null;
-  return payload;
-}
-
-async function fetchTicketsByEmail(email) {
-  const db = getAdminDb();
-  const snap = await db.collection("tickets").where("userEmail", "==", email.toLowerCase()).get();
-  return snap.docs
-    .map(doc => ({ id: doc.id, ...doc.data() }))
-    .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
-}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, msg: "Method not allowed" });
   }
 
-  const ACCESS_SECRET = process.env.TICKET_ACCESS_SECRET;
-  if (!ACCESS_SECRET) {
-    return res.status(500).json({ ok: false, msg: "Ticket access verification is not configured" });
-  }
-
-  const token = req.body?.token;
-  const payload = verifyToken(token, ACCESS_SECRET);
-  if (!payload) {
-    return res.status(400).json({ ok: false, msg: "This access link is invalid or has expired." });
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    return res.status(400).json({ ok: false, msg: "A valid email address is required." });
   }
 
   try {
-    const tickets = await fetchTicketsByEmail(payload.email);
-    return res.status(200).json({
-      ok: true,
-      email: payload.email,
-      tickets,
-    });
+    const db = getAdminDb();
+    const snap = await db
+      .collection("tickets")
+      .where("userEmail", "==", email)
+      .get();
+
+    const tickets = snap.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
+
+    return res.status(200).json({ ok: true, tickets });
   } catch (err) {
-    console.error("Ticket access verify error:", err);
-    return res.status(500).json({ ok: false, msg: "Could not load tickets for this access link." });
+    console.error("Find tickets error:", err);
+    return res.status(500).json({ ok: false, msg: "Could not look up tickets. Please try again." });
   }
 }

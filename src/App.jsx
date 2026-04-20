@@ -6738,89 +6738,34 @@ function ContactPage() {
 // ── Guest Ticket Lookup Page (/find-tickets) ───────────────────────────────
 function GuestTicketLookupPage() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | sending | sent | verifying | found | empty | error
+  const [status, setStatus] = useState("idle"); // idle | loading | found | empty | error
   const [tickets, setTickets] = useState([]);
   const [selected, setSelected] = useState(null);
   const [message, setMessage] = useState("");
-  const [searchParams, setSearchParams] = useSearchParams();
-  const accessToken = searchParams.get("access");
-
-  useEffect(() => {
-    if (!accessToken) return;
-    let active = true;
-
-    const verifyAccess = async () => {
-      setStatus("verifying");
-      setMessage("Verifying your secure access link...");
-      try {
-        const res = await fetch("/api/find-tickets-access", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token: accessToken }),
-        });
-        
-        const data = await res.json();
-        if (!active) return;
-
-        if (!res.ok || !data.ok) {
-          setTickets([]);
-          setMessage(data.msg || "This ticket access link is invalid or has expired.");
-          setStatus("error");
-          return;
-        }
-
-        setEmail(data.email || "");
-        setTickets(data.tickets || []);
-        setStatus((data.tickets || []).length ? "found" : "empty");
-        setMessage((data.tickets || []).length ? "" : "No tickets were found for this email address.");
-      } catch (err) {
-        console.error(err);
-        if (!active) return;
-        setMessage("We could not verify this ticket access link. Please request a new one.");
-        setStatus("error");
-      }
-    };
-
-    verifyAccess();
-    return () => { active = false; };
-  }, [accessToken]);
 
   const handleSearch = async () => {
-    if (!email.trim() || !email.includes("@")) return;
-    setStatus("sending");
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed || !trimmed.includes("@")) return;
+    setStatus("loading");
     setTickets([]);
     setMessage("");
     try {
-      const res = await fetch("/api/send-ticket-access-link", {
+      const res = await fetch("/api/find-tickets-access", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          origin: window.location.origin,
-        }),
+        body: JSON.stringify({ email: trimmed }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
-        setMessage(data.msg || "We could not send the ticket access email.");
+        setMessage(data.msg || "Something went wrong. Please try again.");
         setStatus("error");
         return;
       }
-      if (data.mode === "direct" && Array.isArray(data.tickets)) {
-        setSearchParams({});
-        setEmail(data.email || email.trim().toLowerCase());
-        setTickets(data.tickets);
-        setStatus(data.tickets.length ? "found" : "empty");
-        setMessage(data.msg || (data.tickets.length
-          ? "We found your tickets."
-          : "No tickets were found for this email address."));
-        return;
-      }
-      setSearchParams({});
-      setMessage(`We sent a secure ticket link to ${email.trim().toLowerCase()}. Open it from your inbox to view your tickets.`);
-      setStatus("sent");
+      setTickets(data.tickets || []);
+      setStatus((data.tickets || []).length ? "found" : "empty");
     } catch (err) {
       console.error(err);
-      setMessage("We could not send the ticket access email. Please try again.");
+      setMessage("Could not reach the server. Please try again.");
       setStatus("error");
     }
   };
@@ -6836,7 +6781,7 @@ function GuestTicketLookupPage() {
         <div style={{ fontSize:12, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:12, fontWeight:500 }}>Guest Tickets</div>
         <h1 style={{ fontSize:"clamp(36px,7vw,64px)", lineHeight:0.95, marginBottom:16 }}>FIND MY TICKETS</h1>
         <p style={{ color:"var(--muted)", fontSize:15, lineHeight:1.7 }}>
-          Bought tickets without creating an account? Enter the email address you used at checkout and we'll send a secure access link to your inbox.
+          Bought tickets without creating an account? Enter the email address you used at checkout to view your tickets instantly.
         </p>
       </div>
 
@@ -6857,32 +6802,13 @@ function GuestTicketLookupPage() {
           </div>
           <button
             onClick={handleSearch}
-            disabled={!email.includes("@") || status === "sending" || status === "verifying"}
+            disabled={!email.includes("@") || status === "loading"}
             style={{ background: email.includes("@") ? "var(--gold)" : "var(--bg3)", color: email.includes("@") ? "#000" : "var(--muted)", border:"none", padding:"0 24px", borderRadius:10, cursor: email.includes("@") ? "pointer" : "not-allowed", fontFamily:"Oswald", fontSize:18, letterSpacing:1, flexShrink:0, transition:"background 0.2s" }}
           >
-            {status === "sending" || status === "verifying" ? <i className="fa-solid fa-circle-notch fa-spin" /> : "SEND LINK"}
+            {status === "loading" ? <i className="fa-solid fa-circle-notch fa-spin" /> : "FIND TICKETS"}
           </button>
         </div>
-        <p style={{ fontSize:11, color:"var(--muted)", marginTop:10 }}>
-          <i className="fa-solid fa-lock" style={{ marginRight:4 }} />
-          We email a one-time secure link before showing any tickets.
-        </p>
       </div>
-
-      {status === "sent" && (
-        <div style={{ background:"rgba(61,220,132,0.08)", border:"1px solid var(--green)", borderRadius:12, padding:"16px 20px", fontSize:13, color:"var(--green)", marginBottom:20 }}>
-          <i className="fa-solid fa-envelope-circle-check" style={{ marginRight:8 }} />
-          {message}
-        </div>
-      )}
-
-      {status === "verifying" && (
-        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:"32px 28px", textAlign:"center", marginBottom:24 }}>
-          <div style={{ width:42, height:42, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
-          <div style={{ fontFamily:"Oswald", fontSize:24, marginBottom:8 }}>VERIFYING ACCESS</div>
-          <div style={{ fontSize:13, color:"var(--muted)" }}>{message}</div>
-        </div>
-      )}
 
       {/* Empty state */}
       {status === "empty" && (
