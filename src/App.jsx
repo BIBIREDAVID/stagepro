@@ -385,6 +385,13 @@ const normalizeEventImageUrl = (raw) => {
 const getEventImageSrc = (event = {}) => {
   const normalized = normalizeEventImageUrl(event?.image);
   const base = normalized || DEFAULT_EVENT_IMAGE;
+  // Only append cache-busting stamp for own-hosted images (Firebase Storage).
+  // External hosts like Imgur reject query strings on direct image URLs.
+  try {
+    const host = new URL(base).hostname.toLowerCase();
+    const isExternal = !host.includes("firebasestorage") && !host.includes("googleusercontent");
+    if (isExternal) return base;
+  } catch { return base; }
   const stamp = event?.updatedAt || event?.createdAt || "";
   if (!stamp) return base;
   return base.includes("?") ? `${base}&v=${encodeURIComponent(stamp)}` : `${base}?v=${encodeURIComponent(stamp)}`;
@@ -770,6 +777,20 @@ export default function App() {
       return;
     }
 
+    // Prefer soldCounts embedded on event docs (synced live via onSnapshot)
+    // to avoid hammering the API on every Firestore update and exhausting quota.
+    const merged = {};
+    events.forEach((event) => {
+      if (event.soldCounts && typeof event.soldCounts === "object") {
+        merged[event.id] = event.soldCounts;
+      }
+    });
+    if (Object.keys(merged).length > 0) {
+      setPublicSoldCounts(merged);
+      return;
+    }
+
+    // Fallback: hit the API once only if no event has soldCounts embedded yet
     let active = true;
     const loadSoldCounts = async () => {
       try {
