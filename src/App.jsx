@@ -770,47 +770,16 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // soldCounts are read directly from event.soldCounts on each event doc.
+  // Since events are synced live via onSnapshot, no separate fetch is needed.
   useEffect(() => {
-    const eventIds = events.map((event) => event.id).filter(Boolean);
-    if (eventIds.length === 0) {
-      setPublicSoldCounts({});
-      return;
-    }
-
-    // Prefer soldCounts embedded on event docs (synced live via onSnapshot)
-    // to avoid hammering the API on every Firestore update and exhausting quota.
     const merged = {};
     events.forEach((event) => {
       if (event.soldCounts && typeof event.soldCounts === "object") {
         merged[event.id] = event.soldCounts;
       }
     });
-    if (Object.keys(merged).length > 0) {
-      setPublicSoldCounts(merged);
-      return;
-    }
-
-    // Fallback: hit the API once only if no event has soldCounts embedded yet
-    let active = true;
-    const loadSoldCounts = async () => {
-      try {
-        const res = await fetch("/api/public-event-sold-counts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ eventIds }),
-        });
-        const payload = await res.json().catch(() => ({}));
-        if (!active) return;
-        if (res.ok && payload?.ok) {
-          setPublicSoldCounts(payload.soldCounts || {});
-        }
-      } catch (err) {
-        console.warn("Could not load public sold counts:", err);
-      }
-    };
-
-    loadSoldCounts();
-    return () => { active = false; };
+    setPublicSoldCounts(merged);
   }, [events]);
 
   useEffect(() => {
@@ -2248,17 +2217,17 @@ function HomePage({ ctx }) {
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
-          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} publicSoldCounts={publicSoldCounts} ticketSoldCounts={buildTicketSoldCounts(tickets)} />)}
+          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} />)}
         </div>
       )}
     </div>
   );
 }
 
-function EventCard({ event, index, publicSoldCounts, ticketSoldCounts }) {
+function EventCard({ event, index }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
-  const liveCounts = ticketSoldCounts?.[event.id] ? { ...publicSoldCounts, [event.id]: ticketSoldCounts[event.id] } : publicSoldCounts;
-  const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, liveCounts), 0);
+  // soldCounts live on the event doc and are kept fresh by the onSnapshot listener
+  const totalSold = event.tiers.reduce((s, t) => s + getSold(event, t.id), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
   const hasImage = !!event.image;
