@@ -1,4 +1,5 @@
 import { getAdminDb } from "../server/firebaseAdmin.js";
+import { FieldValue } from "firebase-admin/firestore";
 import { sendEmailWithFallback } from "../server/email.js";
 import { sendOrganizerLiveSheetLog } from "../server/liveSheet.js";
 import { buildTicketEmail } from "../server/ticketEmail.js";
@@ -151,14 +152,15 @@ export default async function handler(req, res) {
         };
         batch.set(ticketRef, ticketData);
         newTickets.push({ id: ticketRef.id, ...ticketData });
-        soldCounts[tier.id] = Number(soldCounts[tier.id] || 0) + 1;
       }
     }
 
-    batch.update(eventRef, {
-      soldCounts,
-      updatedAt: now,
-    });
+    // Atomically increment soldCounts per tier — never overwrite the full map
+    const soldCountIncrements = { updatedAt: now };
+    for (const { tier, qty } of requested) {
+      soldCountIncrements[`soldCounts.${tier.id}`] = FieldValue.increment(qty);
+    }
+    batch.update(eventRef, soldCountIncrements);
     batch.set(finalizationRef, {
       provider: "squad",
       reference: String(reference),
