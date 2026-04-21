@@ -6736,22 +6736,17 @@ function GuestTicketLookupPage() {
     setTickets([]);
     setMessage("");
     try {
-      const res = await fetch("/api/find-tickets-access", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: trimmed }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) {
-        setMessage(data.msg || "Something went wrong. Please try again.");
-        setStatus("error");
-        return;
-      }
-      setTickets(data.tickets || []);
-      setStatus((data.tickets || []).length ? "found" : "empty");
+      // Query Firestore directly from the client — no Admin SDK, no quota issues
+      const q = query(collection(db, "tickets"), where("userEmail", "==", trimmed));
+      const snap = await getDocs(q);
+      const found = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
+      setTickets(found);
+      setStatus(found.length ? "found" : "empty");
     } catch (err) {
       console.error(err);
-      setMessage("Could not reach the server. Please try again.");
+      setMessage("Could not look up tickets. Please try again.");
       setStatus("error");
     }
   };
