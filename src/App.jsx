@@ -2454,8 +2454,8 @@ function EventPage({ ctx }) {
   if (loading) return <Spinner />;
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
 
-  const ticketSoldCounts = buildTicketSoldCounts(tickets);
-  const liveCounts = ticketSoldCounts?.[event.id] ? { ...publicSoldCounts, [event.id]: ticketSoldCounts[event.id] } : publicSoldCounts;
+  // Read soldCounts directly from the event doc (kept fresh by onSnapshot)
+  // Never override with the user's own tickets — that only counts their purchases, not everyone's
   const totalItems = Object.values(cart).reduce((s,q) => s+q, 0);
   const totalPrice = event.tiers.reduce((s,t) => s+(cart[t.id]||0)*t.price, 0);
 
@@ -2464,7 +2464,7 @@ function EventPage({ ctx }) {
       const tier = event.tiers.find(t => t.id===tierId);
       const draft = { ...prev };
       draft[tierId] = Math.max(0, (draft[tierId] || 0) + delta);
-      const inventoryCap = tier.total - getLiveSold(event, tier.id, liveCounts);
+      const inventoryCap = tier.total - getSold(event, tier.id);
       draft[tierId] = Math.min(draft[tierId], inventoryCap);
       return draft;
     });
@@ -2552,7 +2552,7 @@ function EventPage({ ctx }) {
             <h3 style={{ fontSize:20, marginBottom:20 }}>SELECT TICKETS</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:20 }}>
               {event.tiers.map(tier => {
-                const available = tier.total - getLiveSold(event, tier.id, liveCounts);
+                const available = tier.total - getSold(event, tier.id);
                 const qty = cart[tier.id]||0;
                 const wStatus = waitlistStatus[tier.id];
                 return (
@@ -2583,9 +2583,26 @@ function EventPage({ ctx }) {
                         </button>
                       )}
                     </div>
-                    <div style={{ fontSize:12, color: available===0?"var(--red)":available<20?"var(--red)":"var(--muted)" }}>
-                      {available===0 ? "SOLD OUT — join waitlist to be notified if tickets become available" : `${available} remaining`}
-                    </div>
+                    {available > 0 && (() => {
+                      const sold = getSold(event, tier.id);
+                      const pct = tier.total ? Math.round((sold / tier.total) * 100) : 0;
+                      return (
+                        <div style={{ marginTop:8 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"var(--muted)", marginBottom:4 }}>
+                            <span>{sold} sold</span>
+                            <span style={{ color: available < 20 ? "var(--red)" : "var(--muted)" }}>{available} remaining</span>
+                          </div>
+                          <div style={{ height:3, background:"var(--border)", borderRadius:2 }}>
+                            <div style={{ height:"100%", width:`${pct}%`, background: pct>80?"var(--red)":"var(--gold)", borderRadius:2, transition:"width 0.4s" }} />
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    {available === 0 && (
+                      <div style={{ fontSize:12, color:"var(--red)", marginTop:6 }}>
+                        SOLD OUT — join waitlist to be notified if tickets become available
+                      </div>
+                    )}
                   </div>
                 );
               })}
