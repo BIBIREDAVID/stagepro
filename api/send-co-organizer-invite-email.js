@@ -104,26 +104,14 @@ export default async function handler(req, res) {
       ? String(firstEmailError.reason?.debugMessage || firstEmailError.reason?.message || "Unknown email error")
       : "";
 
-    const anyDelivered = sent > 0 || inAppSent > 0;
-    if (!anyDelivered) {
-      return res.status(500).json({
-        ok: false,
-        msg: "No co-organizer notifications were delivered",
-        sent,
-        failed,
-        inAppSent,
-        inAppFailed,
-        debug: process.env.NODE_ENV === "development" ? (firstEmailErrorMsg || "No invite was delivered") : undefined,
-      });
-    }
-
+    // Email is best-effort — always return 200 so the client isn't blocked
     return res.status(200).json({
       ok: true,
       sent,
       failed,
       inAppSent,
       inAppFailed,
-      debug: process.env.NODE_ENV === "development" ? (firstEmailErrorMsg || "") : undefined,
+      emailError: firstEmailErrorMsg || undefined,
     });
   } catch (err) {
     console.error("Co-organizer invite email error:", err);

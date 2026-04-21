@@ -36,6 +36,7 @@ import {
   orderBy,
   limit,
   increment,
+  runTransaction,
 } from "firebase/firestore";
 import {
   getStorage,
@@ -1072,6 +1073,23 @@ export default function App() {
       return false;
     }
 
+    // Capacity check — enforce per-tier limits before creating any tickets
+    for (const tier of event.tiers) {
+      const qty = cartSelections[tier.id] || 0;
+      if (!qty) continue;
+      const alreadySold = getSold(event, tier.id);
+      const available = Math.max(0, Number(tier.total || 0) - alreadySold);
+      if (qty > available) {
+        notify(
+          available === 0
+            ? `${tier.name} is sold out.`
+            : `Only ${available} ticket(s) left for ${tier.name}.`,
+          "error"
+        );
+        return false;
+      }
+    }
+
     const newTickets = [];
     const SERVICE_FEE = 100;
     const orderSubtotal = event.tiers.reduce((s,t) => s + (cartSelections[t.id]||0) * Number(t.price), 0);
@@ -1184,17 +1202,42 @@ export default function App() {
       notify("Purchase failed. Please try again.", "error");
       return false;
     }
-    // Step 2 — atomically increment soldCounts.{tierId} on the event doc
+    // Step 2 — atomically increment soldCounts inside a transaction to enforce capacity
     try {
-      const soldUpdate = {};
-      for (const tier of event.tiers) {
-        const qty = cartSelections[tier.id] || 0;
-        if (!qty) continue;
-        soldUpdate[`soldCounts.${tier.id}`] = increment(qty);
-      }
-      await updateDoc(doc(db, "events", eventId), soldUpdate);
+      const eventRef = doc(db, "events", eventId);
+      await runTransaction(db, async (tx) => {
+        const freshSnap = await tx.get(eventRef);
+        if (!freshSnap.exists()) throw new Error("Event not found");
+        const freshEvent = freshSnap.data();
+        // Re-check capacity with the latest counts inside the transaction
+        for (const tier of event.tiers) {
+          const qty = cartSelections[tier.id] || 0;
+          if (!qty) continue;
+          const currentSold = Number((freshEvent.soldCounts || {})[tier.id] || 0);
+          const available = Math.max(0, Number(tier.total || 0) - currentSold);
+          if (qty > available) {
+            throw new Error(
+              available === 0
+                ? `${tier.name} sold out`
+                : `Only ${available} left for ${tier.name}`
+            );
+          }
+        }
+        const soldUpdate = {};
+        for (const tier of event.tiers) {
+          const qty = cartSelections[tier.id] || 0;
+          if (!qty) continue;
+          soldUpdate[`soldCounts.${tier.id}`] = increment(qty);
+        }
+        tx.update(eventRef, soldUpdate);
+      });
     } catch (err) {
       console.warn("Could not update soldCounts:", err.code, err.message);
+      // If the transaction failed due to oversell, notify the user
+      if (err.message && (err.message.includes("sold out") || err.message.includes("Only"))) {
+        notify(err.message, "error");
+        return false;
+      }
     }
     // Step 3 — re-fetch event to sync local state with Firestore
     try {
@@ -1302,6 +1345,30 @@ export default function App() {
       .filter(r => r.email)
       .filter((r, i, arr) => arr.findIndex(x => x.email === r.email) === i);
 
+    // Step 1 — write in-app notifications directly from client (no Admin SDK needed)
+    let inAppSent = 0;
+    const recipientsWithUid = uniqueRecipients.filter(r => r.uid);
+    await Promise.allSettled(
+      recipientsWithUid.map(async (r) => {
+        try {
+          await addDoc(collection(db, "organizerNotifications"), {
+            organizerId: r.uid,
+            eventId,
+            eventTitle,
+            type: "co_organizer_invite",
+            title: "You were added as a co-organizer",
+            body: `You can now manage "${eventTitle}" from your organizer dashboard.`,
+            createdAt: new Date().toISOString(),
+          });
+          inAppSent++;
+        } catch (e) {
+          console.warn("Could not write in-app notification:", e);
+        }
+      })
+    );
+
+    // Step 2 — send email via API (non-critical, best-effort)
+    let emailSent = 0;
     try {
       const res = await fetch("/api/send-co-organizer-invite-email", {
         method: "POST",
@@ -1315,14 +1382,12 @@ export default function App() {
         }),
       });
       const payload = await res.json().catch(() => ({}));
-      if (!res.ok || !payload.ok) {
-        throw new Error(payload.msg || "Could not deliver co-organizer notifications");
-      }
-      return payload;
+      if (res.ok && payload.ok) emailSent = payload.sent || 0;
     } catch (err) {
-      console.warn("Could not send co-organizer invite emails:", err);
-      return { ok: false, msg: err?.message || "Could not deliver co-organizer notifications", sent: 0, failed: uniqueRecipients.length, inAppSent: 0, inAppFailed: uniqueRecipients.filter(r => r.uid).length };
+      console.warn("Co-organizer invite email failed (non-critical):", err);
     }
+
+    return { ok: true, sent: emailSent, inAppSent, failed: 0, inAppFailed: 0 };
   };
 
   const issueComplimentaryTickets = async ({ eventId, tierId, qty, attendeeName, attendeeEmail }) => {
