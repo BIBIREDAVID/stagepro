@@ -2115,6 +2115,17 @@ function TicketPage({ ctx }) {
         </div>
       </div>
 
+      {/* QR Code — always visible on ticket page */}
+      {!alreadyUsed && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:20, textAlign:"center" }}>
+          <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>YOUR ENTRY QR CODE</div>
+          <div style={{ display:"inline-block", background:"#fff", borderRadius:12, padding:12 }}>
+            <QRCode ticketId={ticket.id} size={200} />
+          </div>
+          <p style={{ color:"var(--muted)", fontSize:12, marginTop:14 }}>Present this QR code at the entrance for entry.</p>
+        </div>
+      )}
+
       {!isOrganizer && (
         <div style={{ display:"flex", gap:10, marginBottom:12 }}>
           <button
