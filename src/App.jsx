@@ -36,7 +36,6 @@ import {
   orderBy,
   limit,
   increment,
-  runTransaction,
 } from "firebase/firestore";
 import {
   getStorage,
@@ -278,14 +277,22 @@ const slugify = (value = "") =>
 
 const buildEventRouteId = (eventOrId, fallbackTitle = "") => {
   if (!eventOrId) return "";
-  if (typeof eventOrId === "string") return eventOrId;
-  const id = eventOrId.id || "";
-  if (!id) return "";
-  const titleSlug = slugify(eventOrId.slug || eventOrId.title || fallbackTitle || "event");
-  return titleSlug ? `${titleSlug}-${id}` : id;
+  if (typeof eventOrId === "string") {
+    const raw = String(eventOrId || "").trim();
+    if (!raw) return "";
+    const legacyId = resolveEventIdFromParam(raw);
+    if (legacyId !== raw && raw.endsWith(`-${legacyId}`)) {
+      return slugify(raw.slice(0, -(legacyId.length + 1)));
+    }
+    return slugify(fallbackTitle || raw) || raw;
+  }
+  return slugify(eventOrId.slug || eventOrId.title || fallbackTitle || "event");
 };
 
-const eventPath = (eventOrId, fallbackTitle = "") => `/event/${buildEventRouteId(eventOrId, fallbackTitle)}`;
+const eventPath = (eventOrId, fallbackTitle = "") => {
+  const routeId = buildEventRouteId(eventOrId, fallbackTitle);
+  return routeId ? `/event/${routeId}` : "/event";
+};
 
 const resolveEventIdFromParam = (param = "") => {
   const raw = String(param || "");
@@ -293,6 +300,17 @@ const resolveEventIdFromParam = (param = "") => {
   const parts = raw.split("-");
   const maybeId = parts[parts.length - 1];
   return /^[A-Za-z0-9]{16,}$/.test(maybeId) ? maybeId : raw;
+};
+
+const findEventByRouteParam = (events = [], param = "") => {
+  const raw = String(param || "").trim();
+  if (!raw) return null;
+  const legacyId = resolveEventIdFromParam(raw);
+  return (
+    events.find((event) => event.id === raw || event.id === legacyId) ||
+    events.find((event) => buildEventRouteId(event) === raw) ||
+    null
+  );
 };
 // ── Sold count for a tier ─────────────────────────────────────────────────
 // Sold count for a tier — reads from event.soldCounts map (atomic increments)
@@ -337,6 +355,25 @@ const buildTicketSoldCounts = (tickets = []) => {
   return soldCounts;
 };
 
+const mergeEventTiersWithSoldCounts = (event = {}, soldCounts = null) => {
+  const resolvedSoldCounts = soldCounts && typeof soldCounts === "object"
+    ? soldCounts
+    : (event?.soldCounts && typeof event.soldCounts === "object" ? event.soldCounts : null);
+
+  if (!event || !Array.isArray(event.tiers)) return event;
+
+  return {
+    ...event,
+    ...(resolvedSoldCounts ? { soldCounts: resolvedSoldCounts } : {}),
+    tiers: event.tiers.map((tier) => ({
+      ...tier,
+      sold: resolvedSoldCounts && resolvedSoldCounts[tier.id] !== undefined
+        ? Number(resolvedSoldCounts[tier.id] || 0)
+        : Number(tier?.sold || 0),
+    })),
+  };
+};
+
 // ── Banner themes ──────────────────────────────────────────────────────────
 const THEMES = {
   purple:   "linear-gradient(135deg,#6a11cb,#2575fc)",
@@ -359,7 +396,29 @@ const getEventBg = (event) => {
   return "linear-gradient(135deg,#1a1a1a,#2a2a2a)";
 };
 
-const DEFAULT_EVENT_IMAGE = "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=1200&q=80";
+const DEFAULT_EVENT_IMAGE = `data:image/svg+xml;utf8,${encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#111111" />
+      <stop offset="100%" stop-color="#242424" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f5a623" />
+      <stop offset="100%" stop-color="#ffcf6b" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="675" fill="url(#bg)" />
+  <circle cx="984" cy="108" r="88" fill="rgba(245,166,35,0.1)" />
+  <circle cx="170" cy="556" r="126" fill="rgba(255,255,255,0.05)" />
+  <rect x="90" y="102" width="1020" height="471" rx="32" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.08)" />
+  <text x="140" y="215" fill="#f5a623" font-size="34" font-family="Arial, sans-serif" font-weight="700" letter-spacing="10">STAGEPRO</text>
+  <text x="140" y="315" fill="#f1e7d1" font-size="86" font-family="Arial, sans-serif" font-weight="700">Live Event</text>
+  <text x="140" y="385" fill="#c6bda9" font-size="34" font-family="Arial, sans-serif">Image preview unavailable</text>
+  <rect x="140" y="442" width="264" height="16" rx="8" fill="url(#accent)" />
+  <rect x="140" y="482" width="376" height="12" rx="6" fill="rgba(255,255,255,0.15)" />
+</svg>
+`)}`;
 
 const normalizeEventImageUrl = (raw) => {
   const value = String(raw || "").trim();
@@ -386,13 +445,6 @@ const normalizeEventImageUrl = (raw) => {
 const getEventImageSrc = (event = {}) => {
   const normalized = normalizeEventImageUrl(event?.image);
   const base = normalized || DEFAULT_EVENT_IMAGE;
-  // Only append cache-busting stamp for own-hosted images (Firebase Storage).
-  // External hosts like Imgur reject query strings on direct image URLs.
-  try {
-    const host = new URL(base).hostname.toLowerCase();
-    const isExternal = !host.includes("firebasestorage") && !host.includes("googleusercontent");
-    if (isExternal) return base;
-  } catch { return base; }
   const stamp = event?.updatedAt || event?.createdAt || "";
   if (!stamp) return base;
   return base.includes("?") ? `${base}&v=${encodeURIComponent(stamp)}` : `${base}?v=${encodeURIComponent(stamp)}`;
@@ -736,6 +788,7 @@ export default function App() {
   const [organizerAttendeeFeed, setOrganizerAttendeeFeed] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [notification, setNotification] = useState(null);
+  const soldCountRepairRef = useRef(new Set());
 
   const notify = (msg, type = "success") => {
     setNotification({ msg, type });
@@ -760,7 +813,16 @@ export default function App() {
     const unsub = onSnapshot(
       collection(db, "events"),
       (snapshot) => {
-        setEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        const nextEvents = snapshot.docs.map(d => mergeEventTiersWithSoldCounts({ id: d.id, ...d.data() }));
+        setEvents(nextEvents);
+        setPublicSoldCounts(
+          nextEvents.reduce((acc, event) => {
+            if (event?.id && event?.soldCounts && typeof event.soldCounts === "object") {
+              acc[event.id] = event.soldCounts;
+            }
+            return acc;
+          }, {})
+        );
         setEventsLoading(false);
       },
       (err) => {
@@ -771,16 +833,33 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // soldCounts are read directly from event.soldCounts on each event doc.
-  // Since events are synced live via onSnapshot, no separate fetch is needed.
   useEffect(() => {
-    const merged = {};
-    events.forEach((event) => {
-      if (event.soldCounts && typeof event.soldCounts === "object") {
-        merged[event.id] = event.soldCounts;
+    const eventIds = events.map((event) => event.id).filter(Boolean);
+    if (eventIds.length === 0) {
+      setPublicSoldCounts({});
+      return;
+    }
+
+    let active = true;
+    const loadSoldCounts = async () => {
+      try {
+        const res = await fetch("/api/public-event-sold-counts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventIds }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!active) return;
+        if (res.ok && payload?.ok) {
+          setPublicSoldCounts(payload.soldCounts || {});
+        }
+      } catch (err) {
+        console.warn("Could not load public sold counts:", err);
       }
-    });
-    setPublicSoldCounts(merged);
+    };
+
+    loadSoldCounts();
+    return () => { active = false; };
   }, [events]);
 
   useEffect(() => {
@@ -869,7 +948,7 @@ export default function App() {
       }
 
       const chunks = [];
-      for (let i = 0; i < myEventIds.length; i += 30) chunks.push(myEventIds.slice(i, i + 30));
+      for (let i = 0; i < myEventIds.length; i += 10) chunks.push(myEventIds.slice(i, i + 10));
 
       const bucket = new Map();
       const unsubs = chunks.map((chunk, idx) => {
@@ -967,6 +1046,31 @@ export default function App() {
     return () => unsub();
   }, [currentUser]);
 
+  useEffect(() => {
+    if (currentUser?.role !== "organizer" || organizerEvents.length === 0) return;
+
+    const computedByEvent = buildTicketSoldCounts(tickets);
+    organizerEvents.forEach((event) => {
+      const computed = computedByEvent[event.id] || {};
+      const stored = event?.soldCounts && typeof event.soldCounts === "object" ? event.soldCounts : {};
+      const tierIds = (event.tiers || []).map((tier) => tier.id).filter(Boolean);
+      const hasMismatch = tierIds.some((tierId) => Number(stored[tierId] || 0) !== Number(computed[tierId] || 0));
+      if (!hasMismatch || soldCountRepairRef.current.has(event.id)) return;
+
+      soldCountRepairRef.current.add(event.id);
+      updateDoc(doc(db, "events", event.id), {
+        soldCounts: computed,
+        updatedAt: new Date().toISOString(),
+      })
+        .catch((err) => {
+          console.warn(`Could not repair soldCounts for ${event.id}:`, err);
+        })
+        .finally(() => {
+          soldCountRepairRef.current.delete(event.id);
+        });
+    });
+  }, [currentUser, organizerEvents, tickets]);
+
   const login = async (email, password) => {
     try {
       const res = await signInWithEmailAndPassword(auth, email, password);
@@ -1057,6 +1161,27 @@ export default function App() {
 
   const logout = async () => { await signOut(auth); setCurrentUser(null); };
 
+  const syncEventSoldCounts = async (eventId) => {
+    const cleanEventId = String(eventId || "").trim();
+    if (!cleanEventId) return null;
+
+    const ticketSnap = await getDocs(query(collection(db, "tickets"), where("eventId", "==", cleanEventId)));
+    const soldCounts = buildTicketSoldCounts(
+      ticketSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+    )[cleanEventId] || {};
+
+    await updateDoc(doc(db, "events", cleanEventId), {
+      soldCounts,
+      updatedAt: new Date().toISOString(),
+    });
+
+    setEvents((prev) => prev.map((event) => (
+      event.id === cleanEventId ? mergeEventTiersWithSoldCounts(event, soldCounts) : event
+    )));
+    setPublicSoldCounts((prev) => ({ ...prev, [cleanEventId]: soldCounts }));
+    return soldCounts;
+  };
+
   const purchaseTickets = async (eventId, cartSelections, paymentReference = null, buyer = null) => {
     // Always fetch event fresh from Firestore — avoids stale closure issues
     let event;
@@ -1071,23 +1196,6 @@ export default function App() {
       console.error("Failed to fetch event:", err);
       notify("Could not load event. Please try again.", "error");
       return false;
-    }
-
-    // Capacity check — enforce per-tier limits before creating any tickets
-    for (const tier of event.tiers) {
-      const qty = cartSelections[tier.id] || 0;
-      if (!qty) continue;
-      const alreadySold = getSold(event, tier.id);
-      const available = Math.max(0, Number(tier.total || 0) - alreadySold);
-      if (qty > available) {
-        notify(
-          available === 0
-            ? `${tier.name} is sold out.`
-            : `Only ${available} ticket(s) left for ${tier.name}.`,
-          "error"
-        );
-        return false;
-      }
     }
 
     const newTickets = [];
@@ -1202,54 +1310,21 @@ export default function App() {
       notify("Purchase failed. Please try again.", "error");
       return false;
     }
-    // Step 2 — atomically increment soldCounts inside a transaction to enforce capacity
     try {
-      const eventRef = doc(db, "events", eventId);
-      await runTransaction(db, async (tx) => {
-        const freshSnap = await tx.get(eventRef);
-        if (!freshSnap.exists()) throw new Error("Event not found");
-        const freshEvent = freshSnap.data();
-        // Re-check capacity with the latest counts inside the transaction
-        for (const tier of event.tiers) {
-          const qty = cartSelections[tier.id] || 0;
-          if (!qty) continue;
-          const currentSold = Number((freshEvent.soldCounts || {})[tier.id] || 0);
-          const available = Math.max(0, Number(tier.total || 0) - currentSold);
-          if (qty > available) {
-            throw new Error(
-              available === 0
-                ? `${tier.name} sold out`
-                : `Only ${available} left for ${tier.name}`
-            );
-          }
-        }
+      await syncEventSoldCounts(eventId);
+    } catch (err) {
+      console.warn("Could not sync soldCounts:", err.code || "", err.message || err);
+      try {
         const soldUpdate = {};
         for (const tier of event.tiers) {
           const qty = cartSelections[tier.id] || 0;
           if (!qty) continue;
           soldUpdate[`soldCounts.${tier.id}`] = increment(qty);
         }
-        tx.update(eventRef, soldUpdate);
-      });
-    } catch (err) {
-      console.warn("Could not update soldCounts:", err.code, err.message);
-      // If the transaction failed due to oversell, notify the user
-      if (err.message && (err.message.includes("sold out") || err.message.includes("Only"))) {
-        notify(err.message, "error");
-        return false;
+        await updateDoc(doc(db, "events", eventId), soldUpdate);
+      } catch (incrementErr) {
+        console.warn("Could not update soldCounts:", incrementErr.code, incrementErr.message);
       }
-    }
-    // Step 3 — re-fetch event to sync local state with Firestore
-    try {
-      const freshSnap = await getDoc(doc(db, "events", eventId));
-      if (freshSnap.exists()) {
-        setEvents(prev => prev.map(e => e.id !== eventId ? e : { id: freshSnap.id, ...freshSnap.data() }));
-      }
-    } catch {
-      // fallback: optimistic local update
-      setEvents(prev => prev.map(e => e.id !== eventId ? e : {
-        ...e, tiers: e.tiers.map(t => ({ ...t, sold: (t.sold || 0) + (cartSelections[t.id] || 0) })),
-      }));
     }
     notify(`${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);
     // Store guest tickets in session so they can view them
@@ -1345,30 +1420,6 @@ export default function App() {
       .filter(r => r.email)
       .filter((r, i, arr) => arr.findIndex(x => x.email === r.email) === i);
 
-    // Step 1 — write in-app notifications directly from client (no Admin SDK needed)
-    let inAppSent = 0;
-    const recipientsWithUid = uniqueRecipients.filter(r => r.uid);
-    await Promise.allSettled(
-      recipientsWithUid.map(async (r) => {
-        try {
-          await addDoc(collection(db, "organizerNotifications"), {
-            organizerId: r.uid,
-            eventId,
-            eventTitle,
-            type: "co_organizer_invite",
-            title: "You were added as a co-organizer",
-            body: `You can now manage "${eventTitle}" from your organizer dashboard.`,
-            createdAt: new Date().toISOString(),
-          });
-          inAppSent++;
-        } catch (e) {
-          console.warn("Could not write in-app notification:", e);
-        }
-      })
-    );
-
-    // Step 2 — send email via API (non-critical, best-effort)
-    let emailSent = 0;
     try {
       const res = await fetch("/api/send-co-organizer-invite-email", {
         method: "POST",
@@ -1382,12 +1433,14 @@ export default function App() {
         }),
       });
       const payload = await res.json().catch(() => ({}));
-      if (res.ok && payload.ok) emailSent = payload.sent || 0;
+      if (!res.ok || !payload.ok) {
+        throw new Error(payload.msg || "Could not deliver co-organizer notifications");
+      }
+      return payload;
     } catch (err) {
-      console.warn("Co-organizer invite email failed (non-critical):", err);
+      console.warn("Could not send co-organizer invite emails:", err);
+      return { ok: false, msg: err?.message || "Could not deliver co-organizer notifications", sent: 0, failed: uniqueRecipients.length, inAppSent: 0, inAppFailed: uniqueRecipients.filter(r => r.uid).length };
     }
-
-    return { ok: true, sent: emailSent, inAppSent, failed: 0, inAppFailed: 0 };
   };
 
   const issueComplimentaryTickets = async ({ eventId, tierId, qty, attendeeName, attendeeEmail }) => {
@@ -1499,6 +1552,11 @@ export default function App() {
       }
 
       setTickets(prev => [...created, ...prev]);
+      try {
+        await syncEventSoldCounts(event.id);
+      } catch (syncErr) {
+        console.warn("Could not sync complimentary soldCounts:", syncErr);
+      }
 
       return { ok: true, count: created.length };
     } catch (err) {
@@ -1518,6 +1576,7 @@ export default function App() {
       };
       const data = {
         ...eventData,
+        slug: slugify(eventData.slug || eventData.title || ""),
         image: normalizeEventImageUrl(eventData.image) || DEFAULT_EVENT_IMAGE,
         organizer: currentUser.uid,
         coOrganizers: resolved.uids,
@@ -1573,6 +1632,7 @@ export default function App() {
       };
       const data = {
         ...eventData,
+        slug: slugify(eventData.slug || eventData.title || currentEvent?.title || ""),
         image: normalizeEventImageUrl(eventData.image),
         coOrganizers: resolved.uids,
         coOrganizerEmails: requestedCoEmails,
@@ -1841,8 +1901,9 @@ export default function App() {
           <Route path="/find-tickets" element={<GuestTicketLookupPage />} />
           <Route path="/dashboard" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <DashboardPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/create" element={currentUser?.role === "organizer" ? <CreateEventPage ctx={ctx} /> : <Navigate to="/" />} />
-          <Route path="/dashboard/edit/:eventId" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
-          <Route path="/dashboard/analytics/:eventId" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/edit/:eventRoute" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/analytics/:eventRoute" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/dashboard/live/:eventRoute" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <LiveUpdatesPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin" element={currentUser?.role === "admin" ? <AdminHomePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin/payouts" element={currentUser?.role === "admin" ? <AdminPayoutsPage ctx={ctx} /> : <Navigate to="/" />} />
@@ -2117,7 +2178,7 @@ function TicketPage({ ctx }) {
 
 // ── Home Page ──────────────────────────────────────────────────────────────
 function HomePage({ ctx }) {
-  const { events, publicSoldCounts, tickets, eventsLoading } = ctx;
+  const { events, publicSoldCounts, eventsLoading } = ctx;
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -2282,17 +2343,16 @@ function HomePage({ ctx }) {
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:24 }}>
-          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} />)}
+          {filtered.map((event, i) => <EventCard key={event.id} event={event} index={i} publicSoldCounts={publicSoldCounts} />)}
         </div>
       )}
     </div>
   );
 }
 
-function EventCard({ event, index }) {
+function EventCard({ event, index, publicSoldCounts }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
-  // soldCounts live on the event doc and are kept fresh by the onSnapshot listener
-  const totalSold = event.tiers.reduce((s, t) => s + getSold(event, t.id), 0);
+  const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, publicSoldCounts), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
   const pct = Math.round((totalSold/totalCap)*100);
   const hasImage = !!event.image;
@@ -2497,7 +2557,7 @@ function AuthPage({ mode, ctx }) {
 function EventPage({ ctx }) {
   const { eventId: eventRouteParam } = useParams();
   const eventId = resolveEventIdFromParam(eventRouteParam);
-  const { events, publicSoldCounts, currentUser, tickets, joinWaitlist } = ctx;
+  const { events, eventsLoading, publicSoldCounts, currentUser, joinWaitlist } = ctx;
   const navigate = useNavigate();
   const [cart, setCart] = useState({});
   const [event, setEvent] = useState(null);
@@ -2506,21 +2566,51 @@ function EventPage({ ctx }) {
   const [guestModal, setGuestModal] = useState(false);
 
   useEffect(() => {
-    const local = events.find(e => e.id === eventId);
-    if (local) { setEvent(local); setLoading(false); return; }
+    const local = findEventByRouteParam(events, eventRouteParam);
+    if (local) {
+      setEvent(local);
+      setLoading(false);
+      return;
+    }
+    if (eventsLoading) {
+      setLoading(true);
+      return;
+    }
     const fetchEvent = async () => {
-      const snap = await getDoc(doc(db, "events", eventId));
-      if (snap.exists()) setEvent({ id: snap.id, ...snap.data() });
+      const routeKey = String(eventRouteParam || "").trim();
+      const looksLikeLegacyId = eventId && eventId !== routeKey;
+
+      if (looksLikeLegacyId || /^[A-Za-z0-9]{16,}$/.test(routeKey)) {
+        const snap = await getDoc(doc(db, "events", eventId));
+        if (snap.exists()) {
+          setEvent(mergeEventTiersWithSoldCounts({ id: snap.id, ...snap.data() }));
+          setLoading(false);
+          return;
+        }
+      }
+
+      const slugSnap = await getDocs(query(collection(db, "events"), where("slug", "==", routeKey), limit(1)));
+      if (!slugSnap.empty) {
+        const match = slugSnap.docs[0];
+        setEvent(mergeEventTiersWithSoldCounts({ id: match.id, ...match.data() }));
+      }
       setLoading(false);
     };
     fetchEvent();
-  }, [eventId, events]);
+  }, [eventId, eventRouteParam, events, eventsLoading]);
+
+  useEffect(() => {
+    if (!event) return;
+    const canonicalPath = eventPath(event);
+    if (canonicalPath !== `/event/${eventRouteParam}`) {
+      navigate(canonicalPath, { replace: true });
+    }
+  }, [event, eventRouteParam, navigate]);
 
   if (loading) return <Spinner />;
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
 
-  // Read soldCounts directly from the event doc (kept fresh by onSnapshot)
-  // Never override with the user's own tickets — that only counts their purchases, not everyone's
+  const liveCounts = publicSoldCounts;
   const totalItems = Object.values(cart).reduce((s,q) => s+q, 0);
   const totalPrice = event.tiers.reduce((s,t) => s+(cart[t.id]||0)*t.price, 0);
 
@@ -2529,7 +2619,7 @@ function EventPage({ ctx }) {
       const tier = event.tiers.find(t => t.id===tierId);
       const draft = { ...prev };
       draft[tierId] = Math.max(0, (draft[tierId] || 0) + delta);
-      const inventoryCap = tier.total - getSold(event, tier.id);
+      const inventoryCap = tier.total - getLiveSold(event, tier.id, liveCounts);
       draft[tierId] = Math.min(draft[tierId], inventoryCap);
       return draft;
     });
@@ -2617,7 +2707,7 @@ function EventPage({ ctx }) {
             <h3 style={{ fontSize:20, marginBottom:20 }}>SELECT TICKETS</h3>
             <div style={{ display:"flex", flexDirection:"column", gap:12, marginBottom:20 }}>
               {event.tiers.map(tier => {
-                const available = tier.total - getSold(event, tier.id);
+                const available = tier.total - getLiveSold(event, tier.id, liveCounts);
                 const qty = cart[tier.id]||0;
                 const wStatus = waitlistStatus[tier.id];
                 return (
@@ -2648,26 +2738,9 @@ function EventPage({ ctx }) {
                         </button>
                       )}
                     </div>
-                    {available > 0 && (() => {
-                      const sold = getSold(event, tier.id);
-                      const pct = tier.total ? Math.round((sold / tier.total) * 100) : 0;
-                      return (
-                        <div style={{ marginTop:8 }}>
-                          <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"var(--muted)", marginBottom:4 }}>
-                            <span>{sold} sold</span>
-                            <span style={{ color: available < 20 ? "var(--red)" : "var(--muted)" }}>{available} remaining</span>
-                          </div>
-                          <div style={{ height:3, background:"var(--border)", borderRadius:2 }}>
-                            <div style={{ height:"100%", width:`${pct}%`, background: pct>80?"var(--red)":"var(--gold)", borderRadius:2, transition:"width 0.4s" }} />
-                          </div>
-                        </div>
-                      );
-                    })()}
-                    {available === 0 && (
-                      <div style={{ fontSize:12, color:"var(--red)", marginTop:6 }}>
-                        SOLD OUT — join waitlist to be notified if tickets become available
-                      </div>
-                    )}
+                    <div style={{ fontSize:12, color: available===0?"var(--red)":available<20?"var(--red)":"var(--muted)" }}>
+                      {available===0 ? "SOLD OUT — join waitlist to be notified if tickets become available" : `${available} remaining`}
+                    </div>
                   </div>
                 );
               })}
@@ -2865,8 +2938,16 @@ function CheckoutPage({ ctx }) {
   const [guestInfo] = useState(() => JSON.parse(sessionStorage.getItem("guestInfo") || "null"));
   const buyer = currentUser || guestInfo;
 
-  const event = events.find(e => e.id === eventId);
+  const event = findEventByRouteParam(events, eventRouteParam);
   const eventDetailsPath = event ? eventPath(event) : eventPath(eventRouteParam || eventId);
+
+  useEffect(() => {
+    if (!event) return;
+    const canonicalPath = `${eventPath(event)}/checkout`;
+    if (canonicalPath !== `/event/${eventRouteParam}/checkout`) {
+      navigate(canonicalPath, { replace: true });
+    }
+  }, [event, eventRouteParam, navigate]);
 
   if (!buyer) return <Navigate to={eventDetailsPath} />;
   if (!event || Object.keys(cart).length === 0) return <Navigate to={eventDetailsPath} />;
@@ -2881,7 +2962,7 @@ function CheckoutPage({ ctx }) {
   const handleFree = async () => {
 
     setProcessing(true);
-    const result = await purchaseTickets(eventId, cart, null, buyer);
+    const result = await purchaseTickets(event.id, cart, null, buyer);
     if (result) {
       sessionStorage.removeItem("cart");
       sessionStorage.removeItem("guestInfo");
@@ -2920,7 +3001,7 @@ function CheckoutPage({ ctx }) {
       }
 
       sessionStorage.setItem("pendingSquadCheckout", JSON.stringify({
-        eventId,
+        eventId: event.id,
         cart,
         buyer,
         total,
@@ -3404,7 +3485,7 @@ function DashboardPage({ ctx }) {
     else notify(result?.msg || "Could not sync this event to the live sheet.", "error");
     setSyncingEventId("");
   };
-  const handleBulkResendEmails = async (event, eventTickets) => {
+  const handleBulkResendEmails = async (event, eventTickets, mode = "parallel") => {
     if (!canManage || !event?.id) return;
     const resendableTickets = eventTickets.filter(ticket => String(ticket.userEmail || "").trim());
     if (!resendableTickets.length) {
@@ -3412,15 +3493,14 @@ function DashboardPage({ ctx }) {
       return;
     }
 
-    setResendingEventId(event.id);
+    const resendKey = `${event.id}:${mode}`;
+    setResendingEventId(resendKey);
     let successCount = 0;
     let failCount = 0;
-    const chunkSize = 8;
 
-    for (let i = 0; i < resendableTickets.length; i += chunkSize) {
-      const chunk = resendableTickets.slice(i, i + chunkSize);
-      const results = await Promise.allSettled(
-        chunk.map(async (ticket) => {
+    if (mode === "sequential") {
+      for (const ticket of resendableTickets) {
+        try {
           const response = await fetch("/api/resend-ticket-email", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -3430,18 +3510,40 @@ function DashboardPage({ ctx }) {
             const payload = await response.json().catch(() => ({}));
             throw new Error(payload?.error || "Email resend failed");
           }
-          return response.json().catch(() => ({}));
-        })
-      );
+          await response.json().catch(() => ({}));
+          successCount += 1;
+        } catch {
+          failCount += 1;
+        }
+      }
+    } else {
+      const chunkSize = 8;
+      for (let i = 0; i < resendableTickets.length; i += chunkSize) {
+        const chunk = resendableTickets.slice(i, i + chunkSize);
+        const results = await Promise.allSettled(
+          chunk.map(async (ticket) => {
+            const response = await fetch("/api/resend-ticket-email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ticketId: ticket.id }),
+            });
+            if (!response.ok) {
+              const payload = await response.json().catch(() => ({}));
+              throw new Error(payload?.error || "Email resend failed");
+            }
+            return response.json().catch(() => ({}));
+          })
+        );
 
-      results.forEach((result) => {
-        if (result.status === "fulfilled") successCount += 1;
-        else failCount += 1;
-      });
+        results.forEach((result) => {
+          if (result.status === "fulfilled") successCount += 1;
+          else failCount += 1;
+        });
+      }
     }
 
     if (successCount > 0) {
-      notify(`Resent ${successCount} unique QR email${successCount === 1 ? "" : "s"} for ${event.title}.${failCount ? ` ${failCount} failed.` : ""}`);
+      notify(`Resent ${successCount} ticket email${successCount === 1 ? "" : "s"} for ${event.title}${mode === "sequential" ? " one by one" : ""}.${failCount ? ` ${failCount} failed.` : ""}`);
     } else {
       notify(`Could not resend ticket emails for ${event.title}.`, "error");
     }
@@ -3991,19 +4093,33 @@ function DashboardPage({ ctx }) {
                       {syncingEventId === event.id ? "Syncing..." : "Sync Sheet"}
                     </button>
                   )}
+                  <Link to={`/dashboard/live/${buildEventRouteId(event)}${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`} style={{ background:"rgba(61,220,132,0.12)", border:"1px solid rgba(61,220,132,0.24)", color:"var(--green)", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700 }}>
+                    <i className="fa-solid fa-wave-square" style={{marginRight:5}} />
+                    Live
+                  </Link>
                   <Link to={eventPath(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>View</Link>
-                  {canManage && <Link to={`/dashboard/edit/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}
-                  {canManage && <Link to={`/dashboard/analytics/${event.id}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
+                  {canManage && <Link to={`/dashboard/edit/${buildEventRouteId(event)}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-pen" style={{marginRight:5}} />Edit</Link>}
+                  {canManage && <Link to={`/dashboard/analytics/${buildEventRouteId(event)}`} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}><i className="fa-solid fa-chart-bar" style={{marginRight:5}} />Stats</Link>}
                   {canManage && <button onClick={() => openCompModal(event)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-gift" style={{marginRight:5}} />Issue Comp</button>}
                   {canManage && <Link to="/validate" style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13 }}>Scan ▶</Link>}
                   {canManage && (
                     <button
-                      onClick={() => handleBulkResendEmails(event, eventTickets)}
-                      disabled={resendingEventId === event.id || eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0}
-                      style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor: resendingEventId === event.id ? "wait" : "pointer", opacity: eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0 ? 0.5 : 1 }}
+                      onClick={() => handleBulkResendEmails(event, eventTickets, "parallel")}
+                      disabled={resendingEventId.startsWith(`${event.id}:`) || eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0}
+                      style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor: resendingEventId.startsWith(`${event.id}:`) ? "wait" : "pointer", opacity: eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0 ? 0.5 : 1 }}
                     >
                       <i className="fa-solid fa-envelope" style={{marginRight:5}} />
-                      {resendingEventId === event.id ? "Sending..." : "Resend All Ticket Emails"}
+                      {resendingEventId === `${event.id}:parallel` ? "Sending..." : "Resend All Ticket Emails"}
+                    </button>
+                  )}
+                  {canManage && (
+                    <button
+                      onClick={() => handleBulkResendEmails(event, eventTickets, "sequential")}
+                      disabled={resendingEventId.startsWith(`${event.id}:`) || eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0}
+                      style={{ background:"rgba(245,166,35,0.12)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor: resendingEventId.startsWith(`${event.id}:`) ? "wait" : "pointer", opacity: eventTickets.filter(ticket => String(ticket.userEmail || "").trim()).length === 0 ? 0.5 : 1 }}
+                    >
+                      <i className="fa-solid fa-hourglass-half" style={{marginRight:5}} />
+                      {resendingEventId === `${event.id}:sequential` ? "Sending 1 by 1..." : "Resend 1 by 1"}
                     </button>
                   )}
                   <button onClick={() => downloadCSVWithEmail(event, myTickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
@@ -4015,6 +4131,333 @@ function DashboardPage({ ctx }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function LiveUpdatesPage({ ctx }) {
+  const { eventRoute } = useParams();
+  const { currentUser, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed } = ctx;
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const adminOrganizerId = currentUser?.role === "admin" ? (searchParams.get("organizerId") || "").trim() : "";
+  const isAdminView = currentUser?.role === "admin" && Boolean(adminOrganizerId);
+  const [adminEvent, setAdminEvent] = useState(null);
+  const [adminTickets, setAdminTickets] = useState([]);
+  const [adminFeed, setAdminFeed] = useState([]);
+  const [adminNotifications, setAdminNotifications] = useState([]);
+  const organizerEvent = findEventByRouteParam(organizerEvents, eventRoute);
+  const legacyEventId = resolveEventIdFromParam(eventRoute);
+
+  useEffect(() => {
+    if (!isAdminView) {
+      setAdminEvent(null);
+      return;
+    }
+    let active = true;
+    let unsub = () => {};
+    const routeKey = String(eventRoute || "").trim();
+    const looksLikeLegacyId = legacyEventId && (legacyEventId !== routeKey || /^[A-Za-z0-9]{16,}$/.test(routeKey));
+
+    const attachById = (docId) => {
+      unsub = onSnapshot(
+        doc(db, "events", docId),
+        (snap) => {
+          if (!active) return;
+          setAdminEvent(snap.exists() ? { id: snap.id, ...snap.data() } : null);
+        },
+        () => {
+          if (active) setAdminEvent(null);
+        }
+      );
+    };
+
+    const fetchAdminEvent = async () => {
+      if (!routeKey) {
+        setAdminEvent(null);
+        return;
+      }
+      if (looksLikeLegacyId) {
+        const snap = await getDoc(doc(db, "events", legacyEventId));
+        if (snap.exists()) {
+          if (!active) return;
+          setAdminEvent({ id: snap.id, ...snap.data() });
+          attachById(snap.id);
+          return;
+        }
+      }
+      const slugSnap = await getDocs(query(collection(db, "events"), where("slug", "==", routeKey), limit(1)));
+      if (!active) return;
+      if (!slugSnap.empty) {
+        const match = slugSnap.docs[0];
+        setAdminEvent({ id: match.id, ...match.data() });
+        attachById(match.id);
+        return;
+      }
+      setAdminEvent(null);
+    };
+
+    fetchAdminEvent();
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, [eventRoute, isAdminView, legacyEventId]);
+
+  const event = isAdminView ? adminEvent : organizerEvent;
+  const eventId = event?.id || (isAdminView ? "" : legacyEventId);
+
+  useEffect(() => {
+    if (!event || !eventRoute) return;
+    const canonicalRoute = buildEventRouteId(event);
+    if (!canonicalRoute || canonicalRoute === eventRoute) return;
+    navigate(`/dashboard/live/${canonicalRoute}${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`, { replace: true });
+  }, [adminOrganizerId, event, eventRoute, isAdminView, navigate]);
+
+  useEffect(() => {
+    if (!isAdminView || !eventId) {
+      setAdminTickets([]);
+      return;
+    }
+    const q = query(collection(db, "tickets"), where("eventId", "==", eventId));
+    const unsub = onSnapshot(
+      q,
+      (snap) => setAdminTickets(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      () => setAdminTickets([])
+    );
+    return () => unsub();
+  }, [eventId, isAdminView]);
+
+  useEffect(() => {
+    if (!isAdminView || !eventId) {
+      setAdminFeed([]);
+      return;
+    }
+    const q = query(collection(db, "organizerAttendeeFeed"), where("organizerId", "==", adminOrganizerId), where("eventId", "==", eventId), limit(100));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        setAdminFeed(rows);
+      },
+      () => setAdminFeed([])
+    );
+    return () => unsub();
+  }, [adminOrganizerId, eventId, isAdminView]);
+
+  useEffect(() => {
+    if (!isAdminView || !eventId) {
+      setAdminNotifications([]);
+      return;
+    }
+    const q = query(collection(db, "organizerNotifications"), where("organizerId", "==", adminOrganizerId), where("eventId", "==", eventId), limit(50));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        setAdminNotifications(rows);
+      },
+      () => setAdminNotifications([])
+    );
+    return () => unsub();
+  }, [adminOrganizerId, eventId, isAdminView]);
+  const eventTickets = (isAdminView ? adminTickets : tickets.filter(t => t.eventId === eventId))
+    .slice()
+    .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
+  const feed = (isAdminView ? adminFeed : organizerAttendeeFeed.filter(item => item.eventId === eventId))
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const notifications = (isAdminView ? adminNotifications : organizerNotifications.filter(item => item.eventId === eventId))
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  if (!event) return <div style={{ maxWidth:1100, margin:"0 auto", padding:"56px 24px", color:"var(--muted)" }}>Event not found.</div>;
+
+  const sold = eventTickets.length;
+  const checkedIn = eventTickets.filter(ticket => ticket.used).length;
+  const pending = Math.max(0, sold - checkedIn);
+  const revenue = eventTickets.reduce((sum, ticket) => sum + Number(ticket.price || 0), 0);
+  const attendeeRows = eventTickets.map((ticket) => {
+    const lastActivity = feed.find((entry) => entry.ticketId === ticket.id || entry.attendeeEmail === ticket.userEmail || entry.attendeeName === ticket.userName);
+    return {
+      ...ticket,
+      lastActivityAt: lastActivity?.createdAt || ticket.purchasedAt || "",
+      activityLabel: ticket.used ? "Checked In" : "Pending",
+    };
+  });
+  const latestCheckedInRows = attendeeRows.filter((ticket) => ticket.used).slice(0, 12);
+
+  const activityMeta = (entry) => {
+    if (entry.type === "ticket_validation" || entry.status === "used") return { label: "Check-in", color: "var(--green)", icon: "fa-solid fa-user-check" };
+    if (entry.type === "complimentary_ticket" || entry.status === "complimentary") return { label: "Complimentary", color: "var(--gold)", icon: "fa-solid fa-gift" };
+    if (entry.type === "free_ticket" || entry.status === "free") return { label: "Free", color: "var(--gold)", icon: "fa-solid fa-ticket" };
+    return { label: "Purchase", color: "var(--green)", icon: "fa-solid fa-ticket" };
+  };
+
+  const formatTime = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toLocaleString("en-NG", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" });
+  };
+
+  return (
+    <div style={{ maxWidth:1100, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.35s ease" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, flexWrap:"wrap", marginBottom:28 }}>
+        <div>
+          <Link to={`/dashboard${isAdminView ? `?organizerId=${encodeURIComponent(adminOrganizerId)}` : ""}`} style={{ color:"var(--muted)", fontSize:13 }}>← Back to Dashboard</Link>
+          <h1 style={{ fontSize:"clamp(34px,6vw,56px)", lineHeight:0.95, margin:"10px 0 6px" }}>LIVE UPDATES</h1>
+          <div style={{ color:"var(--muted)", fontSize:14 }}>{event.title}</div>
+        </div>
+        <Link to="/validate" style={{ background:"var(--gold)", color:"#000", padding:"12px 18px", borderRadius:10, fontWeight:700, fontSize:13 }}>
+          Open Scanner
+        </Link>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:14, marginBottom:24 }}>
+        {[
+          { label:"Tickets Sold", value:sold, color:"var(--gold)", icon:"fa-solid fa-ticket" },
+          { label:"Checked In", value:checkedIn, color:"var(--green)", icon:"fa-solid fa-user-check" },
+          { label:"Pending Entry", value:pending, color:"var(--text)", icon:"fa-solid fa-hourglass-half" },
+          { label:"Revenue", value:fmt(revenue), color:"var(--gold)", icon:"fa-solid fa-naira-sign" },
+        ].map((card) => (
+          <div key={card.label} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:14, padding:20 }}>
+            <div style={{ color:card.color, fontSize:20, marginBottom:10 }}><i className={card.icon} /></div>
+            <div style={{ fontFamily:"Oswald", fontSize:30, color:card.color }}>{card.value}</div>
+            <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:1 }}>{card.label.toUpperCase()}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:"grid", gap:18 }}>
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+          <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+            <div>
+              <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>LIVE ATTENDEE SHEET</div>
+              <div style={{ color:"var(--muted)", fontSize:12 }}>Detailed attendee rows with status and latest activity</div>
+            </div>
+            <span style={{ color:"var(--muted)", fontSize:11 }}>{attendeeRows.length} rows</span>
+          </div>
+          {attendeeRows.length ? (
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:980 }}>
+                <thead>
+                  <tr style={{ background:"var(--bg3)" }}>
+                    {["Attendee", "Email", "Phone", "Tier", "Amount", "Ticket ID", "Status", "Last Activity", "Purchased"].map((heading) => (
+                      <th key={heading} style={{ padding:"10px 12px", textAlign:"left", color:"var(--muted)", fontWeight:700, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{heading.toUpperCase()}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendeeRows.map((ticket, index) => (
+                    <tr key={ticket.id} style={{ borderTop:"1px solid var(--border)", background:index % 2 ? "rgba(255,255,255,0.01)" : "transparent" }}>
+                      <td style={{ padding:"10px 12px", fontWeight:600, whiteSpace:"nowrap" }}>{ticket.userName || "Attendee"}</td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ticket.userEmail || "-"}</td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{ticket.userPhone || "-"}</td>
+                      <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>{ticket.tierName || "-"}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"IBM Plex Mono", color:"var(--gold)", whiteSpace:"nowrap" }}>{fmt(Number(ticket.price || 0))}</td>
+                      <td style={{ padding:"10px 12px", fontFamily:"IBM Plex Mono", color:"var(--muted)", whiteSpace:"nowrap" }}>{ticket.id}</td>
+                      <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                        <span style={{ background: ticket.used ? "rgba(61,220,132,0.14)" : "rgba(245,166,35,0.12)", color: ticket.used ? "var(--green)" : "var(--gold)", padding:"3px 8px", borderRadius:100, fontSize:10, fontWeight:700 }}>
+                          {ticket.used ? "CHECKED IN" : "PENDING"}
+                        </span>
+                      </td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.lastActivityAt)}</td>
+                      <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.purchasedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ padding:28, color:"var(--muted)", fontSize:13 }}>No attendee records yet for this event.</div>
+          )}
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1.1fr 0.9fr", gap:18, alignItems:"start" }}>
+          <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+            <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <div>
+                <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ACTIVITY LOG</div>
+                <div style={{ color:"var(--muted)", fontSize:12 }}>Detailed event stream in time order</div>
+              </div>
+              <span style={{ color:"var(--muted)", fontSize:11 }}>{feed.length} entries</span>
+            </div>
+            {feed.length ? (
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:760 }}>
+                  <thead>
+                    <tr style={{ background:"var(--bg3)" }}>
+                      {["Time", "Type", "Attendee", "Email", "Tier", "Amount", "Details"].map((heading) => (
+                        <th key={heading} style={{ padding:"10px 12px", textAlign:"left", color:"var(--muted)", fontWeight:700, fontSize:11, letterSpacing:1, whiteSpace:"nowrap" }}>{heading.toUpperCase()}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {feed.map((entry, index) => {
+                      const meta = activityMeta(entry);
+                      return (
+                        <tr key={entry.id || `${entry.ticketId || "entry"}-${index}`} style={{ borderTop:"1px solid var(--border)", background:index % 2 ? "rgba(255,255,255,0.01)" : "transparent" }}>
+                          <td style={{ padding:"10px 12px", color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(entry.createdAt || entry.purchasedAt)}</td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>
+                            <span style={{ color:meta.color, fontWeight:700 }}>{meta.label.toUpperCase()}</span>
+                          </td>
+                          <td style={{ padding:"10px 12px", fontWeight:600, whiteSpace:"nowrap" }}>{entry.attendeeName || "-"}</td>
+                          <td style={{ padding:"10px 12px", color:"var(--muted)", maxWidth:200, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{entry.attendeeEmail || "-"}</td>
+                          <td style={{ padding:"10px 12px", whiteSpace:"nowrap" }}>{entry.tierName || "-"}</td>
+                          <td style={{ padding:"10px 12px", fontFamily:"IBM Plex Mono", color:"var(--gold)", whiteSpace:"nowrap" }}>{entry.amount !== undefined ? fmt(Number(entry.amount || 0)) : "-"}</td>
+                          <td style={{ padding:"10px 12px", color:"var(--muted)", minWidth:220 }}>{entry.title || entry.status || "-"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ padding:28, color:"var(--muted)", fontSize:13 }}>No live activity yet for this event.</div>
+            )}
+          </div>
+
+          <div style={{ display:"grid", gap:18 }}>
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+              <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
+                <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>LATEST CHECK-INS</div>
+              </div>
+              {latestCheckedInRows.length ? (
+                latestCheckedInRows.map((ticket, index) => (
+                  <div key={ticket.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none", display:"flex", justifyContent:"space-between", gap:10 }}>
+                    <div>
+                      <div style={{ fontSize:14, fontWeight:600 }}>{ticket.userName || "Attendee"}</div>
+                      <div style={{ fontSize:12, color:"var(--muted)" }}>{ticket.tierName || "Ticket"}{ticket.userEmail ? ` • ${ticket.userEmail}` : ""}</div>
+                    </div>
+                    <div style={{ fontSize:11, color:"var(--muted)", whiteSpace:"nowrap" }}>{formatTime(ticket.lastActivityAt || ticket.purchasedAt)}</div>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No one has checked in yet.</div>
+              )}
+            </div>
+
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden" }}>
+              <div style={{ padding:"18px 20px", borderBottom:"1px solid var(--border)" }}>
+                <div style={{ fontWeight:700, letterSpacing:1, fontSize:14 }}>ALERTS</div>
+              </div>
+              {notifications.length ? (
+                notifications.slice(0, 10).map((item, index) => (
+                  <div key={item.id} style={{ padding:"12px 18px", borderTop:index ? "1px solid var(--border)" : "none" }}>
+                    <div style={{ fontSize:13, color:"var(--text)" }}>{item.title || "Activity update"}</div>
+                    <div style={{ fontSize:11, color:"var(--muted)", marginTop:4 }}>{formatTime(item.createdAt)}</div>
+                  </div>
+                ))
+              ) : (
+                <div style={{ padding:20, color:"var(--muted)", fontSize:13 }}>No alerts for this event yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -4380,10 +4823,17 @@ function CreateEventPage({ ctx }) {
 // ── Edit Event Page ────────────────────────────────────────────────────────
 function EditEventPage({ ctx }) {
   const { organizerEvents, updateEvent } = ctx;
-  const { eventId } = useParams();
+  const { eventRoute } = useParams();
   const navigate = useNavigate();
-  const event = organizerEvents.find(e => e.id === eventId);
+  const event = findEventByRouteParam(organizerEvents, eventRoute);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!event || !eventRoute) return;
+    const canonicalRoute = buildEventRouteId(event);
+    if (!canonicalRoute || canonicalRoute === eventRoute) return;
+    navigate(`/dashboard/edit/${canonicalRoute}`, { replace: true });
+  }, [event, eventRoute, navigate]);
 
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
 
@@ -4401,7 +4851,7 @@ function EditEventPage({ ctx }) {
 
   const handle = async (form) => {
     setSaving(true);
-    const ok = await updateEvent(eventId, form);
+    const ok = await updateEvent(event.id, form);
     if (ok) navigate("/dashboard");
     setSaving(false);
   };
@@ -4672,16 +5122,24 @@ function ValidatePage({ ctx }) {
 
 // ── Analytics Page (/dashboard/analytics/:eventId) ────────────────────────
 function AnalyticsPage({ ctx }) {
-  const { eventId } = useParams();
+  const { eventRoute } = useParams();
   const { organizerEvents, tickets, currentUser, issueComplimentaryTickets } = ctx;
   const navigate = useNavigate();
-  const event = organizerEvents.find(e => e.id === eventId);
+  const event = findEventByRouteParam(organizerEvents, eventRoute);
+  const eventId = event?.id || resolveEventIdFromParam(eventRoute);
   const [notifStatus, setNotifStatus] = useState("idle"); // idle | sending | sent | error
   const [compTierId, setCompTierId] = useState("");
   const [compQty, setCompQty] = useState("1");
   const [compName, setCompName] = useState("");
   const [compEmail, setCompEmail] = useState("");
   const [compStatus, setCompStatus] = useState({ type: "idle", msg: "" });
+
+  useEffect(() => {
+    if (!event || !eventRoute) return;
+    const canonicalRoute = buildEventRouteId(event);
+    if (!canonicalRoute || canonicalRoute === eventRoute) return;
+    navigate(`/dashboard/analytics/${canonicalRoute}`, { replace: true });
+  }, [event, eventRoute, navigate]);
 
   useEffect(() => {
     if (!event?.tiers?.length) return;
@@ -6048,7 +6506,7 @@ function ReviewsPage({ ctx }) {
   const eventId = resolveEventIdFromParam(eventRouteParam);
   const { events, currentUser, tickets, submitReview } = ctx;
   const navigate = useNavigate();
-  const event = events.find(e => e.id === eventId);
+  const event = findEventByRouteParam(events, eventRouteParam);
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(0); // 0 = all
@@ -6064,6 +6522,14 @@ function ReviewsPage({ ctx }) {
     };
     load();
   }, [eventId]);
+
+  useEffect(() => {
+    if (!event) return;
+    const canonicalPath = `${eventPath(event)}/reviews`;
+    if (canonicalPath !== `/event/${eventRouteParam}/reviews`) {
+      navigate(canonicalPath, { replace: true });
+    }
+  }, [event, eventRouteParam, navigate]);
 
   if (!event) return <Navigate to="/" />;
 
@@ -6789,29 +7255,89 @@ function ContactPage() {
 // ── Guest Ticket Lookup Page (/find-tickets) ───────────────────────────────
 function GuestTicketLookupPage() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | loading | found | empty | error
+  const [status, setStatus] = useState("idle"); // idle | sending | sent | verifying | found | empty | error
   const [tickets, setTickets] = useState([]);
   const [selected, setSelected] = useState(null);
   const [message, setMessage] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const accessToken = searchParams.get("access");
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let active = true;
+
+    const verifyAccess = async () => {
+      setStatus("verifying");
+      setMessage("Verifying your secure access link...");
+      try {
+        const res = await fetch("/api/find-tickets-access", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: accessToken }),
+        });
+        
+        const data = await res.json();
+        if (!active) return;
+
+        if (!res.ok || !data.ok) {
+          setTickets([]);
+          setMessage(data.msg || "This ticket access link is invalid or has expired.");
+          setStatus("error");
+          return;
+        }
+
+        setEmail(data.email || "");
+        setTickets(data.tickets || []);
+        setStatus((data.tickets || []).length ? "found" : "empty");
+        setMessage((data.tickets || []).length ? "" : "No tickets were found for this email address.");
+      } catch (err) {
+        console.error(err);
+        if (!active) return;
+        setMessage("We could not verify this ticket access link. Please request a new one.");
+        setStatus("error");
+      }
+    };
+
+    verifyAccess();
+    return () => { active = false; };
+  }, [accessToken]);
 
   const handleSearch = async () => {
-    const trimmed = email.trim().toLowerCase();
-    if (!trimmed || !trimmed.includes("@")) return;
-    setStatus("loading");
+    if (!email.trim() || !email.includes("@")) return;
+    setStatus("sending");
     setTickets([]);
     setMessage("");
     try {
-      // Query Firestore directly from the client — no Admin SDK, no quota issues
-      const q = query(collection(db, "tickets"), where("userEmail", "==", trimmed));
-      const snap = await getDocs(q);
-      const found = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0));
-      setTickets(found);
-      setStatus(found.length ? "found" : "empty");
+      const res = await fetch("/api/send-ticket-access-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          origin: window.location.origin,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        setMessage(data.msg || "We could not send the ticket access email.");
+        setStatus("error");
+        return;
+      }
+      if (data.mode === "direct" && Array.isArray(data.tickets)) {
+        setSearchParams({});
+        setEmail(data.email || email.trim().toLowerCase());
+        setTickets(data.tickets);
+        setStatus(data.tickets.length ? "found" : "empty");
+        setMessage(data.msg || (data.tickets.length
+          ? "We found your tickets."
+          : "No tickets were found for this email address."));
+        return;
+      }
+      setSearchParams({});
+      setMessage(`We sent a secure ticket link to ${email.trim().toLowerCase()}. Open it from your inbox to view your tickets.`);
+      setStatus("sent");
     } catch (err) {
       console.error(err);
-      setMessage("Could not look up tickets. Please try again.");
+      setMessage("We could not send the ticket access email. Please try again.");
       setStatus("error");
     }
   };
@@ -6827,7 +7353,7 @@ function GuestTicketLookupPage() {
         <div style={{ fontSize:12, letterSpacing:4, color:"var(--gold)", textTransform:"uppercase", marginBottom:12, fontWeight:500 }}>Guest Tickets</div>
         <h1 style={{ fontSize:"clamp(36px,7vw,64px)", lineHeight:0.95, marginBottom:16 }}>FIND MY TICKETS</h1>
         <p style={{ color:"var(--muted)", fontSize:15, lineHeight:1.7 }}>
-          Bought tickets without creating an account? Enter the email address you used at checkout to view your tickets instantly.
+          Bought tickets without creating an account? Enter the email address you used at checkout and we'll send a secure access link to your inbox.
         </p>
       </div>
 
@@ -6848,13 +7374,32 @@ function GuestTicketLookupPage() {
           </div>
           <button
             onClick={handleSearch}
-            disabled={!email.includes("@") || status === "loading"}
+            disabled={!email.includes("@") || status === "sending" || status === "verifying"}
             style={{ background: email.includes("@") ? "var(--gold)" : "var(--bg3)", color: email.includes("@") ? "#000" : "var(--muted)", border:"none", padding:"0 24px", borderRadius:10, cursor: email.includes("@") ? "pointer" : "not-allowed", fontFamily:"Oswald", fontSize:18, letterSpacing:1, flexShrink:0, transition:"background 0.2s" }}
           >
-            {status === "loading" ? <i className="fa-solid fa-circle-notch fa-spin" /> : "FIND TICKETS"}
+            {status === "sending" || status === "verifying" ? <i className="fa-solid fa-circle-notch fa-spin" /> : "SEND LINK"}
           </button>
         </div>
+        <p style={{ fontSize:11, color:"var(--muted)", marginTop:10 }}>
+          <i className="fa-solid fa-lock" style={{ marginRight:4 }} />
+          We email a one-time secure link before showing any tickets.
+        </p>
       </div>
+
+      {status === "sent" && (
+        <div style={{ background:"rgba(61,220,132,0.08)", border:"1px solid var(--green)", borderRadius:12, padding:"16px 20px", fontSize:13, color:"var(--green)", marginBottom:20 }}>
+          <i className="fa-solid fa-envelope-circle-check" style={{ marginRight:8 }} />
+          {message}
+        </div>
+      )}
+
+      {status === "verifying" && (
+        <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:"32px 28px", textAlign:"center", marginBottom:24 }}>
+          <div style={{ width:42, height:42, border:"3px solid var(--border)", borderTop:"3px solid var(--gold)", borderRadius:"50%", animation:"spin 0.8s linear infinite", margin:"0 auto 16px" }} />
+          <div style={{ fontFamily:"Oswald", fontSize:24, marginBottom:8 }}>VERIFYING ACCESS</div>
+          <div style={{ fontSize:13, color:"var(--muted)" }}>{message}</div>
+        </div>
+      )}
 
       {/* Empty state */}
       {status === "empty" && (
