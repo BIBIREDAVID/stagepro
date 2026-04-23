@@ -2088,8 +2088,37 @@ function TicketPage({ ctx }) {
     </div>
   );
 
-  const isOrganizer = currentUser?.role === "organizer";
+  const canValidate = ["organizer", "scanner", "admin"].includes(currentUser?.role);
   const alreadyUsed = result ? result.ticket?.used : ticket.used;
+
+  // Fullscreen check-in result for staff scanning with native camera
+  if (result && canValidate) return (
+    <div style={{ minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, background: result.ok ? "rgba(61,220,132,0.06)" : "rgba(232,64,64,0.06)", animation:"fadeUp 0.3s ease" }}>
+      <div style={{ fontSize:96, marginBottom:16 }}>
+        {result.ok
+          ? <i className="fa-solid fa-circle-check" style={{color:"var(--green)"}} />
+          : <i className="fa-solid fa-circle-xmark" style={{color:"var(--red)"}} />}
+      </div>
+      <div style={{ fontFamily:"Oswald", fontSize:52, color: result.ok ? "var(--green)" : "var(--red)", marginBottom:8, textAlign:"center" }}>
+        {result.ok ? "ENTRY GRANTED" : "ENTRY DENIED"}
+      </div>
+      <div style={{ fontSize:22, fontWeight:700, color:"var(--text)", marginBottom:6, textAlign:"center" }}>
+        {result.ticket?.userName || ticket.userName}
+      </div>
+      <div style={{ fontSize:15, color:"var(--muted)", marginBottom:8, textAlign:"center" }}>
+        {result.ticket?.tierName || ticket.tierName} · {result.ticket?.eventTitle || ticket.eventTitle}
+      </div>
+      {!result.ok && (
+        <div style={{ fontSize:13, color:"var(--red)", marginBottom:16 }}>{result.msg}</div>
+      )}
+      <button
+        onClick={() => window.history.back()}
+        style={{ marginTop:24, background:"var(--gold)", color:"#000", border:"none", padding:"14px 36px", borderRadius:12, fontFamily:"Oswald", fontSize:20, letterSpacing:1, cursor:"pointer" }}
+      >
+        ← BACK
+      </button>
+    </div>
+  );
 
   return (
     <div style={{ maxWidth:480, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
@@ -2136,8 +2165,8 @@ function TicketPage({ ctx }) {
         </div>
       </div>
 
-      {/* QR Code — always visible on ticket page */}
-      {!alreadyUsed && (
+      {/* QR Code — visible for attendees */}
+      {!canValidate && !alreadyUsed && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24, marginBottom:20, textAlign:"center" }}>
           <div style={{ fontSize:11, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>YOUR ENTRY QR CODE</div>
           <div style={{ display:"inline-block", background:"#fff", borderRadius:12, padding:12 }}>
@@ -2147,7 +2176,8 @@ function TicketPage({ ctx }) {
         </div>
       )}
 
-      {!isOrganizer && (
+      {/* Attendee: download + share */}
+      {!canValidate && (
         <div style={{ display:"flex", gap:10, marginBottom:12 }}>
           <button
             onClick={() => downloadTicketFile(ticket)}
@@ -2162,43 +2192,36 @@ function TicketPage({ ctx }) {
         </div>
       )}
 
-      {/* Organizer: validate button */}
-      {isOrganizer && !alreadyUsed && !result && (
+      {/* Staff / organizer: validate button */}
+      {canValidate && !alreadyUsed && (
         <button
           onClick={handleValidate}
           disabled={validating}
-          style={{ width:"100%", padding:18, background:"var(--green)", color:"#000", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:24, letterSpacing:2, cursor: validating?"not-allowed":"pointer", opacity: validating?0.7:1, marginBottom:12 }}
+          style={{ width:"100%", padding:20, background:"var(--green)", color:"#000", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:26, letterSpacing:2, cursor: validating?"not-allowed":"pointer", opacity: validating?0.7:1, marginBottom:12 }}
         >
-          {validating ? "VALIDATING..." : "MARK AS USED — GRANT ENTRY"}
+          {validating
+            ? <><i className="fa-solid fa-circle-notch fa-spin" style={{marginRight:10}} />CHECKING IN...</>
+            : <><i className="fa-solid fa-user-check" style={{marginRight:10}} />GRANT ENTRY</>}
         </button>
       )}
 
-      {/* Result after organizer validates */}
-      {result && (
-        <div style={{ background: result.ok?"rgba(61,220,132,0.1)":"rgba(232,64,64,0.1)", border:`1px solid ${result.ok?"var(--green)":"var(--red)"}`, borderRadius:12, padding:20, textAlign:"center", animation:"fadeUp 0.3s ease", marginBottom:12 }}>
-          <div style={{ fontFamily:"Oswald", fontSize:28, color: result.ok?"var(--green)":"var(--red)" }}>
-            {result.ok ? <><i className="fa-solid fa-circle-check" style={{marginRight:8}} />ENTRY GRANTED</> : <><i className="fa-solid fa-circle-xmark" style={{marginRight:8}} />{result.msg}</>}
-          </div>
-        </div>
-      )}
-
-      {/* Organizer: already used notice */}
-      {isOrganizer && alreadyUsed && (
-        <div style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", borderRadius:12, padding:20, textAlign:"center", marginBottom:12 }}>
-          <div style={{ fontFamily:"Oswald", fontSize:24, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
+      {/* Staff: already used */}
+      {canValidate && alreadyUsed && (
+        <div style={{ background:"rgba(232,64,64,0.1)", border:"2px solid var(--red)", borderRadius:12, padding:20, textAlign:"center", marginBottom:12 }}>
+          <div style={{ fontFamily:"Oswald", fontSize:26, color:"var(--red)" }}><i className="fa-solid fa-ban" style={{marginRight:8}} />DO NOT ALLOW ENTRY</div>
           <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>This ticket was already used for entry</div>
         </div>
       )}
 
-      {/* Non-organizer: sign-in prompt */}
+      {/* Guest: sign-in prompt */}
       {!currentUser && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20, textAlign:"center", marginTop:8 }}>
-          <p style={{ color:"var(--muted)", fontSize:13, marginBottom:12 }}>Are you an event organizer?</p>
-          <Link to={`/login`} style={{ background:"var(--gold)", color:"#000", padding:"10px 24px", borderRadius:8, fontWeight:700, fontSize:14 }}>Sign in to validate</Link>
+          <p style={{ color:"var(--muted)", fontSize:13, marginBottom:12 }}>Are you event staff?</p>
+          <Link to="/login" style={{ background:"var(--gold)", color:"#000", padding:"10px 24px", borderRadius:8, fontWeight:700, fontSize:14 }}>Sign in to validate</Link>
         </div>
       )}
 
-      {/* Customer: not their ticket notice */}
+      {/* Customer: prompt */}
       {currentUser?.role === "customer" && (
         <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:20, textAlign:"center", marginTop:8 }}>
           <p style={{ color:"var(--muted)", fontSize:13 }}>Present this page at the event entrance for scanning.</p>
