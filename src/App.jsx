@@ -5031,31 +5031,35 @@ function ValidatePage({ ctx }) {
   };
 
   // Start live camera
+  // Attach stream to video element once it mounts (stage === "scanning")
+  useEffect(() => {
+    if (stage !== "scanning" || !streamRef.current) return;
+    const video = videoRef.current;
+    if (!video) return;
+    video.srcObject = streamRef.current;
+    video.play().catch(() => {});
+  }, [stage]);
+
   const startCamera = async () => {
     setCamError("");
-    setStage("scanning");
+    processingRef.current = false;
     try {
       const jsQR = await loadJsQR();
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
+      // Set stage AFTER stream is ready — video element mounts, then useEffect attaches stream
+      setStage("scanning");
 
       const scan = () => {
-        if (!videoRef.current || !canvasRef.current || processingRef.current) {
-          rafRef.current = requestAnimationFrame(scan);
-          return;
-        }
+        if (processingRef.current) return;
         const video = videoRef.current;
-        if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+        const canvas = canvasRef.current;
+        if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) {
           rafRef.current = requestAnimationFrame(scan);
           return;
         }
-        const canvas = canvasRef.current;
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx2d = canvas.getContext("2d");
@@ -5070,14 +5074,17 @@ function ValidatePage({ ctx }) {
         }
         rafRef.current = requestAnimationFrame(scan);
       };
-      rafRef.current = requestAnimationFrame(scan);
+      // Small delay to let React render the video element before scanning starts
+      setTimeout(() => { rafRef.current = requestAnimationFrame(scan); }, 300);
     } catch (err) {
       stopCamera();
       setStage("idle");
-      if (err.name === "NotAllowedError") {
-        setCamError("Camera permission denied. Please allow camera access in your browser settings.");
-      } else if (err.name === "NotFoundError") {
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        setCamError("Camera permission denied. Please allow camera access in your browser settings and try again.");
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
         setCamError("No camera found on this device.");
+      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+        setCamError("Camera is in use by another app. Close it and try again.");
       } else {
         setCamError("Could not start camera: " + err.message);
       }
@@ -5234,7 +5241,7 @@ function ValidatePage({ ctx }) {
               </div>
             ))}
           </div>
-          <button onClick={() => { setStage("idle"); startCamera(); }} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, padding:"16px 24px", cursor:"pointer", fontFamily:"Oswald", fontSize:22, letterSpacing:1, marginBottom:10 }}>
+          <button onClick={() => { startCamera(); }} style={{ width:"100%", background:"var(--gold)", color:"#000", border:"none", borderRadius:12, padding:"16px 24px", cursor:"pointer", fontFamily:"Oswald", fontSize:22, letterSpacing:1, marginBottom:10 }}>
             <i className="fa-solid fa-camera" style={{marginRight:8}} />SCAN NEXT
           </button>
           <button onClick={reset} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", borderRadius:10, padding:"11px 24px", cursor:"pointer", fontSize:13 }}>← Back to Home</button>
@@ -5280,7 +5287,7 @@ function ValidatePage({ ctx }) {
           <div style={{ fontSize:48, marginBottom:12, color:"var(--red)" }}><i className="fa-solid fa-circle-xmark" /></div>
           <div style={{ fontFamily:"Oswald", fontSize:26, color:"var(--red)", marginBottom:8 }}>SCAN FAILED</div>
           <p style={{ color:"var(--muted)", fontSize:13, marginBottom:24 }}>{errorMsg}</p>
-          <button onClick={() => { setStage("idle"); startCamera(); }} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Oswald", fontSize:18, letterSpacing:1, marginBottom:10, width:"100%" }}>
+          <button onClick={() => { startCamera(); }} style={{ background:"var(--gold)", color:"#000", border:"none", padding:"12px 28px", borderRadius:10, cursor:"pointer", fontFamily:"Oswald", fontSize:18, letterSpacing:1, marginBottom:10, width:"100%" }}>
             <i className="fa-solid fa-camera" style={{marginRight:8}} />TRY AGAIN
           </button>
           <button onClick={reset} style={{ width:"100%", background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"10px 24px", borderRadius:8, cursor:"pointer", fontSize:13 }}>← Back</button>
