@@ -757,6 +757,11 @@ function Nav({ currentUser, logout, notification, events }) {
               {currentUser.role === "admin" && (
                 <Link to="/admin" style={{ color:"var(--muted)", fontSize:14, fontWeight:500, padding:"6px 12px" }}>Admin</Link>
               )}
+              {currentUser.role === "scanner" && (
+                <Link to="/validate" style={{ background:"rgba(61,220,132,0.12)", border:"1px solid rgba(61,220,132,0.3)", color:"var(--green)", padding:"6px 14px", borderRadius:6, fontSize:13, fontWeight:700 }}>
+                  <i className="fa-solid fa-qrcode" style={{marginRight:6}} />SCAN TICKETS
+                </Link>
+              )}
               <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13, cursor:"pointer" }} onClick={() => window.location.href="/profile"}>
                 {currentUser.name?.[0] ?? "U"}
               </div>
@@ -1161,6 +1166,30 @@ export default function App() {
 
   const logout = async () => { await signOut(auth); setCurrentUser(null); };
 
+  const createScannerAccount = async ({ name, email, password }) => {
+    try {
+      const normalizedEmail = email.trim().toLowerCase();
+      // Create Firebase Auth account
+      const res = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+      const userData = { name: name.trim(), email: normalizedEmail, role: "scanner", phone: "" };
+      await setDoc(doc(db, "users", res.user.uid), userData);
+      // Sign back in as the organizer (scanner creation signs in as the new user)
+      notify(`Scanner account created for ${name.trim()}!`);
+      // Sign out the scanner account and back in as organizer is not trivial client-side
+      // Instead we sign out — organizer must re-login. Better UX: use Admin SDK server-side.
+      // For now, sign out and let organizer re-login.
+      await signOut(auth);
+      setCurrentUser(null);
+      return { ok: true };
+    } catch (err) {
+      console.error("createScannerAccount error:", err);
+      const msg = err.code === "auth/email-already-in-use"
+        ? "An account with this email already exists."
+        : "Could not create scanner account. Please try again.";
+      return { ok: false, msg };
+    }
+  };
+
   const syncEventSoldCounts = async (eventId) => {
     const cleanEventId = String(eventId || "").trim();
     if (!cleanEventId) return null;
@@ -1342,21 +1371,13 @@ export default function App() {
       if (!snap.exists()) return { ok: false, msg: "Ticket not found" };
       const ticket = { id: snap.id, ...snap.data() };
       let ticketEvent = null;
-      if (!currentUser || !["organizer", "admin"].includes(currentUser.role)) {
-        return { ok: false, msg: "Only approved organizers can validate tickets" };
+      if (!currentUser || !["organizer", "admin", "scanner"].includes(currentUser.role)) {
+        return { ok: false, msg: "Only approved organizers and scan staff can validate tickets" };
       }
-      if (currentUser.role === "organizer") {
-        const eventSnap = await getDoc(doc(db, "events", ticket.eventId));
-        if (!eventSnap.exists()) {
-          return { ok: false, msg: "Event not found for this ticket" };
-        }
-        ticketEvent = { id: eventSnap.id, ...eventSnap.data() };
-        if (!isEventManager(ticketEvent, currentUser)) {
-          return { ok: false, msg: "You can't validate tickets for another organizer's event" };
-        }
-      } else {
-        const eventSnap = await getDoc(doc(db, "events", ticket.eventId));
-        if (eventSnap.exists()) ticketEvent = { id: eventSnap.id, ...eventSnap.data() };
+      const eventSnap = await getDoc(doc(db, "events", ticket.eventId));
+      if (eventSnap.exists()) ticketEvent = { id: eventSnap.id, ...eventSnap.data() };
+      if (currentUser.role === "organizer" && ticketEvent && !isEventManager(ticketEvent, currentUser)) {
+        return { ok: false, msg: "You can't validate tickets for another organizer's event" };
       }
       if (ticket.used) return { ok: false, msg: "Ticket already used", ticket };
       await updateDoc(ref, { used: true });
@@ -1883,7 +1904,7 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, publicSoldCounts, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist, syncEventLiveSheet };
+  const ctx = { currentUser, events, publicSoldCounts, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, createScannerAccount, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist, syncEventLiveSheet };
 
   return (
     <BrowserRouter>
@@ -1904,7 +1925,7 @@ export default function App() {
           <Route path="/dashboard/edit/:eventRoute" element={currentUser?.role === "organizer" ? <EditEventPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/analytics/:eventRoute" element={currentUser?.role === "organizer" ? <AnalyticsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/dashboard/live/:eventRoute" element={currentUser?.role === "organizer" || currentUser?.role === "admin" ? <LiveUpdatesPage ctx={ctx} /> : <Navigate to="/" />} />
-          <Route path="/validate" element={currentUser?.role === "organizer" ? <ValidatePage ctx={ctx} /> : <Navigate to="/" />} />
+          <Route path="/validate" element={currentUser?.role === "organizer" || currentUser?.role === "scanner" ? <ValidatePage ctx={ctx} /> : <Navigate to="/login" />} />
           <Route path="/admin" element={currentUser?.role === "admin" ? <AdminHomePage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/admin/payouts" element={currentUser?.role === "admin" ? <AdminPayoutsPage ctx={ctx} /> : <Navigate to="/" />} />
           <Route path="/profile" element={currentUser ? <ProfilePage ctx={ctx} /> : <Navigate to="/login" />} />
@@ -2440,7 +2461,7 @@ function AuthPage({ mode, ctx }) {
     if (mode === "login") {
       const res = await login(form.email, form.password);
       if (!res.ok) { setError("Invalid email or password."); setLoading(false); return; }
-      navigate(res.role === "organizer" ? "/dashboard" : "/");
+      navigate(res.role === "organizer" ? "/dashboard" : res.role === "scanner" ? "/validate" : "/");
     } else {
       if (!form.name || !form.email || !form.phone || !form.password) { setError("All fields required."); setLoading(false); return; }
       const res = await register(form.name, form.email, form.password, "customer", form.phone);
@@ -3256,7 +3277,7 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, deleteEvent, refreshEvents, notify, syncEventLiveSheet } = ctx;
+  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, deleteEvent, refreshEvents, notify, syncEventLiveSheet, createScannerAccount } = ctx;
   const [searchParams] = useSearchParams();
   const adminOrganizerId = currentUser?.role === "admin" ? (searchParams.get("organizerId") || "").trim() : "";
   const isAdminView = currentUser?.role === "admin" && Boolean(adminOrganizerId);
@@ -3279,6 +3300,9 @@ function DashboardPage({ ctx }) {
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const [payoutRecords, setPayoutRecords] = useState([]);
   const [webhookCopyState, setWebhookCopyState] = useState("idle");
+  const [scannerForm, setScannerForm] = useState({ name:"", email:"", password:"" });
+  const [scannerStatus, setScannerStatus] = useState({ type:"idle", msg:"" });
+  const [showScannerSection, setShowScannerSection] = useState(false);
   const activeOrganizer = isAdminView ? viewedOrganizer : currentUser;
   const activeEvents = isAdminView ? adminEvents : organizerEvents;
   const activeTickets = isAdminView ? adminTickets : tickets;
@@ -4143,6 +4167,85 @@ function DashboardPage({ ctx }) {
           );
         })}
       </div>
+
+      {/* Scanner Staff Section */}
+      {canManage && (
+        <div style={{ marginTop:32 }}>
+          <button
+            onClick={() => setShowScannerSection(p => !p)}
+            style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", fontSize:13, display:"flex", alignItems:"center", gap:8, marginBottom:16 }}
+          >
+            <i className={`fa-solid fa-chevron-${showScannerSection ? "up" : "down"}`} />
+            <span style={{ fontWeight:700, letterSpacing:1 }}>SCAN STAFF ACCOUNTS</span>
+          </button>
+
+          {showScannerSection && (
+            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:24 }}>
+              <p style={{ color:"var(--muted)", fontSize:13, marginBottom:20, lineHeight:1.7 }}>
+                Create a scan-only account for event staff. They can log in and access the ticket scanner — nothing else.
+              </p>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr auto", gap:10, alignItems:"flex-end" }}>
+                <div>
+                  <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, display:"block", marginBottom:6 }}>FULL NAME</label>
+                  <input
+                    value={scannerForm.name}
+                    onChange={e => setScannerForm(p => ({ ...p, name: e.target.value }))}
+                    placeholder="e.g. Emeka Scan"
+                    style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none", boxSizing:"border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, display:"block", marginBottom:6 }}>EMAIL</label>
+                  <input
+                    type="email"
+                    value={scannerForm.email}
+                    onChange={e => setScannerForm(p => ({ ...p, email: e.target.value }))}
+                    placeholder="scanner@email.com"
+                    style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none", boxSizing:"border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, display:"block", marginBottom:6 }}>PASSWORD</label>
+                  <input
+                    type="password"
+                    value={scannerForm.password}
+                    onChange={e => setScannerForm(p => ({ ...p, password: e.target.value }))}
+                    placeholder="Min 6 characters"
+                    style={{ width:"100%", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:"10px 12px", color:"var(--text)", fontSize:13, outline:"none", boxSizing:"border-box" }}
+                  />
+                </div>
+                <button
+                  disabled={!scannerForm.name || !scannerForm.email || scannerForm.password.length < 6 || scannerStatus.type === "loading"}
+                  onClick={async () => {
+                    setScannerStatus({ type:"loading", msg:"" });
+                    const res = await createScannerAccount(scannerForm);
+                    if (res.ok) {
+                      setScannerForm({ name:"", email:"", password:"" });
+                      setScannerStatus({ type:"success", msg:`Scanner account created! They can log in at stagepro-phi.vercel.app/login` });
+                    } else {
+                      setScannerStatus({ type:"error", msg: res.msg || "Could not create account." });
+                    }
+                  }}
+                  style={{ background: "var(--gold)", color:"#000", border:"none", padding:"10px 18px", borderRadius:8, cursor:"pointer", fontFamily:"Oswald", fontSize:15, letterSpacing:1, whiteSpace:"nowrap", opacity: scannerStatus.type === "loading" ? 0.7 : 1 }}
+                >
+                  {scannerStatus.type === "loading" ? "CREATING..." : "CREATE SCANNER"}
+                </button>
+              </div>
+              {scannerStatus.msg && (
+                <div style={{ marginTop:12, padding:"10px 14px", borderRadius:8, fontSize:13,
+                  background: scannerStatus.type === "success" ? "rgba(61,220,132,0.08)" : "rgba(232,64,64,0.08)",
+                  color: scannerStatus.type === "success" ? "var(--green)" : "var(--red)",
+                  border: `1px solid ${scannerStatus.type === "success" ? "rgba(61,220,132,0.3)" : "rgba(232,64,64,0.3)"}`
+                }}>
+                  <i className={`fa-solid ${scannerStatus.type === "success" ? "fa-circle-check" : "fa-triangle-exclamation"}`} style={{ marginRight:6 }} />
+                  {scannerStatus.msg}
+                  {scannerStatus.type === "success" && <strong style={{ display:"block", marginTop:4, color:"var(--text)" }}>Note: You have been signed out. Please sign back in with your organizer credentials.</strong>}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
