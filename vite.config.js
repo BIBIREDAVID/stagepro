@@ -1,11 +1,12 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import sitemap from 'vite-plugin-sitemap';
 
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
-  server: {
-    historyApiFallback: true,
-  }
-})
-
+  plugins: [
+    // other plugins like react()
+    sitemap({ 
+      hostname: 'https://www.stageprophi.app',
+      dynamicRoutes: ['/events', '/about', '/contact'] 
+    }),
+  ],
+});
