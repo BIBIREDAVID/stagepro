@@ -1,3 +1,11 @@
+import ReactGA from "react-ga4";
+
+// Use the Measurement ID from image_fe4ae1.jpg
+ReactGA.initialize("G-KFZSTGDQZ7");
+
+// This sends the first pageview when the app loads
+ReactGA.send({ hitType: "pageview", page: window.location.pathname });
+
 import { useState, useEffect, useRef } from "react";
 import {
   BrowserRouter,
