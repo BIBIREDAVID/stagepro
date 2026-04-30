@@ -4244,7 +4244,7 @@ function DashboardPage({ ctx }) {
                     const res = await createScannerAccount(scannerForm);
                     if (res.ok) {
                       setScannerForm({ name:"", email:"", password:"" });
-                      setScannerStatus({ type:"success", msg:`Scanner account created! They can log in at stagepro-phi.vercel.app/login` });
+                      setScannerStatus({ type:"success", msg:`Scanner account created! They can log in at www.stageprophi.app/login` });
                     } else {
                       setScannerStatus({ type:"error", msg: res.msg || "Could not create account." });
                     }
@@ -7192,7 +7192,7 @@ function HelpPage() {
         },
         {
           q: "My QR code isn't scanning at the venue — what do I do?",
-          a: "Make sure your screen brightness is turned up fully and that there is no glare. If the QR code still won't scan, ask the organiser to look up your ticket by Ticket ID — you can find it displayed below the QR code on your ticket page. You can also show them the URL: stagepro-phi.vercel.app/ticket/[your-ticket-id]."
+          a: "Make sure your screen brightness is turned up fully and that there is no glare. If the QR code still won't scan, ask the organiser to look up your ticket by Ticket ID — you can find it displayed below the QR code on your ticket page. You can also show them the URL: www.stageprophi.app/ticket/[your-ticket-id]."
         },
         {
           q: "Can I get a refund?",
