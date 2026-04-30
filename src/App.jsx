@@ -6,6 +6,7 @@ import {
   Link,
   useNavigate,
   useParams,
+  useLocation,
   Navigate,
   useSearchParams,
 } from "react-router-dom";
@@ -46,11 +47,21 @@ import {
 } from "firebase/storage";
 import ReactGA from "react-ga4";
 
-// Use the Measurement ID from image_fe4ae1.jpg
-ReactGA.initialize("G-KFZSTGDQZ7");
+ReactGA.initialize("G-WEZ25TGD02");
 
-// This sends the first pageview when the app loads
-ReactGA.send({ hitType: "pageview", page: window.location.pathname });
+function AnalyticsTracker() {
+  const location = useLocation();
+  const lastTrackedPath = useRef("");
+
+  useEffect(() => {
+    const page = `${location.pathname}${location.search}`;
+    if (page === lastTrackedPath.current) return;
+    lastTrackedPath.current = page;
+    ReactGA.send({ hitType: "pageview", page });
+  }, [location.pathname, location.search]);
+
+  return null;
+}
 
 // ── EmailJS setup (optional — for auto email tickets) ─────────────────────
 // Add to .env and Vercel environment variables:
@@ -1915,6 +1926,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <AnalyticsTracker />
       <Nav currentUser={currentUser} logout={logout} notification={notification} events={events} />
       <main style={{ minHeight:"calc(100vh - 60px)" }}>
         <Routes>
