@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 import sitemap from 'vite-plugin-sitemap';
 
 export default defineConfig({
   plugins: [
-    // other plugins like react()
+    react(),
     sitemap({ 
       hostname: 'https://www.stageprophi.app',
       dynamicRoutes: ['/events', '/about', '/contact'] 
