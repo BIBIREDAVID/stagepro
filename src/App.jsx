@@ -47,7 +47,7 @@ import {
 } from "firebase/storage";
 import ReactGA from "react-ga4";
 
-ReactGA.initialize("G-8N7GBLCHM7");
+ReactGA.initialize("G-8V7G6LCJMJ");
 
 function AnalyticsTracker() {
   const location = useLocation();
