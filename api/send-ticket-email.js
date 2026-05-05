@@ -47,6 +47,12 @@ export default async function handler(req, res) {
       subject: message.subject,
       html: message.html,
       fromName: "StagePro Tickets",
+      kind: "ticket",
+      meta: {
+        ticketId,
+        eventTitle,
+        tierName,
+      },
     });
     return res.status(200).json({ success: true, provider: delivery.provider });
   } catch (err) {

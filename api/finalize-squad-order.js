@@ -264,6 +264,14 @@ export default async function handler(req, res) {
           subject: message.subject,
           html: message.html,
           fromName: "StagePro Tickets",
+          kind: "ticket",
+          meta: {
+            ticketId: ticket.id,
+            eventId: event.id,
+            eventTitle: ticket.eventTitle,
+            tierName: ticket.tierName,
+            paymentReference: String(reference),
+          },
         });
       })
     );

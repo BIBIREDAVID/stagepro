@@ -63,6 +63,13 @@ export default async function handler(req, res) {
       subject: `Resent Ticket ${ticketId} for ${f.eventTitle || "StagePro Event"} - StagePro`,
       html: message.html,
       fromName: "StagePro Tickets",
+      kind: "ticket_resend",
+      meta: {
+        ticketId,
+        eventId: f.eventId || "",
+        eventTitle: f.eventTitle || "",
+        tierName: f.tierName || "",
+      },
     });
 
     return res.status(200).json({ success: true, sentTo: toEmail, provider: delivery.provider });

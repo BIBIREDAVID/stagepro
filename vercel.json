@@ -5,6 +5,10 @@
       "destination": "/api/squad-webhook"
     },
     {
+      "source": "/webhooks/resend",
+      "destination": "/api/resend-webhook"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

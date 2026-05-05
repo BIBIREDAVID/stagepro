@@ -66,6 +66,12 @@ export default async function handler(req, res) {
             subject: `Co-organizer invite - ${eventTitle}`,
             html,
             fromName: "StagePro",
+            kind: "co_organizer_invite",
+            meta: {
+              eventId,
+              eventTitle,
+              recipientUid: recipient.uid || "",
+            },
           })
         )
       );

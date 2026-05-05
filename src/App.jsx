@@ -392,6 +392,22 @@ const mergeEventTiersWithSoldCounts = (event = {}, soldCounts = null) => {
   };
 };
 
+const fetchPublicSoldCounts = async (eventIds = []) => {
+  const cleanEventIds = eventIds.map((id) => String(id || "").trim()).filter(Boolean);
+  if (!cleanEventIds.length) return {};
+
+  const res = await fetch("/api/public-event-sold-counts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventIds: cleanEventIds }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || !payload?.ok) {
+    throw new Error(payload?.msg || "Could not load sold counts");
+  }
+  return payload.soldCounts || {};
+};
+
 // ── Banner themes ──────────────────────────────────────────────────────────
 const THEMES = {
   purple:   "linear-gradient(135deg,#6a11cb,#2575fc)",
@@ -866,16 +882,9 @@ export default function App() {
     let active = true;
     const loadSoldCounts = async () => {
       try {
-        const res = await fetch("/api/public-event-sold-counts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ eventIds }),
-        });
-        const payload = await res.json().catch(() => ({}));
+        const soldCounts = await fetchPublicSoldCounts(eventIds);
         if (!active) return;
-        if (res.ok && payload?.ok) {
-          setPublicSoldCounts(payload.soldCounts || {});
-        }
+        setPublicSoldCounts(soldCounts);
       } catch (err) {
         console.warn("Could not load public sold counts:", err);
       }
@@ -1371,6 +1380,16 @@ export default function App() {
         await updateDoc(doc(db, "events", eventId), soldUpdate);
       } catch (incrementErr) {
         console.warn("Could not update soldCounts:", incrementErr.code, incrementErr.message);
+      }
+      try {
+        const latestCounts = await fetchPublicSoldCounts([eventId]);
+        const soldCounts = latestCounts[eventId] || {};
+        setPublicSoldCounts((prev) => ({ ...prev, [eventId]: soldCounts }));
+        setEvents((prev) => prev.map((row) => (
+          row.id === eventId ? mergeEventTiersWithSoldCounts(row, soldCounts) : row
+        )));
+      } catch (publicCountErr) {
+        console.warn("Could not refresh public soldCounts:", publicCountErr);
       }
     }
     notify(`${newTickets.length} ticket${newTickets.length > 1 ? "s" : ""} confirmed!`);

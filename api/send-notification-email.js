@@ -65,6 +65,11 @@ export default async function handler(req, res) {
         subject: `${notifTitle} - ${eventTitle}`,
         html,
         fromName: "StagePro",
+        kind: "event_notification",
+        meta: {
+          eventTitle,
+          notifTitle,
+        },
       })
     )
   );
