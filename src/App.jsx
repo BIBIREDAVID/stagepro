@@ -4319,8 +4319,8 @@ function DashboardPage({ ctx }) {
                       <i className="fa-solid fa-arrow-rotate-left" style={{ marginRight:5 }} />Restore
                     </button>
                   ) : canManage && (
-                    <button onClick={() => setConfirmArchive(event)} style={{ background:"rgba(245,166,35,0.1)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}>
-                      <i className="fa-solid fa-box-archive" />
+                    <button onClick={() => setConfirmArchive(event)} style={{ background:"rgba(245,166,35,0.1)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontWeight:700 }}>
+                      <i className="fa-solid fa-box-archive" style={{ marginRight:5 }} />Archive
                     </button>
                   )}
                 </div>
