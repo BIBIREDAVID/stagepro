@@ -11,6 +11,7 @@ export function buildTicketEmail({
   themeColor,
   organizerName,
   eventImage,
+  socialLinks = {},
 }) {
   const isFree = amountPaid === "FREE" || amountPaid === "₦0";
   const accent = themeColor || "#f5a623";
@@ -20,6 +21,12 @@ export function buildTicketEmail({
   const qrUrl = ticketUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(ticketUrl)}&margin=12`
     : "";
+  const instagramUrl = String(socialLinks?.instagram || "").trim();
+  const tiktokUrl = String(socialLinks?.tiktok || "").trim();
+  const socialButtons = [
+    instagramUrl ? `<a href="${instagramUrl}" style="display:inline-block;background:#1a1a1a;border:1px solid #2a2a2a;color:${accent};text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:800;font-size:13px;margin:0 4px;">Instagram</a>` : "",
+    tiktokUrl ? `<a href="${tiktokUrl}" style="display:inline-block;background:#1a1a1a;border:1px solid #2a2a2a;color:${accent};text-decoration:none;padding:11px 18px;border-radius:10px;font-weight:800;font-size:13px;margin:0 4px;">TikTok</a>` : "",
+  ].filter(Boolean).join("");
 
   const subject = `Your ticket for ${eventTitle} - StagePro`;
   const html = `<!DOCTYPE html>
@@ -80,6 +87,11 @@ export function buildTicketEmail({
           <p style="margin:14px 0 0;font-size:11px;color:#444;line-height:1.6;">Or open: <a href="${ticketUrl}" style="color:${accent};word-break:break-all;">${ticketUrl}</a></p>
           <p style="margin:10px 0 0;font-size:11px;color:#666;">Ticket ID: ${ticketId || ""}</p>
         </td></tr>
+        ${socialButtons ? `
+        <tr><td align="center" style="padding:0 40px 34px;">
+          <p style="margin:0 0 12px;font-size:11px;color:#666;letter-spacing:2px;">FOLLOW EVENT UPDATES</p>
+          ${socialButtons}
+        </td></tr>` : ""}
       </table>
     </td></tr>
   </table>

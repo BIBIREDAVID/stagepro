@@ -1,0 +1,38 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasUserDoc() {
+      return signedIn()
+        && exists(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function userRole() {
+      return hasUserDoc()
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role != null
+        ? firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role
+        : "";
+    }
+
+    function canUploadEventMedia(ownerId) {
+      return signedIn()
+        && request.auth.uid == ownerId
+        && (userRole() == "organizer" || userRole() == "admin")
+        && request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /event-media/{ownerId}/{allPaths=**} {
+      allow read: if true;
+      allow create, update: if canUploadEventMedia(ownerId);
+      allow delete: if signedIn() && request.auth.uid == ownerId && (userRole() == "organizer" || userRole() == "admin");
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

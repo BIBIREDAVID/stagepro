@@ -20,6 +20,7 @@ export default async function handler(req, res) {
     themeColor,
     organizerName,
     eventImage,
+    socialLinks,
   } = req.body || {};
 
   if (!toEmail || !eventTitle || !ticketUrl) {
@@ -39,6 +40,7 @@ export default async function handler(req, res) {
     themeColor,
     organizerName,
     eventImage,
+    socialLinks,
   });
 
   try {

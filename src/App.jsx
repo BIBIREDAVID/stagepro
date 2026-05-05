@@ -98,6 +98,38 @@ const normalizeHttpUrl = (value = "") => {
   }
 };
 
+const normalizeSocialUrl = (value = "", hostMatchers = []) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const candidate = raw.startsWith("@")
+    ? raw.slice(1)
+    : raw;
+  const url = candidate.startsWith("http://") || candidate.startsWith("https://")
+    ? candidate
+    : `https://${candidate}`;
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+    return hostMatchers.some((matcher) => host === matcher || host.endsWith(`.${matcher}`))
+      ? parsed.toString()
+      : "";
+  } catch {
+    return "";
+  }
+};
+
+const normalizeSocialLinks = (socialLinks = {}) => ({
+  instagram: normalizeSocialUrl(socialLinks.instagram, ["instagram.com"]),
+  tiktok: normalizeSocialUrl(socialLinks.tiktok, ["tiktok.com"]),
+});
+
+const normalizeGalleryImages = (images = []) => (
+  Array.isArray(images)
+    ? images.map((url) => normalizeHttpUrl(url)).filter(Boolean)
+    : []
+);
+
 const getEventLiveSheetConfig = (event = null) => {
   const liveSheet = event?.liveSheet || {};
   return {
@@ -538,7 +570,7 @@ const calculatePayoutSummary = (tickets) => {
 
 // ── Email ticket via EmailJS ───────────────────────────────────────────────
 // ── Send ticket confirmation email via Resend (Vercel serverless function) ──
-const sendTicketEmail = async ({ toEmail, toName, ticket, eventImage, themeColor, organizerName }) => {
+const sendTicketEmail = async ({ toEmail, toName, ticket, eventImage, themeColor, organizerName, socialLinks }) => {
   try {
     const ticketUrl = `${window.location.origin}/ticket/${ticket.id}`;
     const amountPaid = ticket.price === 0 ? "FREE" : `NGN ${Number(ticket.price).toLocaleString()}`;
@@ -559,6 +591,7 @@ const sendTicketEmail = async ({ toEmail, toName, ticket, eventImage, themeColor
         eventImage: eventImage || null,
         themeColor: themeColor || "#f5a623",
         organizerName: organizerName || "StagePro",
+        socialLinks: normalizeSocialLinks(socialLinks),
       }),
     });
     const payload = await res.json().catch(() => ({}));
@@ -1358,6 +1391,7 @@ export default function App() {
             eventImage: event.image || null,
             themeColor,
             organizerName,
+            socialLinks: event.socialLinks || {},
           });
         }
       }
@@ -1632,10 +1666,13 @@ export default function App() {
         webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
         viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
       };
+      const socialLinks = normalizeSocialLinks(eventData.socialLinks || {});
       const data = {
         ...eventData,
         slug: slugify(eventData.slug || eventData.title || ""),
         image: normalizeEventImageUrl(eventData.image) || DEFAULT_EVENT_IMAGE,
+        galleryImages: normalizeGalleryImages(eventData.galleryImages),
+        socialLinks,
         organizer: currentUser.uid,
         coOrganizers: resolved.uids,
         coOrganizerEmails: requestedCoEmails,
@@ -1688,10 +1725,13 @@ export default function App() {
         webhookUrl: normalizeHttpUrl(eventData.liveSheet?.webhookUrl || eventData.liveSheetWebhookUrl || ""),
         viewUrl: normalizeHttpUrl(eventData.liveSheet?.viewUrl || eventData.liveSheetViewUrl || ""),
       };
+      const socialLinks = normalizeSocialLinks(eventData.socialLinks || {});
       const data = {
         ...eventData,
         slug: slugify(eventData.slug || eventData.title || currentEvent?.title || ""),
         image: normalizeEventImageUrl(eventData.image),
+        galleryImages: normalizeGalleryImages(eventData.galleryImages),
+        socialLinks,
         coOrganizers: resolved.uids,
         coOrganizerEmails: requestedCoEmails,
         coOrganizerInviteEmails: resolved.missing,
@@ -2791,6 +2831,9 @@ function EventPage({ ctx }) {
               <p style={{ color:"var(--muted)", lineHeight:1.8, fontSize:14 }}>{event.description}</p>
             </div>
           )}
+
+          <EventSocialLinks event={event} />
+          <PastEventPhotoStrip event={event} />
 
           {/* Reviews preview */}
           <EventReviewsPreview eventId={event.id} event={event} currentUser={ctx.currentUser} tickets={ctx.tickets} submitReview={ctx.submitReview} />
@@ -4652,38 +4695,92 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
   const [touched, setTouched] = useState({});
   const [imageUploading, setImageUploading] = useState(false);
   const [imageProgress, setImageProgress] = useState(0);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const [galleryProgress, setGalleryProgress] = useState(0);
   const [imgErr, setImgErr] = useState(false);
   const fileInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
 
   const F = (k) => (e) => { setForm(p=>({...p,[k]:e.target.value})); setTouched(p=>({...p,[k]:true})); };
   const updateTier = (i,k,v) => setForm(p=>({...p,tiers:p.tiers.map((t,j)=>j===i?{...t,[k]:v}:t)}));
   const addTier = () => setForm(p=>({...p,tiers:[...p.tiers,{name:"",price:"",total:"",sold:0}]}));
   const removeTier = (i) => setForm(p=>({...p,tiers:p.tiers.filter((_,j)=>j!==i)}));
 
+  const uploadEventImageFile = (file, folder, onProgress) => new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) {
+      reject(new Error("Please select image files only."));
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      reject(new Error("Each image must be under 8MB."));
+      return;
+    }
+    const ownerId = auth.currentUser?.uid || "unknown";
+    const safeName = file.name.replace(/[^a-z0-9.]+/gi, "-").toLowerCase();
+    const path = `event-media/${ownerId}/${folder}/${Date.now()}_${Math.random().toString(36).slice(2)}_${safeName}`;
+    const ref = storageRef(storage, path);
+    const task = uploadBytesResumable(ref, file);
+    task.on("state_changed",
+      snap => onProgress?.(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
+      reject,
+      async () => resolve(await getDownloadURL(task.snapshot.ref))
+    );
+  });
+
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) { alert("Please select an image file."); return; }
-    if (file.size > 5 * 1024 * 1024) { alert("Image must be under 5MB."); return; }
     setImageUploading(true);
     setImageProgress(0);
     try {
-      const ext = file.name.split(".").pop();
-      const path = `events/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-      const ref = storageRef(storage, path);
-      const task = uploadBytesResumable(ref, file);
-      task.on("state_changed",
-        snap => setImageProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)),
-        err => { console.error(err); setImageUploading(false); alert("Upload failed. Try again."); },
-        async () => {
-          const url = await getDownloadURL(task.snapshot.ref);
-          setForm(p => ({ ...p, image: url }));
-          setImageUploading(false);
-          setImageProgress(0);
-        }
-      );
+      const url = await uploadEventImageFile(file, "flyers", setImageProgress);
+      setForm(p => ({ ...p, image: url }));
+      setImgErr(false);
     } catch (err) {
-      console.error(err); setImageUploading(false);
+      console.error(err);
+      alert(err?.message || "Upload failed. Try again.");
+    } finally {
+      setImageUploading(false);
+      setImageProgress(0);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleGalleryUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setGalleryUploading(true);
+    setGalleryProgress(0);
+    try {
+      const uploaded = [];
+      for (let i = 0; i < files.length; i += 1) {
+        const url = await uploadEventImageFile(files[i], "gallery", (progress) => {
+          setGalleryProgress(Math.round(((i + progress / 100) / files.length) * 100));
+        });
+        uploaded.push(url);
+      }
+      setForm(p => ({
+        ...p,
+        galleryImages: [...normalizeGalleryImages(p.galleryImages), ...uploaded].slice(0, 12),
+      }));
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Gallery upload failed. Try again.");
+    } finally {
+      setGalleryUploading(false);
+      setGalleryProgress(0);
+      if (galleryInputRef.current) galleryInputRef.current.value = "";
+    }
+  };
+
+  const removeGalleryImage = async (url) => {
+    setForm(p => ({ ...p, galleryImages: normalizeGalleryImages(p.galleryImages).filter(image => image !== url) }));
+    try {
+      if (String(url || "").includes("firebasestorage.googleapis.com")) {
+        await deleteObject(storageRef(storage, url));
+      }
+    } catch {
+      // A stale gallery URL should not block removing it from the event.
     }
   };
 
@@ -4841,6 +4938,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
         {/* Event Image — URL input */}
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT IMAGE / FLYER</label>
+          <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} style={{ display:"none" }} />
 
           {/* URL input row */}
           <div style={{ display:"flex", gap:8, marginBottom:10 }}>
@@ -4850,6 +4948,10 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
               placeholder="Paste direct image URL (ends in .jpg, .png, .webp...)"
               style={{ ...iStyle("image", false), flex:1, fontSize:13 }}
             />
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={imageUploading}
+              style={{ background:"var(--bg3)", border:"1px solid var(--border)", color:"var(--text)", padding:"0 14px", borderRadius:8, cursor:imageUploading?"wait":"pointer", fontSize:13, flexShrink:0 }}>
+              {imageUploading ? `${imageProgress}%` : "Upload"}
+            </button>
             {form.image && (
               <button type="button" onClick={() => { setForm(p=>({...p, image:""})); setImgErr(false); }}
                 style={{ background:"rgba(232,64,64,0.1)", border:"1px solid var(--red)", color:"var(--red)", padding:"0 14px", borderRadius:8, cursor:"pointer", fontSize:13, flexShrink:0 }}>
@@ -4876,18 +4978,69 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
               <i className="fa-solid fa-triangle-exclamation" style={{ marginRight:6 }} />
               <strong>Image could not load.</strong> Make sure the URL is a <em>direct image link</em> ending in <code>.jpg</code>, <code>.png</code>, or <code>.webp</code>.<br />
               <span style={{ color:"var(--muted)" }}>
-                The URL you pasted may be a page link, not the image itself. See the tip below.
+                The URL you pasted may be a page link, not the image itself.
               </span>
             </div>
           )}
 
           <div style={{ fontSize:11, color:"var(--muted)", lineHeight:1.8 }}>
             <i className="fa-solid fa-circle-info" style={{ marginRight:5, color:"var(--gold)" }} />
-            <strong style={{ color:"var(--text)" }}>Tip:</strong>{" "}
-            Upload to <a href="https://imgur.com/upload" target="_blank" rel="noreferrer" style={{ color:"var(--gold)" }}>imgur.com</a> →
-            once uploaded, <strong style={{ color:"var(--text)" }}>right-click the image → Open image in new tab</strong> →
-            copy that URL (starts with <code style={{ color:"var(--gold)" }}>https://i.imgur.com/</code>).
+            You can upload directly from your device or paste an existing direct image URL.
           </div>
+        </div>
+
+        <div style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:12, padding:18 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:12 }}>
+            <div>
+              <div style={{ fontFamily:"Oswald", fontSize:20 }}>PAST EVENT PHOTOS</div>
+              <div style={{ color:"var(--muted)", fontSize:12, lineHeight:1.6 }}>Upload previous edition photos for the event page review area.</div>
+            </div>
+            <input ref={galleryInputRef} type="file" accept="image/*" multiple onChange={handleGalleryUpload} style={{ display:"none" }} />
+            <button type="button" onClick={() => galleryInputRef.current?.click()} disabled={galleryUploading}
+              style={{ background:"var(--gold)", color:"#000", border:"none", padding:"10px 14px", borderRadius:8, cursor:galleryUploading?"wait":"pointer", fontWeight:700, fontSize:13, flexShrink:0 }}>
+              {galleryUploading ? `${galleryProgress}%` : "Upload Photos"}
+            </button>
+          </div>
+          {normalizeGalleryImages(form.galleryImages).length > 0 ? (
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(120px, 1fr))", gap:10 }}>
+              {normalizeGalleryImages(form.galleryImages).map((url) => (
+                <div key={url} style={{ position:"relative", aspectRatio:"4 / 3", borderRadius:10, overflow:"hidden", border:"1px solid var(--border)", background:"var(--bg2)" }}>
+                  <img src={url} alt="" style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} />
+                  <button type="button" onClick={() => removeGalleryImage(url)} title="Remove photo"
+                    style={{ position:"absolute", top:6, right:6, width:28, height:28, borderRadius:"50%", border:"1px solid rgba(0,0,0,0.3)", background:"rgba(8,8,8,0.78)", color:"#fff", cursor:"pointer" }}>
+                    <i className="fa-solid fa-xmark" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ color:"var(--muted)", fontSize:12, border:"1px dashed var(--border)", borderRadius:10, padding:"18px", textAlign:"center" }}>No past photos uploaded yet.</div>
+          )}
+        </div>
+
+        <div>
+          <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>SOCIAL MEDIA LINKS</label>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div style={{ position:"relative" }}>
+              <i className="fa-brands fa-instagram" style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", color:"var(--gold)" }} />
+              <input
+                value={form.socialLinks?.instagram || ""}
+                onChange={e => setForm(p => ({ ...p, socialLinks:{ ...(p.socialLinks || {}), instagram:e.target.value } }))}
+                placeholder="instagram.com/yourpage"
+                style={{ ...iStyle("instagram", false), paddingLeft:38 }}
+              />
+            </div>
+            <div style={{ position:"relative" }}>
+              <i className="fa-brands fa-tiktok" style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", color:"var(--gold)" }} />
+              <input
+                value={form.socialLinks?.tiktok || ""}
+                onChange={e => setForm(p => ({ ...p, socialLinks:{ ...(p.socialLinks || {}), tiktok:e.target.value } }))}
+                placeholder="tiktok.com/@yourpage"
+                style={{ ...iStyle("tiktok", false), paddingLeft:38 }}
+              />
+            </div>
+          </div>
+          <div style={{ color:"var(--muted)", fontSize:11, marginTop:6 }}>These appear on the event page and in ticket emails.</div>
         </div>
 
         {/* Banner Theme / Color */}
@@ -4987,7 +5140,7 @@ function CreateEventPage({ ctx }) {
   const { createEvent } = ctx;
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
-  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", theme:"", coOrganizerEmailsText:"", liveSheetWebhookUrl:"", liveSheetViewUrl:"", tiers:[{ name:"General", price:"", total:"" }] };
+  const blank = { title:"", subtitle:"", date:"", time:"", venue:"", category:"Concert", visibility:"public", description:"", image:"", galleryImages:[], socialLinks:{ instagram:"", tiktok:"" }, theme:"", coOrganizerEmailsText:"", liveSheetWebhookUrl:"", liveSheetViewUrl:"", tiers:[{ name:"General", price:"", total:"" }] };
   const handle = async (form) => {
     setSaving(true);
     const ev = await createEvent(form);
@@ -5019,6 +5172,8 @@ function EditEventPage({ ctx }) {
     time: event.time||"", venue: event.venue, category: event.category||"Concert", visibility: event.visibility || "public",
     description: event.description||"",
     image: event.image||"",
+    galleryImages: normalizeGalleryImages(event.galleryImages),
+    socialLinks: { instagram: event.socialLinks?.instagram || "", tiktok: event.socialLinks?.tiktok || "" },
     theme: event.theme||"",
     coOrganizerEmailsText: Array.isArray(event.coOrganizerEmails) ? event.coOrganizerEmails.join(", ") : "",
     liveSheetWebhookUrl: event.liveSheet?.webhookUrl || event.liveSheetWebhookUrl || "",
@@ -6617,6 +6772,60 @@ function ProfilePage({ ctx }) {
 }
 
 // ── Event Reviews Preview (embedded in EventPage) ──────────────────────────
+function EventSocialLinks({ event }) {
+  const socialLinks = normalizeSocialLinks(event?.socialLinks || {});
+  const links = [
+    { key:"instagram", label:"Instagram", icon:"fa-brands fa-instagram", href:socialLinks.instagram },
+    { key:"tiktok", label:"TikTok", icon:"fa-brands fa-tiktok", href:socialLinks.tiktok },
+  ].filter(link => link.href);
+
+  if (!links.length) return null;
+
+  return (
+    <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:16 }}>
+      {links.map(link => (
+        <a key={link.key} href={link.href} target="_blank" rel="noreferrer"
+          style={{ display:"inline-flex", alignItems:"center", gap:8, background:"var(--bg2)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:10, padding:"10px 14px", fontSize:13, fontWeight:700 }}>
+          <i className={link.icon} style={{ color:"var(--gold)" }} />
+          {link.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function PastEventPhotoStrip({ event }) {
+  const images = normalizeGalleryImages(event?.galleryImages);
+  if (!images.length) return null;
+
+  return (
+    <div style={{ marginTop:16 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <h3 style={{ fontSize:18 }}>PHOTOS FROM PREVIOUS EDITIONS</h3>
+        <span style={{ color:"var(--muted)", fontSize:12 }}>{images.length} photo{images.length === 1 ? "" : "s"}</span>
+      </div>
+      <div style={{
+        display:"grid",
+        gridAutoFlow:"column",
+        gridAutoColumns:"minmax(180px, 42%)",
+        gap:10,
+        overflowX:"auto",
+        overscrollBehaviorInline:"contain",
+        scrollSnapType:"inline mandatory",
+        padding:"2px 4px 12px 0",
+      }}>
+        {images.map((url, index) => (
+          <a key={url} href={url} target="_blank" rel="noreferrer"
+            style={{ scrollSnapAlign:"start", aspectRatio:"4 / 3", borderRadius:12, overflow:"hidden", border:"1px solid var(--border)", background:"var(--bg2)", display:"block" }}>
+            <img src={url} alt={`${event?.title || "Event"} previous edition ${index + 1}`} loading="lazy"
+              style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} />
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EventReviewsPreview({ eventId, event, currentUser, tickets, submitReview }) {
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);

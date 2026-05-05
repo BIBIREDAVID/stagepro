@@ -258,6 +258,7 @@ export default async function handler(req, res) {
           themeColor,
           organizerName,
           eventImage: event.image || "",
+          socialLinks: event.socialLinks || {},
         });
         return sendEmailWithFallback({
           to: buyerEmail,

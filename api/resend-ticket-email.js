@@ -28,11 +28,13 @@ export default async function handler(req, res) {
 
     let organizerName = "StagePro";
     let eventImage = String(f.eventImage || "").trim();
+    let socialLinks = {};
     if (f.eventId) {
       const eventDoc = await db.collection("events").doc(String(f.eventId)).get();
       if (eventDoc.exists) {
         const event = eventDoc.data() || {};
         if (!eventImage) eventImage = String(event.image || "").trim();
+        socialLinks = event.socialLinks || {};
         if (event.organizer) {
           const organizerDoc = await db.collection("users").doc(String(event.organizer)).get();
           if (organizerDoc.exists) {
@@ -56,6 +58,7 @@ export default async function handler(req, res) {
       organizerName,
       eventImage,
       appBaseUrl,
+      socialLinks,
     });
 
     const delivery = await sendEmailWithFallback({
