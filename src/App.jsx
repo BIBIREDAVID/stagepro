@@ -31,7 +31,6 @@ import {
   setDoc,
   addDoc,
   updateDoc,
-  deleteDoc,
   query,
   where,
   orderBy,
@@ -422,6 +421,20 @@ const mergeEventTiersWithSoldCounts = (event = {}, soldCounts = null) => {
         : Number(tier?.sold || 0),
     })),
   };
+};
+
+const isArchivedEvent = (event = {}) =>
+  event?.archived === true || event?.status === "archived";
+
+const isPastEvent = (event = {}) => {
+  if (!event?.date) return false;
+  const eventEnd = new Date(`${event.date}T23:59:59`);
+  return Number.isFinite(eventEnd.getTime()) && eventEnd.getTime() < Date.now();
+};
+
+const getEventLifecycle = (event = {}) => {
+  if (isArchivedEvent(event)) return "archived";
+  return isPastEvent(event) ? "past" : "upcoming";
 };
 
 const fetchPublicSoldCounts = async (eventIds = []) => {
@@ -1774,15 +1787,23 @@ export default function App() {
     }
   };
 
-  const deleteEvent = async (eventId) => {
+  const archiveEvent = async (eventId, archived = true) => {
     try {
-      await deleteDoc(doc(db, "events", eventId));
-      setEvents(prev => prev.filter(e => e.id !== eventId));
-      notify("Event deleted.");
+      const update = {
+        archived,
+        status: archived ? "archived" : "published",
+        visibility: archived ? "private" : "public",
+        updatedAt: new Date().toISOString(),
+        ...(archived ? { archivedAt: new Date().toISOString() } : { restoredAt: new Date().toISOString() }),
+      };
+      await updateDoc(doc(db, "events", eventId), update);
+      setEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...update } : e));
+      setOrganizerEvents(prev => prev.map(e => e.id === eventId ? { ...e, ...update } : e));
+      notify(archived ? "Event archived. Records are preserved." : "Event restored to public listings.");
       return true;
     } catch (err) {
       console.error(err);
-      notify("Failed to delete event.", "error");
+      notify(archived ? "Failed to archive event." : "Failed to restore event.", "error");
       return false;
     }
   };
@@ -1981,7 +2002,7 @@ export default function App() {
     }
   };
 
-  const ctx = { currentUser, events, publicSoldCounts, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, createScannerAccount, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, deleteEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist, syncEventLiveSheet };
+  const ctx = { currentUser, events, publicSoldCounts, organizerEvents, tickets, organizerNotifications, organizerAttendeeFeed, eventsLoading, notify, login, loginWithGoogle, register, logout, createScannerAccount, purchaseTickets, validateTicket, issueComplimentaryTickets, createEvent, updateEvent, archiveEvent, transferTicket, refreshEvents, updateProfile, submitReview, joinWaitlist, syncEventLiveSheet };
 
   return (
     <BrowserRouter>
@@ -2335,6 +2356,7 @@ function HomePage({ ctx }) {
 
   const filtered = events
     .filter(e => (e.visibility || "public") === "public")
+    .filter(e => !isArchivedEvent(e) && !isPastEvent(e))
     .filter(e => filter === "All" || e.category === filter)
     .filter(e => {
       const q = search.toLowerCase();
@@ -2744,6 +2766,9 @@ function EventPage({ ctx }) {
 
   if (loading) return <Spinner />;
   if (!event) return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
+  if (isArchivedEvent(event) && !isEventManager(event, currentUser)) {
+    return <div style={{ textAlign:"center", padding:80, color:"var(--muted)" }}>Event not found.</div>;
+  }
 
   const liveCounts = publicSoldCounts;
   const totalItems = Object.values(cart).reduce((s,q) => s+q, 0);
@@ -3383,7 +3408,7 @@ function MyTicketsPage({ ctx }) {
 
 // ── Dashboard Page ─────────────────────────────────────────────────────────
 function DashboardPage({ ctx }) {
-  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, deleteEvent, refreshEvents, notify, syncEventLiveSheet, createScannerAccount } = ctx;
+  const { organizerEvents, tickets, currentUser, organizerNotifications, organizerAttendeeFeed, issueComplimentaryTickets, archiveEvent, refreshEvents, notify, syncEventLiveSheet, createScannerAccount } = ctx;
   const [searchParams] = useSearchParams();
   const adminOrganizerId = currentUser?.role === "admin" ? (searchParams.get("organizerId") || "").trim() : "";
   const isAdminView = currentUser?.role === "admin" && Boolean(adminOrganizerId);
@@ -3393,7 +3418,7 @@ function DashboardPage({ ctx }) {
   const [adminTickets, setAdminTickets] = useState([]);
   const [adminNotifications, setAdminNotifications] = useState([]);
   const [adminAttendeeFeed, setAdminAttendeeFeed] = useState([]);
-  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [confirmArchive, setConfirmArchive] = useState(null);
   const [compModalEvent, setCompModalEvent] = useState(null);
   const [compTierId, setCompTierId] = useState("");
   const [compQty, setCompQty] = useState("1");
@@ -3403,6 +3428,7 @@ function DashboardPage({ ctx }) {
   const [syncingEventId, setSyncingEventId] = useState("");
   const [resendingEventId, setResendingEventId] = useState("");
   const [view, setView] = useState("list"); // list | calendar | payouts
+  const [eventTab, setEventTab] = useState("upcoming");
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { year:d.getFullYear(), month:d.getMonth() }; });
   const [payoutRecords, setPayoutRecords] = useState([]);
   const [webhookCopyState, setWebhookCopyState] = useState("idle");
@@ -3538,8 +3564,15 @@ function DashboardPage({ ctx }) {
     return () => unsub();
   }, [isAdminView, adminOrganizerId]);
 
-  const myEvents = activeEvents;
-  const myEventIds = new Set(myEvents.map(e => e.id));
+  const allDashboardEvents = activeEvents;
+  const eventTabs = [
+    { id:"upcoming", label:"Upcoming", events: allDashboardEvents.filter(e => getEventLifecycle(e) === "upcoming") },
+    { id:"past", label:"Past", events: allDashboardEvents.filter(e => getEventLifecycle(e) === "past") },
+    { id:"archived", label:"Archived", events: allDashboardEvents.filter(e => getEventLifecycle(e) === "archived") },
+  ];
+  const selectedTab = eventTabs.find(tab => tab.id === eventTab) || eventTabs[0];
+  const myEvents = selectedTab.events;
+  const myEventIds = new Set(allDashboardEvents.map(e => e.id));
   const myTickets = activeTickets.filter(t => myEventIds.has(t.eventId));
   const attendeePayments = [...myTickets]
     .sort((a, b) => new Date(b.purchasedAt || 0).getTime() - new Date(a.purchasedAt || 0).getTime())
@@ -3549,7 +3582,7 @@ function DashboardPage({ ctx }) {
   // Use actual ticket documents as the dashboard source of truth so sales stay
   // consistent even if soldCounts updates are delayed or blocked.
   const totalSold = myTickets.length;
-  const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
+  const totalCap  = allDashboardEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
   const revenue   = payoutSummary.gross;
   const totalCheckedIn = myTickets.filter(t => t.used).length;
   const totalOrders = payoutSummary.orderCount;
@@ -3559,7 +3592,7 @@ function DashboardPage({ ctx }) {
   const paidTickets = myTickets.filter(t => t.paymentStatus === "paid" && getPaymentReference(t));
 
   // Per-event payout data
-  const payoutByEvent = myEvents.map(e => {
+  const payoutByEvent = allDashboardEvents.map(e => {
     const eTickets = myTickets.filter(t => t.eventId === e.id);
     const eGross = eTickets.reduce((s,t) => s + (t.price||0), 0);
     const ePaidOrders = [...new Set(eTickets.map(getPaymentReference).filter(Boolean))].length;
@@ -3578,7 +3611,7 @@ function DashboardPage({ ctx }) {
   const organizerLiveSheetConfig = activeOrganizer?.liveSheet || {};
   const organizerLiveSheetViewUrl = String(organizerLiveSheetConfig.viewUrl || "").trim();
   const organizerLiveSheetWebhookUrl = String(organizerLiveSheetConfig.webhookUrl || "").trim();
-  const eventsWithLiveSheets = myEvents
+  const eventsWithLiveSheets = allDashboardEvents
     .map(event => ({ event, config: getEventLiveSheetConfig(event) }))
     .filter(({ config }) => config.viewUrl || config.webhookUrl);
   const hasPayoutDetails = Boolean(
@@ -3601,10 +3634,14 @@ function DashboardPage({ ctx }) {
     loadPayouts();
   }, [payoutOwnerId]);
 
-  const handleDelete = async (event) => {
+  const handleArchive = async (event) => {
     if (!canManage) return;
-    await deleteEvent(event.id);
-    setConfirmDelete(null);
+    await archiveEvent(event.id, true);
+    setConfirmArchive(null);
+  };
+  const handleRestoreEvent = async (event) => {
+    if (!canManage) return;
+    await archiveEvent(event.id, false);
   };
   const openCompModal = (event) => {
     setCompModalEvent(event);
@@ -3816,16 +3853,16 @@ function DashboardPage({ ctx }) {
         </div>
       )}
 
-      {/* Delete confirm modal */}
-      {canManage && confirmDelete && (
-        <div onClick={() => setConfirmDelete(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+      {/* Archive confirm modal */}
+      {canManage && confirmArchive && (
+        <div onClick={() => setConfirmArchive(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32, maxWidth:400, width:"100%", animation:"fadeUp 0.3s ease" }}>
-            <div style={{ fontSize:40, marginBottom:16, color:"var(--red)" }}><i className="fa-solid fa-trash" /></div>
-            <h2 style={{ fontFamily:"Oswald", fontSize:28, marginBottom:8 }}>DELETE EVENT?</h2>
-            <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>This will permanently delete <strong style={{ color:"var(--text)" }}>{confirmDelete.title}</strong>. This action cannot be undone.</p>
+            <div style={{ fontSize:40, marginBottom:16, color:"var(--gold)" }}><i className="fa-solid fa-box-archive" /></div>
+            <h2 style={{ fontFamily:"Oswald", fontSize:28, marginBottom:8 }}>ARCHIVE EVENT?</h2>
+            <p style={{ color:"var(--muted)", fontSize:14, marginBottom:24 }}>This will hide <strong style={{ color:"var(--text)" }}>{confirmArchive.title}</strong> from public listings and keep all records, tickets, photos, reviews, and payout data.</p>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-              <button onClick={() => setConfirmDelete(null)} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:12, borderRadius:10, cursor:"pointer", fontWeight:600 }}>Cancel</button>
-              <button onClick={() => handleDelete(confirmDelete)} style={{ background:"var(--red)", border:"none", color:"#fff", padding:12, borderRadius:10, cursor:"pointer", fontFamily:"Oswald", fontSize:18, letterSpacing:1 }}>DELETE</button>
+              <button onClick={() => setConfirmArchive(null)} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:12, borderRadius:10, cursor:"pointer", fontWeight:600 }}>Cancel</button>
+              <button onClick={() => handleArchive(confirmArchive)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:12, borderRadius:10, cursor:"pointer", fontFamily:"Oswald", fontSize:18, letterSpacing:1 }}>ARCHIVE</button>
             </div>
           </div>
         </div>
@@ -4158,10 +4195,18 @@ function DashboardPage({ ctx }) {
           <h3 style={{ fontSize:22 }}>{isAdminView ? "ORGANIZER EVENTS" : "YOUR EVENTS"}</h3>
           <span style={{ fontSize:12, color:"var(--muted)" }}><i className="fa-solid fa-circle-info" style={{marginRight:4}} />CSV downloads buyer list</span>
         </div>
+        <div style={{ display:"flex", gap:8, padding:"14px 24px", borderBottom:"1px solid var(--border)", flexWrap:"wrap" }}>
+          {eventTabs.map(tab => (
+            <button key={tab.id} onClick={() => setEventTab(tab.id)}
+              style={{ background:eventTab===tab.id?"var(--gold)":"var(--bg3)", color:eventTab===tab.id?"#000":"var(--muted)", border:`1px solid ${eventTab===tab.id?"var(--gold)":"var(--border)"}`, borderRadius:100, padding:"7px 14px", cursor:"pointer", fontWeight:700, fontSize:12 }}>
+              {tab.label} <span style={{ opacity:0.75 }}>({tab.events.length})</span>
+            </button>
+          ))}
+        </div>
         {myEvents.length===0 ? (
           <div style={{ padding:40, textAlign:"center", color:"var(--muted)" }}>
-            No events yet.
-            {canManage && <span> <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></span>}
+            No {selectedTab.label.toLowerCase()} events.
+            {canManage && eventTab === "upcoming" && <span> <Link to="/dashboard/create" style={{ color:"var(--gold)" }}>Create your first one!</Link></span>}
           </div>
        ) : myEvents.map((event, i) => {
           const eventTickets = myTickets.filter(t => t.eventId === event.id);
@@ -4187,6 +4232,9 @@ function DashboardPage({ ctx }) {
                 <div style={{ flex:1, minWidth:160 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:2 }}>
                     <div style={{ fontWeight:600 }}>{event.title}</div>
+                    <span style={{ background:getEventLifecycle(event)==="archived" ? "rgba(245,166,35,0.12)" : getEventLifecycle(event)==="past" ? "rgba(119,119,119,0.16)" : "rgba(61,220,132,0.14)", color:getEventLifecycle(event)==="archived" ? "var(--gold)" : getEventLifecycle(event)==="past" ? "var(--muted)" : "var(--green)", padding:"2px 8px", borderRadius:100, fontSize:10, fontWeight:700 }}>
+                      {getEventLifecycle(event).toUpperCase()}
+                    </span>
                     <span style={{ background:(event.visibility || "public") === "private" ? "rgba(232,64,64,0.12)" : "rgba(61,220,132,0.14)", color:(event.visibility || "public") === "private" ? "var(--red)" : "var(--green)", padding:"2px 8px", borderRadius:100, fontSize:10, fontWeight:700 }}>
                       {(event.visibility || "public").toUpperCase()}
                     </span>
@@ -4266,7 +4314,15 @@ function DashboardPage({ ctx }) {
                   <button onClick={() => downloadCSVWithEmail(event, myTickets)} style={{ background:"var(--gold)", border:"none", color:"#000", padding:"7px 12px", borderRadius:8, fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", gap:4 }}>
                     <i className="fa-solid fa-download" style={{marginRight:5}} />{eventTickets.length > 0 && <span style={{ background:"rgba(0,0,0,0.2)", borderRadius:100, padding:"1px 6px", fontSize:11 }}>{eventTickets.length}</span>}
                   </button>
-                  {canManage && <button onClick={() => setConfirmDelete(event)} style={{ background:"rgba(232,64,64,0.1)", border:"1px solid rgba(232,64,64,0.3)", color:"var(--red)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}><i className="fa-solid fa-trash" /></button>}
+                  {canManage && getEventLifecycle(event) === "archived" ? (
+                    <button onClick={() => handleRestoreEvent(event)} style={{ background:"rgba(61,220,132,0.12)", border:"1px solid rgba(61,220,132,0.24)", color:"var(--green)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer", fontWeight:700 }}>
+                      <i className="fa-solid fa-arrow-rotate-left" style={{ marginRight:5 }} />Restore
+                    </button>
+                  ) : canManage && (
+                    <button onClick={() => setConfirmArchive(event)} style={{ background:"rgba(245,166,35,0.1)", border:"1px solid var(--gold-dim)", color:"var(--gold)", padding:"7px 12px", borderRadius:8, fontSize:13, cursor:"pointer" }}>
+                      <i className="fa-solid fa-box-archive" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
