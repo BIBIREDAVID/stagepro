@@ -2447,9 +2447,11 @@ function EventCard({ event, index, publicSoldCounts }) {
   const minPrice = Math.min(...event.tiers.map(t => t.price));
   const totalSold = event.tiers.reduce((s,t) => s + getLiveSold(event, t.id, publicSoldCounts), 0);
   const totalCap = event.tiers.reduce((s,t) => s+t.total, 0);
-  const pct = Math.round((totalSold/totalCap)*100);
+  const pct = totalCap ? Math.round((totalSold/totalCap)*100) : 0;
+  const pctLabel = totalSold > 0 && pct === 0 ? "<1% full" : `${pct}% full`;
   const hasImage = !!event.image;
   const bg = getEventBg(event);
+  const isFree = Number(minPrice || 0) === 0;
 
   return (
           <Link to={eventPath(event)} style={{ display:"block", background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, overflow:"hidden", transition:"transform 0.3s, border-color 0.3s", animation:`fadeUp 0.5s ${index*0.1}s ease both` }}
@@ -2479,16 +2481,16 @@ function EventCard({ event, index, publicSoldCounts }) {
         <div style={{ fontSize:13, color:"var(--muted)", marginBottom:16 }}><i className="fa-solid fa-location-dot" style={{marginRight:6,color:"var(--gold)"}} />{event.venue}</div>
         <div style={{ marginBottom:16 }}>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:"var(--muted)", marginBottom:6 }}>
-            <span>{totalSold} sold</span><span>{pct}% full</span>
+            <span>{totalSold} sold</span><span>{pctLabel}</span>
           </div>
           <div style={{ height:3, background:"var(--border)", borderRadius:2 }}>
             <div style={{ height:"100%", width:`${pct}%`, background: pct>80?"var(--red)":"var(--gold)", borderRadius:2 }} />
           </div>
         </div>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <div>
-            <span style={{ fontSize:11, color:"var(--muted)" }}>FROM </span>
-            <span style={{ fontFamily:"Oswald", fontSize:24, color:"var(--gold)" }}>{fmt(minPrice)}</span>
+          <div style={{ display:"flex", flexDirection:"column", gap:2, minWidth:0 }}>
+            {!isFree && <span style={{ fontSize:11, color:"var(--muted)", lineHeight:1 }}>FROM</span>}
+            <span style={{ fontFamily:"Oswald", fontSize:24, lineHeight:1, color:"var(--gold)" }}>{isFree ? "FREE" : fmt(minPrice)}</span>
           </div>
           <span style={{ background:"var(--gold)", color:"#000", padding:"8px 18px", borderRadius:8, fontWeight:700, fontSize:13 }}>Get Tickets →</span>
         </div>
