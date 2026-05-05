@@ -1,6 +1,7 @@
 import { getAdminDb } from "../server/firebaseAdmin.js";
 import { sendEmailWithFallback } from "../server/email.js";
 import { buildTicketEmail } from "../server/ticketEmail.js";
+import { getAppBaseUrl } from "../server/appUrl.js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -9,7 +10,8 @@ export default async function handler(req, res) {
   if (!ticketId) return res.status(400).json({ error: "ticketId required" });
 
   try {
-    const ticketDoc = await getAdminDb().collection("tickets").doc(ticketId).get();
+    const db = getAdminDb();
+    const ticketDoc = await db.collection("tickets").doc(ticketId).get();
     if (!ticketDoc.exists) return res.status(404).json({ error: "Ticket not found" });
 
     const f = ticketDoc.data() || {};
@@ -17,12 +19,28 @@ export default async function handler(req, res) {
     if (!toEmail) return res.status(400).json({ error: "No email on ticket" });
 
     const price = Number(f.price || 0);
-    const amountPaid = price === 0 ? "FREE" : `₦${price.toLocaleString()}`;
-    const appBaseUrl = (process.env.PUBLIC_APP_URL || "https://stagepro-phi.vercel.app").replace(/\/+$/, "");
+    const amountPaid = price === 0 ? "FREE" : `NGN ${price.toLocaleString()}`;
+    const appBaseUrl = getAppBaseUrl(req);
     const ticketUrl = `${appBaseUrl}/ticket/${ticketId}`;
     const formattedDate = f.eventDate
       ? new Date(f.eventDate).toLocaleDateString("en-NG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })
       : "See event page";
+
+    let organizerName = "StagePro";
+    let eventImage = String(f.eventImage || "").trim();
+    if (f.eventId) {
+      const eventDoc = await db.collection("events").doc(String(f.eventId)).get();
+      if (eventDoc.exists) {
+        const event = eventDoc.data() || {};
+        if (!eventImage) eventImage = String(event.image || "").trim();
+        if (event.organizer) {
+          const organizerDoc = await db.collection("users").doc(String(event.organizer)).get();
+          if (organizerDoc.exists) {
+            organizerName = String(organizerDoc.data()?.name || "").trim() || organizerName;
+          }
+        }
+      }
+    }
 
     const message = buildTicketEmail({
       toName: f.userName || "there",
@@ -35,13 +53,14 @@ export default async function handler(req, res) {
       ticketUrl,
       ticketId,
       themeColor: "#f5a623",
-      organizerName: "StagePro",
-      eventImage: f.eventImage || "",
+      organizerName,
+      eventImage,
+      appBaseUrl,
     });
 
     const delivery = await sendEmailWithFallback({
       to: toEmail,
-      subject: `${message.subject} (Resent)`,
+      subject: `Resent Ticket ${ticketId} for ${f.eventTitle || "StagePro Event"} - StagePro`,
       html: message.html,
       fromName: "StagePro Tickets",
     });
