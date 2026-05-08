@@ -6854,32 +6854,103 @@ function EventSocialLinks({ event }) {
 
 function PastEventPhotoStrip({ event }) {
   const images = normalizeGalleryImages(event?.galleryImages);
+  const [cur, setCur] = useState(0);
+  const trackRef = useRef(null);
+  const startXRef = useRef(null);
+
   if (!images.length) return null;
 
+  const total = images.length;
+  const goTo = (n) => setCur(((n % total) + total) % total);
+
+  const onTouchStart = (e) => { startXRef.current = e.touches[0].clientX; };
+  const onTouchEnd = (e) => {
+    if (startXRef.current === null) return;
+    const diff = startXRef.current - e.changedTouches[0].clientX;
+    if (Math.abs(diff) > 40) goTo(cur + (diff > 0 ? 1 : -1));
+    startXRef.current = null;
+  };
+
   return (
-    <div style={{ marginTop:16 }}>
+    <div style={{ marginTop: 16 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
         <h3 style={{ fontSize:18 }}>PHOTOS FROM PREVIOUS EDITIONS</h3>
-        <span style={{ color:"var(--muted)", fontSize:12 }}>{images.length} photo{images.length === 1 ? "" : "s"}</span>
+        <span style={{ color:"var(--muted)", fontSize:12 }}>{total} photo{total === 1 ? "" : "s"}</span>
       </div>
-      <div style={{
-        display:"grid",
-        gridAutoFlow:"column",
-        gridAutoColumns:"minmax(180px, 42%)",
-        gap:10,
-        overflowX:"auto",
-        overscrollBehaviorInline:"contain",
-        scrollSnapType:"inline mandatory",
-        padding:"2px 4px 12px 0",
-      }}>
-        {images.map((url, index) => (
-          <a key={url} href={url} target="_blank" rel="noreferrer"
-            style={{ scrollSnapAlign:"start", aspectRatio:"4 / 3", borderRadius:12, overflow:"hidden", border:"1px solid var(--border)", background:"var(--bg2)", display:"block" }}>
-            <img src={url} alt={`${event?.title || "Event"} previous edition ${index + 1}`} loading="lazy"
-              style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }} />
-          </a>
-        ))}
+
+      <div style={{ position:"relative", borderRadius:12, overflow:"hidden", background:"var(--bg3)" }}>
+        {/* Track */}
+        <div
+          ref={trackRef}
+          onTouchStart={onTouchStart}
+          onTouchEnd={onTouchEnd}
+          style={{
+            display:"flex",
+            transform:`translateX(-${cur * 100}%)`,
+            transition:"transform 0.35s ease",
+            willChange:"transform",
+          }}
+        >
+          {images.map((url, i) => (
+            <div key={url} style={{ flex:"0 0 100%", aspectRatio:"16/9", overflow:"hidden" }}>
+              <img
+                src={url}
+                alt={`${event?.title || "Event"} photo ${i + 1}`}
+                loading="lazy"
+                style={{ width:"100%", height:"100%", objectFit:"cover", display:"block", pointerEvents:"none", userSelect:"none" }}
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Prev / Next buttons — only show if more than 1 image */}
+        {total > 1 && (
+          <>
+            <button
+              onClick={() => goTo(cur - 1)}
+              aria-label="Previous photo"
+              style={{ position:"absolute", top:"50%", left:10, transform:"translateY(-50%)", background:"rgba(0,0,0,0.55)", border:"none", borderRadius:"50%", width:36, height:36, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", zIndex:2 }}
+            >
+              <i className="fa-solid fa-chevron-left" style={{ fontSize:14 }} />
+            </button>
+            <button
+              onClick={() => goTo(cur + 1)}
+              aria-label="Next photo"
+              style={{ position:"absolute", top:"50%", right:10, transform:"translateY(-50%)", background:"rgba(0,0,0,0.55)", border:"none", borderRadius:"50%", width:36, height:36, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", zIndex:2 }}
+            >
+              <i className="fa-solid fa-chevron-right" style={{ fontSize:14 }} />
+            </button>
+          </>
+        )}
+
+        {/* Count badge */}
+        <div style={{ position:"absolute", bottom:8, right:10, background:"rgba(0,0,0,0.55)", color:"#fff", fontSize:12, padding:"2px 8px", borderRadius:20 }}>
+          {cur + 1} / {total}
+        </div>
       </div>
+
+      {/* Dot indicators */}
+      {total > 1 && (
+        <div style={{ display:"flex", justifyContent:"center", gap:6, paddingTop:10 }}>
+          {images.map((_, i) => (
+            <button
+              key={i}
+              onClick={() => goTo(i)}
+              aria-label={`Go to photo ${i + 1}`}
+              style={{
+                width: i === cur ? 18 : 6,
+                height:6,
+                borderRadius:3,
+                border:"none",
+                cursor:"pointer",
+                padding:0,
+                background: i === cur ? "var(--gold)" : "var(--border)",
+                transition:"width 0.2s, background 0.2s",
+              }}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
