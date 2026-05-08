@@ -673,9 +673,11 @@ const STYLE = `
   }
   @media (max-width: 600px) {
     nav { padding: 10px 16px !important; height: auto !important; min-height: 60px; }
-    .nav-shell { align-items: flex-start !important; gap: 12px !important; }
-    .nav-actions { gap: 6px !important; flex-wrap: wrap !important; justify-content: flex-end !important; max-width: 72%; }
+    .nav-shell { align-items: flex-start !important; gap: 12px !important; flex-wrap: wrap !important; justify-content: space-between !important; }
+    .nav-shell > a:first-child { flex-shrink: 0 !important; }
+    .nav-actions { width: 100% !important; max-width: none !important; gap: 6px !important; flex-wrap: wrap !important; justify-content: flex-start !important; }
     .nav-actions a, .nav-actions button { font-size: 12px !important; padding: 6px 10px !important; }
+    .mobile-stack-2 { grid-template-columns: 1fr !important; }
     .footer-grid { padding: 44px 20px 32px !important; gap: 24px !important; }
     .footer-link { display: inline-block !important; padding: 6px 0 !important; min-height: 32px; }
     .footer-social { gap: 8px !important; }
@@ -2842,7 +2844,7 @@ function EventPage({ ctx }) {
         {/* Left — info */}
         <div>
           {/* Info cards — 2-col on desktop, 2-col on mobile too but smaller */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:24 }}>
+          <div className="mobile-stack-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:24 }}>
             {[[<i className="fa-regular fa-calendar" />,"Date",fmtDate(event.date)],[<i className="fa-regular fa-clock" />,"Time",event.time||"TBA"],[<i className="fa-solid fa-location-dot" />,"Venue",event.venue],[<i className="fa-solid fa-tag" />,"Category",event.category]].map(([icon,l,v]) => (
               <div key={l} style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:12, padding:"14px 16px" }}>
                 <div style={{ fontSize:13, color:"var(--muted)", marginBottom:4 }}>{icon} {l}</div>
@@ -4872,7 +4874,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
       <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
 
         {/* Title & Subtitle */}
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+        <div className="mobile-stack-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
           <div>
             <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>EVENT TITLE <Req /></label>
             <input value={form.title} onChange={F("title")} onBlur={()=>setTouched(p=>({...p,title:true}))} placeholder="e.g. Neon Festival 2025" style={iStyle("title", touched.title&&!form.title)} />
@@ -4905,7 +4907,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
 
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:10, display:"block", letterSpacing:1 }}>EVENT VISIBILITY</label>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div className="mobile-stack-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
             {[
               {
                 id: "public",
@@ -5076,7 +5078,7 @@ function EventForm({ initialForm, onSubmit, saving, submitLabel, pageTitle, page
 
         <div>
           <label style={{ fontSize:12, color:"var(--muted)", marginBottom:8, display:"block", letterSpacing:1 }}>SOCIAL MEDIA LINKS</label>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div className="mobile-stack-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
             <div style={{ position:"relative" }}>
               <i className="fa-brands fa-instagram" style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", color:"var(--gold)" }} />
               <input
@@ -7680,7 +7682,7 @@ function ContactPage() {
             </div>
           ) : (
             <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:32 }}>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+              <div className="mobile-stack-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
                 <div>
                   <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>FULL NAME *</label>
                   <input value={form.name} onChange={F("name")} placeholder="Amara Okafor" style={iStyle} />
@@ -7691,7 +7693,7 @@ function ContactPage() {
                 </div>
               </div>
 
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+              <div className="mobile-stack-2" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
                 <div>
                   <label style={{ fontSize:11, color:"var(--muted)", letterSpacing:1, marginBottom:6, display:"block" }}>CATEGORY</label>
                   <select value={form.category} onChange={F("category")} style={{...iStyle, background:"var(--bg3)"}}>
