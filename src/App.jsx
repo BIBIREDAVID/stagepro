@@ -812,16 +812,54 @@ function Input({ label, ...props }) {
 
 // ── Nav ────────────────────────────────────────────────────────────────────
 function Nav({ currentUser, logout, notification, events }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Close menu on route change
+  const location = useLocation();
+  useEffect(() => { setMenuOpen(false); }, [location]);
+
+  // Prevent body scroll when menu is open
+  useEffect(() => {
+    document.body.style.overflow = menuOpen ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [menuOpen]);
+
+  const navLinks = currentUser ? (
+    currentUser.role === "organizer" ? [
+      { to: "/dashboard", label: "Dashboard" },
+      { to: "/validate", label: "Scan Tickets" },
+    ] : currentUser.role === "customer" ? [
+      { to: "/tickets", label: "My Tickets" },
+    ] : currentUser.role === "admin" ? [
+      { to: "/admin", label: "Admin" },
+    ] : currentUser.role === "scanner" ? [
+      { to: "/validate", label: "Scan Tickets" },
+    ] : []
+  ) : [
+    { to: "/find-tickets", label: "Find My Tickets" },
+    { to: "/login", label: "Login" },
+  ];
+
   return (
     <>
       <style>{STYLE}</style>
       {notification && <Notification {...notification} />}
-      <nav className="nav-shell" style={{ position:"sticky", top:0, zIndex:100, background:"var(--nav-bg)", backdropFilter:"blur(12px)", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 32px", height:60 }}>
-        <Link to="/" style={{ display:"flex", alignItems:"center", gap:4 }}>
+
+      <nav style={{
+        position: "sticky", top: 0, zIndex: 100,
+        background: "var(--nav-bg)", backdropFilter: "blur(12px)",
+        borderBottom: "1px solid var(--border)",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "0 32px", height: 60,
+      }}>
+        {/* Logo */}
+        <Link to="/" style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0 }}>
           <span style={{ fontFamily:"Oswald", fontSize:26, color:"var(--gold)", letterSpacing:1 }}>STAGE</span>
           <span style={{ fontFamily:"Oswald", fontSize:26, color:"var(--text)", letterSpacing:1 }}>PRO</span>
         </Link>
-        <div className="nav-actions" style={{ display:"flex", alignItems:"center", gap:8 }}>
+
+        {/* Desktop nav — hidden below 768px */}
+        <div style={{ display:"flex", alignItems:"center", gap:8 }} className="desktop-nav">
           {currentUser ? (
             <>
               {currentUser.role === "organizer" && (
@@ -844,7 +882,10 @@ function Nav({ currentUser, logout, notification, events }) {
                   <i className="fa-solid fa-qrcode" style={{marginRight:6}} />SCAN TICKETS
                 </Link>
               )}
-              <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13, cursor:"pointer" }} onClick={() => window.location.href="/profile"}>
+              <div
+                style={{ width:32, height:32, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:13, cursor:"pointer" }}
+                onClick={() => window.location.href="/profile"}
+              >
                 {currentUser.name?.[0] ?? "U"}
               </div>
               <button onClick={logout} style={{ background:"none", border:"1px solid var(--border)", color:"var(--muted)", padding:"5px 12px", borderRadius:6, cursor:"pointer", fontSize:13 }}>Sign out</button>
@@ -857,7 +898,167 @@ function Nav({ currentUser, logout, notification, events }) {
             </>
           )}
         </div>
+
+        {/* Mobile right side — notification bell + hamburger */}
+        <div style={{ display:"none", alignItems:"center", gap:10 }} className="mobile-nav-right">
+          {currentUser?.role === "customer" && (
+            <NotificationBell currentUser={currentUser} events={events} />
+          )}
+          <button
+            onClick={() => setMenuOpen(p => !p)}
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            aria-expanded={menuOpen}
+            style={{
+              background: "none", border: "1px solid var(--border)",
+              borderRadius: 8, width: 40, height: 40, cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "var(--text)", flexShrink: 0,
+              transition: "border-color 0.2s",
+            }}
+          >
+            {menuOpen
+              ? <i className="fa-solid fa-xmark" style={{ fontSize: 18 }} />
+              : <i className="fa-solid fa-bars" style={{ fontSize: 18 }} />
+            }
+          </button>
+        </div>
       </nav>
+
+      {/* Mobile drawer overlay */}
+      {menuOpen && (
+        <div
+          onClick={() => setMenuOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 98,
+            background: "rgba(0,0,0,0.5)",
+            animation: "fadeUp 0.2s ease",
+          }}
+        />
+      )}
+
+      {/* Mobile drawer panel */}
+      <div style={{
+        position: "fixed", top: 60, right: 0, bottom: 0,
+        width: "min(320px, 85vw)",
+        background: "var(--bg2)",
+        borderLeft: "1px solid var(--border)",
+        zIndex: 99,
+        transform: menuOpen ? "translateX(0)" : "translateX(100%)",
+        transition: "transform 0.3s cubic-bezier(0.4,0,0.2,1)",
+        display: "flex", flexDirection: "column",
+        overflowY: "auto",
+        paddingBottom: 32,
+      }}>
+        {/* User info strip */}
+        {currentUser && (
+          <div style={{
+            padding: "20px 24px 16px",
+            borderBottom: "1px solid var(--border)",
+            display: "flex", alignItems: "center", gap: 12,
+          }}>
+            <div
+              style={{ width:44, height:44, borderRadius:"50%", background:"var(--gold)", display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, color:"#000", fontSize:16, flexShrink:0, cursor:"pointer" }}
+              onClick={() => { window.location.href="/profile"; setMenuOpen(false); }}
+            >
+              {currentUser.name?.[0] ?? "U"}
+            </div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontWeight:700, fontSize:15, color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{currentUser.name}</div>
+              <div style={{ fontSize:12, color:"var(--muted)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{currentUser.email}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Nav links */}
+        <div style={{ padding: "12px 0", flex: 1 }}>
+          {navLinks.map(({ to, label }) => (
+            <Link
+              key={to}
+              to={to}
+              onClick={() => setMenuOpen(false)}
+              style={{
+                display: "flex", alignItems: "center",
+                padding: "14px 24px",
+                fontSize: 15, fontWeight: 500,
+                color: "var(--text)",
+                borderBottom: "1px solid var(--border)",
+                gap: 12,
+              }}
+            >
+              {label}
+              <i className="fa-solid fa-chevron-right" style={{ marginLeft:"auto", fontSize:12, color:"var(--muted)" }} />
+            </Link>
+          ))}
+
+          {/* Profile link for logged-in users */}
+          {currentUser && (
+            <Link
+              to="/profile"
+              onClick={() => setMenuOpen(false)}
+              style={{
+                display: "flex", alignItems: "center",
+                padding: "14px 24px",
+                fontSize: 15, fontWeight: 500,
+                color: "var(--text)",
+                borderBottom: "1px solid var(--border)",
+                gap: 12,
+              }}
+            >
+              Profile
+              <i className="fa-solid fa-chevron-right" style={{ marginLeft:"auto", fontSize:12, color:"var(--muted)" }} />
+            </Link>
+          )}
+        </div>
+
+        {/* Bottom actions */}
+        <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display:"flex", flexDirection:"column", gap:10 }}>
+          {currentUser ? (
+            <button
+              onClick={() => { logout(); setMenuOpen(false); }}
+              style={{
+                width: "100%", padding: "13px 20px",
+                background: "none", border: "1px solid var(--border)",
+                borderRadius: 10, cursor: "pointer",
+                color: "var(--muted)", fontSize: 14, fontWeight: 600,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              }}
+            >
+              <i className="fa-solid fa-right-from-bracket" />
+              Sign Out
+            </button>
+          ) : (
+            <>
+              <Link
+                to="/login"
+                onClick={() => setMenuOpen(false)}
+                style={{ width:"100%", padding:"13px 20px", background:"none", border:"1px solid var(--border)", borderRadius:10, color:"var(--text)", fontSize:14, fontWeight:600, textAlign:"center" }}
+              >
+                Login
+              </Link>
+              <Link
+                to="/register"
+                onClick={() => setMenuOpen(false)}
+                style={{ width:"100%", padding:"13px 20px", background:"var(--gold)", border:"none", borderRadius:10, color:"#000", fontSize:14, fontWeight:700, textAlign:"center" }}
+              >
+                Get Started →
+              </Link>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* CSS to toggle desktop vs mobile nav */}
+      <style>{`
+        @media (min-width: 769px) {
+          .desktop-nav { display: flex !important; }
+          .mobile-nav-right { display: none !important; }
+        }
+        @media (max-width: 768px) {
+          .desktop-nav { display: none !important; }
+          .mobile-nav-right { display: flex !important; }
+          nav { padding: 0 16px !important; }
+        }
+      `}</style>
     </>
   );
 }
