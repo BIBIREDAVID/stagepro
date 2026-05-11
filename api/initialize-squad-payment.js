@@ -10,11 +10,6 @@ export default async function handler(req, res) {
     amount,
     currency = "NGN",
     callbackUrl,
-    customerName = "",
-    customerPhone = "",
-    eventTitle = "",
-    eventId = "",
-    organizerId = "",
   } = req.body || {};
 
   if (!email || !amount || !callbackUrl) {
@@ -33,13 +28,6 @@ export default async function handler(req, res) {
         transaction_ref,
         callback_url: callbackUrl,
         payment_channels: ["card", "bank", "transfer"],
-        meta: {
-          customer: customerName || "",
-          phone: customerPhone || "",
-          event: eventTitle || "",
-          eventId: eventId || "",
-          organizerId: organizerId || "",
-        },
       },
     });
 
