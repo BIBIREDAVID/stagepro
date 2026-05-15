@@ -1512,6 +1512,31 @@ export default function App() {
     const buyerPhone = normalizePhone(buyer?.phone || currentUser?.phone || "");
     const buyerUid = buyer?.uid || currentUser?.uid || `guest_${Date.now()}`;
     const isGuest = !buyer?.uid && !currentUser?.uid;
+    const totalRequested = Object.values(cartSelections).reduce((sum, qty) => sum + Number(qty || 0), 0);
+    if (totalRequested > 1) {
+      notify("Only one ticket can be claimed per buyer for this event.", "error");
+      return false;
+    }
+    if (buyerEmail) {
+      try {
+        const existingBuyerTicket = await getDocs(
+          query(
+            collection(db, "tickets"),
+            where("eventId", "==", eventId),
+            where("userEmail", "==", buyerEmail),
+            limit(1)
+          )
+        );
+        if (!existingBuyerTicket.empty) {
+          notify("This email has already claimed a ticket for this event.", "error");
+          return false;
+        }
+      } catch (err) {
+        console.error("Failed to validate existing ticket limit:", err);
+        notify("Could not verify ticket eligibility. Please try again.", "error");
+        return false;
+      }
+    }
     // Step 1 — create ticket documents
     try {
       for (const tier of event.tiers) {
@@ -2984,6 +3009,10 @@ function EventPage({ ctx }) {
       draft[tierId] = Math.max(0, (draft[tierId] || 0) + delta);
       const inventoryCap = tier.total - getLiveSold(event, tier.id, liveCounts);
       draft[tierId] = Math.min(draft[tierId], inventoryCap);
+      const totalSelected = Object.values(draft).reduce((sum, qty) => sum + Number(qty || 0), 0);
+      if (totalSelected > 1 && delta > 0) {
+        draft[tierId] = Math.max(0, draft[tierId] - 1);
+      }
       return draft;
     });
   };
@@ -3078,16 +3107,16 @@ function EventPage({ ctx }) {
                 const wStatus = waitlistStatus[tier.id];
                 return (
                   <div key={tier.id} style={{ background:"var(--bg3)", border:`1px solid ${qty>0?"var(--gold)":available===0?"rgba(232,64,64,0.3)":"var(--border)"}`, borderRadius:12, padding:"14px 16px", transition:"border-color 0.2s" }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
-                      <div>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", marginBottom:6 }}>
+                      <div style={{ minWidth:0, flex:"1 1 180px" }}>
                         <div style={{ fontWeight:600, fontSize:14, marginBottom:2 }}>{tier.name}</div>
                         <div style={{ fontFamily:"Oswald", fontSize:22, color: available===0?"var(--muted)":"var(--gold)" }}>{Number(tier.price)===0 ? "FREE" : fmt(tier.price)}</div>
                       </div>
                       {available > 0 ? (
-                        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <div style={{ display:"flex", alignItems:"center", gap:10, marginLeft:"auto" }}>
                           <button onClick={() => adjust(tier.id,-1)} disabled={qty===0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background:"var(--bg2)", color:"var(--text)", cursor: qty===0?"not-allowed":"pointer", fontSize:20, opacity: qty===0?0.4:1 }}>−</button>
                           <span style={{ fontFamily:"IBM Plex Mono", fontSize:18, minWidth:22, textAlign:"center" }}>{qty}</span>
-                          <button onClick={() => adjust(tier.id,1)} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor:"pointer", fontSize:20 }}>+</button>
+                          <button onClick={() => adjust(tier.id,1)} disabled={totalItems >= 1 && qty === 0} style={{ width:34, height:34, borderRadius:"50%", border:"1px solid var(--border)", background: qty>0?"var(--gold)":"var(--bg2)", color: qty>0?"#000":"var(--text)", cursor: totalItems >= 1 && qty === 0 ? "not-allowed" : "pointer", fontSize:20, opacity: totalItems >= 1 && qty === 0 ? 0.4 : 1 }}>+</button>
                         </div>
                       ) : (
                         <button
@@ -3110,6 +3139,9 @@ function EventPage({ ctx }) {
                   </div>
                 );
               })}
+            </div>
+            <div style={{ marginTop:-6, marginBottom:16, fontSize:12, color:"var(--muted)", lineHeight:1.5 }}>
+              One ticket maximum per buyer for this event.
             </div>
             {totalItems>0 && (
               <div style={{ borderTop:"1px solid var(--border)", paddingTop:16, marginBottom:16 }}>
@@ -3386,9 +3418,9 @@ function CheckoutPage({ ctx }) {
   const handleConfirm = isFree ? handleFree : handlePay;
 
   return (
-    <div style={{ maxWidth:600, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease" }}>
+    <div style={{ maxWidth:600, margin:"0 auto", padding:"40px 24px", animation:"fadeUp 0.4s ease", overflowX:"hidden" }}>
       <button onClick={() => navigate(-1)} style={{ background:"none", border:"none", color:"var(--muted)", cursor:"pointer", marginBottom:24, fontSize:14 }}>← Back</button>
-      <h1 style={{ fontSize:48, marginBottom:32 }}>{isFree ? "CLAIM TICKETS" : "CHECKOUT"}</h1>
+      <h1 style={{ fontSize:"clamp(34px, 10vw, 48px)", lineHeight:1, marginBottom:32 }}>{isFree ? "CLAIM TICKETS" : "CHECKOUT"}</h1>
 
       {/* Order summary */}
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
@@ -3399,8 +3431,8 @@ function CheckoutPage({ ctx }) {
           const lineTotal = cart[t.id] * Number(t.price);
           const tFree = Number(t.price) === 0;
           return (
-            <div key={t.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>
-              <div>
+            <div key={t.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>
+              <div style={{ minWidth:0, flex:"1 1 180px" }}>
                 <span style={{ fontWeight:600 }}>{t.name}</span>
                 <span style={{ color:"var(--muted)", fontSize:13 }}> × {cart[t.id]}</span>
               </div>
@@ -3413,8 +3445,8 @@ function CheckoutPage({ ctx }) {
 
         {/* Service fee line — only for paid orders */}
         {!isFree && (
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap", padding:"12px 0", borderBottom:"1px solid var(--border)" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
               <span style={{ color:"var(--muted)", fontSize:13 }}>Service fee</span>
               <span style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:100, padding:"1px 8px", fontSize:10, color:"var(--muted)", letterSpacing:1 }}>STAGEPRO</span>
             </div>
@@ -3435,8 +3467,12 @@ function CheckoutPage({ ctx }) {
       <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:28, marginBottom:20 }}>
         <div style={{ fontSize:12, color:"var(--muted)", letterSpacing:2, marginBottom:16 }}>ATTENDEE</div>
         <div style={{ fontWeight:600 }}>{buyer.name}</div>
-        <div style={{ color:"var(--muted)", fontSize:13 }}>{buyer.email}{!currentUser && <span style={{ marginLeft:8, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:100, padding:"1px 8px", fontSize:10, color:"var(--muted)", letterSpacing:1 }}>GUEST</span>}</div>
+        <div style={{ color:"var(--muted)", fontSize:13, lineHeight:1.5, wordBreak:"break-word" }}>{buyer.email}{!currentUser && <span style={{ marginLeft:8, background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:100, padding:"1px 8px", fontSize:10, color:"var(--muted)", letterSpacing:1 }}>GUEST</span>}</div>
         {buyer.phone && <div style={{ color:"var(--muted)", fontSize:13, marginTop:4 }}>{buyer.phone}</div>}
+      </div>
+
+      <div style={{ background:"rgba(245,166,35,0.08)", border:"1px solid var(--gold-dim)", borderRadius:12, padding:"14px 20px", marginBottom:20, fontSize:13, color:"var(--muted)", lineHeight:1.6 }}>
+        Each buyer can only claim one ticket for this event.
       </div>
 
       {/* Free banner — no payment needed */}
@@ -3473,7 +3509,7 @@ function CheckoutPage({ ctx }) {
       <button
         disabled={!agreed || processing}
         onClick={handleConfirm}
-        style={{ width:"100%", padding:16, background: agreed ? (isFree?"var(--green)":"var(--gold)") : "var(--bg3)", color: agreed ? "#000" : "var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:22, letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1 }}
+        style={{ width:"100%", padding:16, background: agreed ? (isFree?"var(--green)":"var(--gold)") : "var(--bg3)", color: agreed ? "#000" : "var(--muted)", border:"none", borderRadius:12, fontFamily:"Oswald", fontSize:"clamp(18px, 5vw, 22px)", letterSpacing:2, cursor: agreed?"pointer":"not-allowed", opacity: processing?0.7:1, whiteSpace:"normal", lineHeight:1.2 }}
       >
         {processing
           ? (isFree ? "REGISTERING..." : "OPENING PAYMENT...")

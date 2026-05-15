@@ -58,6 +58,17 @@ function buildRequestedQuantities(event, cart = {}) {
   return quantities;
 }
 
+async function buyerAlreadyHasTicket(db, eventId, buyerEmail) {
+  if (!eventId || !buyerEmail) return false;
+  const existingSnap = await db
+    .collection("tickets")
+    .where("eventId", "==", String(eventId))
+    .where("userEmail", "==", String(buyerEmail).trim().toLowerCase())
+    .limit(1)
+    .get();
+  return !existingSnap.empty;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, msg: "Method not allowed" });
@@ -103,6 +114,15 @@ export default async function handler(req, res) {
 
     const event = { id: eventSnap.id, ...eventSnap.data() };
     const requested = buildRequestedQuantities(event, cart);
+    const requestedTotal = requested.reduce((sum, row) => sum + row.qty, 0);
+
+    if (requestedTotal > 1) {
+      return res.status(400).json({ ok: false, msg: "Only one ticket can be purchased per buyer for this event." });
+    }
+
+    if (await buyerAlreadyHasTicket(db, event.id, buyerEmail)) {
+      return res.status(409).json({ ok: false, msg: "This email has already claimed a ticket for this event." });
+    }
 
     const soldSnap = await db.collection("tickets").where("eventId", "==", event.id).get();
     const soldCounts = {};

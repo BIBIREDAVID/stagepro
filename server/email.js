@@ -1,4 +1,5 @@
 import { recordEmailSend } from "./emailTracking.js";
+import nodemailer from "nodemailer";
 
 function env(name) {
   return String(process.env[name] || "").trim();
@@ -31,6 +32,8 @@ export async function sendEmailWithFallback({
 
   const resendKey = env("RESEND_API_KEY");
   const resendFrom = env("RESEND_FROM") || "onboarding@resend.dev";
+  const gmailUser = env("GMAIL_USER");
+  const gmailPass = env("GMAIL_PASS");
 
   let resendErr = "";
   if (resendKey) {
@@ -68,8 +71,42 @@ export async function sendEmailWithFallback({
     }
   }
 
+  let smtpErr = "";
+  if (gmailUser && gmailPass) {
+    try {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: gmailUser,
+          pass: gmailPass,
+        },
+      });
+
+      const info = await transporter.sendMail({
+        from: formatFromAddress(gmailUser, fromName),
+        to: toEmail,
+        subject,
+        html,
+      });
+
+      const providerMessageId = String(info?.messageId || "").trim();
+      await recordEmailSend({
+        provider: "gmail",
+        providerMessageId,
+        to: toEmail,
+        subject,
+        kind,
+        meta,
+      });
+      return { ok: true, provider: "gmail", providerMessageId };
+    } catch (err) {
+      smtpErr = String(err?.message || err || "");
+      console.error("Gmail SMTP delivery failed:", smtpErr);
+    }
+  }
+
   throw createEmailDeliveryError(
     "Email delivery is temporarily unavailable.",
-    `Email delivery failed. Resend: ${resendErr || "not configured"}`
+    `Email delivery failed. Resend: ${resendErr || "not configured"}. Gmail SMTP: ${smtpErr || "not configured"}`
   );
 }
