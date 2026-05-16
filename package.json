@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dedupe:tickets": "node --env-file=.env.local scripts/dedupe-tickets.js"
   },
   "dependencies": {
     "firebase": "^12.10.0",
