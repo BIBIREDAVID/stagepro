@@ -3811,8 +3811,8 @@ function DashboardPage({ ctx }) {
   ];
   const selectedTab = eventTabs.find(tab => tab.id === eventTab) || eventTabs[0];
   const myEvents = selectedTab.events;
-  const myEventIds = new Set(allDashboardEvents.map(e => e.id));
-  const myTickets = activeTickets.filter(t => myEventIds.has(t.eventId));
+  const visibleEventIds = new Set(myEvents.map(e => e.id));
+  const myTickets = activeTickets.filter(t => visibleEventIds.has(t.eventId));
   const attendeePayments = [...myTickets]
     .sort((a, b) => new Date(b.purchasedAt || 0).getTime() - new Date(a.purchasedAt || 0).getTime())
     .slice(0, 20);
@@ -3821,7 +3821,7 @@ function DashboardPage({ ctx }) {
   // Use actual ticket documents as the dashboard source of truth so sales stay
   // consistent even if soldCounts updates are delayed or blocked.
   const totalSold = myTickets.length;
-  const totalCap  = allDashboardEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
+  const totalCap  = myEvents.reduce((s,e) => s + e.tiers.reduce((ss,t) => ss + (t.total||0), 0), 0);
   const revenue   = payoutSummary.gross;
   const totalCheckedIn = myTickets.filter(t => t.used).length;
   const totalOrders = payoutSummary.orderCount;
@@ -3831,7 +3831,7 @@ function DashboardPage({ ctx }) {
   const paidTickets = myTickets.filter(t => t.paymentStatus === "paid" && getPaymentReference(t));
 
   // Per-event payout data
-  const payoutByEvent = allDashboardEvents.map(e => {
+  const payoutByEvent = myEvents.map(e => {
     const eTickets = myTickets.filter(t => t.eventId === e.id);
     const eGross = eTickets.reduce((s,t) => s + (t.price||0), 0);
     const ePaidOrders = [...new Set(eTickets.map(getPaymentReference).filter(Boolean))].length;
